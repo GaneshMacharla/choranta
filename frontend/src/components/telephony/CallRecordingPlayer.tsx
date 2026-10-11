@@ -4,13 +4,15 @@ import { telephonyService } from '../../services/telephony';
 
 interface CallRecordingPlayerProps {
   callId: string;
+  /** Loads the recording; defaults to the internal call endpoint (the client portal passes its own). */
+  fetchBlob?: (callId: string) => Promise<Blob>;
 }
 
 /**
  * Plays a call's stereo recording (caller left, agent right). The file is fetched with the
  * user's auth token and played from an object URL, since <audio src> can't send headers.
  */
-export const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callId }) => {
+export const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callId, fetchBlob }) => {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,8 +21,7 @@ export const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callId
     let cancelled = false;
     setAudioUrl(null);
     setError(null);
-    telephonyService
-      .getRecordingBlob(callId)
+    (fetchBlob ? fetchBlob(callId) : telephonyService.getRecordingBlob(callId))
       .then((blob) => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);

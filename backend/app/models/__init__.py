@@ -14,6 +14,8 @@ from app.models.test_scenario import TestScenario, TestRun, TestRunEvent
 from app.models.property import Property
 from app.models.lead import Lead
 from app.models.pricing_settings import PricingSettings
+from app.models.inventory_source import InventorySource
+from app.models.billing import ClientUser, ClientWallet, WalletTransaction, ClientBillingProfile, Invoice
 
 __all__ = [
     "User",
@@ -36,5 +38,11 @@ __all__ = [
     "TestRunEvent",
     "Property",
     "Lead",
-    "PricingSettings"
+    "PricingSettings",
+    "InventorySource",
+    "ClientUser",
+    "ClientWallet",
+    "WalletTransaction",
+    "ClientBillingProfile",
+    "Invoice"
 ]

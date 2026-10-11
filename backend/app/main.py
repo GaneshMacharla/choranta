@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import traceback
 from contextlib import asynccontextmanager
@@ -10,7 +11,7 @@ from app.db.init_db import init_db
 from app.api.routes import (
     auth, clients, agents, dashboard,
     agent_configuration, catalogs, runtime,
-    websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing
+    websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing, inventory, billing, portal
 )
 
 logging.basicConfig(
@@ -20,13 +21,33 @@ logging.basicConfig(
 logger = logging.getLogger("choranta")
 
 
+INVENTORY_SYNC_CHECK_S = 60
+
+
+async def _inventory_sync_loop() -> None:
+    """Keeps client property inventories in sync with their Google Sheets / APIs."""
+    from app.db.session import SessionLocal
+    from app.services.inventory_sync import run_due_syncs
+    while True:
+        try:
+            await asyncio.to_thread(run_due_syncs, SessionLocal)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Inventory sync loop error: {type(e).__name__}: {e}")
+        await asyncio.sleep(INVENTORY_SYNC_CHECK_S)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup validation and seeding
     logger.info("Initializing Choranta Internal Agent Studio backend...")
     init_db()
+    inventory_task = asyncio.create_task(_inventory_sync_loop()) if settings.ENVIRONMENT != "test" else None
     yield
     # Shutdown
+    if inventory_task:
+        inventory_task.cancel()
     logger.info("Shutting down Choranta backend...")
 
 
@@ -98,6 +119,9 @@ app.include_router(mock_environment.router, prefix=settings.API_V1_PREFIX)
 app.include_router(test_scenarios.router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router, prefix=settings.API_V1_PREFIX)
 app.include_router(pricing.router, prefix=settings.API_V1_PREFIX)
+app.include_router(inventory.router, prefix=settings.API_V1_PREFIX)
+app.include_router(billing.router, prefix=settings.API_V1_PREFIX)
+app.include_router(portal.router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)

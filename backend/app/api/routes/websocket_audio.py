@@ -418,7 +418,8 @@ async def runtime_audio_websocket(
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
                         arguments=tc.arguments,
-                        enabled_tool_ids=context.active_tools
+                        enabled_tool_ids=context.active_tools,
+                        client_id=context.client_id
                     )
 
                     emitter.emit(

@@ -255,6 +255,13 @@ class TelephonyMediaSession:
             except Exception as e:
                 logger.warning(f"Could not end runtime session {self.runtime_session.id}: {e}")
 
+        # Debit the client's prepaid wallet (after end_session, so the final usage is known)
+        try:
+            from app.services.billing import charge_call
+            charge_call(self.db, self.call_record)
+        except Exception as e:
+            logger.error(f"Could not charge call {self.call_record.id}: {type(e).__name__}: {e}")
+
     # ------------------------------------------------------------------
     # Inbound audio
     # ------------------------------------------------------------------
@@ -543,7 +550,8 @@ class TelephonyMediaSession:
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
                         arguments=tc.arguments,
-                        enabled_tool_ids=self.context.active_tools
+                        enabled_tool_ids=self.context.active_tools,
+                        client_id=self.context.client_id
                     )
                     self._emit(RuntimeEventType.TOOL_CALL_COMPLETED, {
                         "call_id": tc.id, "success": result.success, "data": result.data, "error": result.error

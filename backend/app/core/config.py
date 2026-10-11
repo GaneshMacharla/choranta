@@ -92,6 +92,25 @@ class Settings(BaseSettings):
     DEFAULT_INFRA_COST_PER_MINUTE_INR: float = 0.30
 
     # --------------------------------------------------------
+    # Billing & GST invoices
+    # --------------------------------------------------------
+    COMPANY_LEGAL_NAME: str = "Choranta"
+    COMPANY_GSTIN: str = ""
+    COMPANY_ADDRESS: str = ""
+    COMPANY_STATE_CODE: str = "36"            # GST state code of the company (36 = Telangana)
+    INVOICE_PREFIX: str = "CHR"
+    INVOICE_SAC_CODE: str = "998319"          # confirm the correct SAC with your CA
+    GST_RATE_PERCENT: float = 18.0
+    PAYMENT_UPI_ID: str = ""
+    PAYMENT_BANK_DETAILS: str = ""
+    BILLING_ENFORCED: bool = True             # block new billable calls when the wallet balance is <= 0
+
+    # --------------------------------------------------------
+    # Google Sign-In
+    # --------------------------------------------------------
+    GOOGLE_CLIENT_ID: str = ""
+
+    # --------------------------------------------------------
     # Phone call behaviour (cost control)
     # --------------------------------------------------------
     VOICE_MAX_REPLY_CHARS: int = 280          # stop the agent's reply after the sentence that crosses this

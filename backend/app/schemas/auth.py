@@ -7,11 +7,16 @@ from pydantic import BaseModel, EmailStr, ConfigDict
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
     OPERATOR = "OPERATOR"
+    CLIENT = "CLIENT"
 
 
 class UserStatus(str, Enum):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
+
+
+class GoogleLoginRequest(BaseModel):
+    credential: str  # Google Identity Services ID token
 
 
 class LoginRequest(BaseModel):

@@ -386,7 +386,8 @@ class AgentRuntime:
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
                         arguments=tc.arguments,
-                        enabled_tool_ids=context.active_tools
+                        enabled_tool_ids=context.active_tools,
+                        client_id=context.client_id
                     )
                     self.emitter.emit(
                         RuntimeEventType.TOOL_CALL_COMPLETED, **ids,
@@ -537,7 +538,8 @@ class AgentRuntime:
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
                         arguments=tc.arguments,
-                        enabled_tool_ids=context.active_tools
+                        enabled_tool_ids=context.active_tools,
+                        client_id=context.client_id
                     )
 
                     self.emitter.emit(

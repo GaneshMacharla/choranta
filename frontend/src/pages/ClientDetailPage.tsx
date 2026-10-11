@@ -16,6 +16,8 @@ import { clientsService } from '../services/clients';
 import { agentsService } from '../services/agents';
 import { Client, Agent, AgentCreateInput, ClientUpdateInput, BusinessType } from '../types';
 import { Card } from '../components/common/Card';
+import { PropertyInventoryCard } from '../components/inventory/PropertyInventoryCard';
+import { ClientBillingCard } from '../components/billing/ClientBillingCard';
 import { Button } from '../components/common/Button';
 import { StatusBadge, Badge } from '../components/common/Badge';
 import { Table, Column } from '../components/common/Table';
@@ -323,6 +325,11 @@ export const ClientDetailPage: React.FC = () => {
           />
         </Card>
       </div>
+
+      {/* PROPERTY INVENTORY (synced from Google Sheet / CRM) */}
+      {id && <ClientBillingCard clientId={id} />}
+
+      {id && <PropertyInventoryCard clientId={id} />}
 
       {/* CREATE AI EMPLOYEE MODAL */}
       <Modal

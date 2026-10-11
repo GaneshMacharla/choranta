@@ -10,6 +10,9 @@ class ToolResult(BaseModel):
 
 
 class BaseToolHandler:
+    # Handlers that need the session's tenant (client_id) set this and accept a `context` kwarg
+    accepts_context = False
+
     @property
     def tool_id(self) -> str:
         raise NotImplementedError
@@ -130,22 +133,31 @@ class MockSearchPropertiesTool(BaseToolHandler):
     """
     Mock property search tool for structured inventory filtering.
     """
+    accepts_context = True
+
     @property
     def tool_id(self) -> str:
         return "search_properties"
 
-    def execute(self, arguments: Dict[str, Any], timeout: int = 15) -> Dict[str, Any]:
+    def execute(self, arguments: Dict[str, Any], timeout: int = 15, context: Dict[str, Any] = None) -> Dict[str, Any]:
         location_filter = str(arguments.get("location", "")).lower().strip()
         bhk_filter = arguments.get("bhk")
         budget_min = arguments.get("budget_min")
         budget_max = arguments.get("budget_max")
         status_filter = str(arguments.get("status", "AVAILABLE")).upper()
+        client_id = (context or {}).get("client_id")
 
         try:
             from app.db.session import SessionLocal
             from app.models.property import Property
             db = SessionLocal()
             q = db.query(Property)
+            if client_id:
+                # Tenant isolation: an agent only sees its own client's inventory
+                q = q.filter(Property.client_id == client_id)
+                has_inventory = db.query(Property.id).filter(Property.client_id == client_id).first() is not None
+            else:
+                has_inventory = False
             if status_filter:
                 q = q.filter(Property.status == status_filter)
             if location_filter:
@@ -166,8 +178,9 @@ class MockSearchPropertiesTool(BaseToolHandler):
                 except Exception:
                     pass
 
-            db_props = q.limit(5).all()
-            if db_props:
+            db_props = q.order_by(Property.price).limit(5).all()
+            if db_props or has_inventory:
+                # A client with synced inventory gets real results only (possibly none)
                 items = [
                     {
                         "id": p.id,
@@ -179,11 +192,16 @@ class MockSearchPropertiesTool(BaseToolHandler):
                         "property_type": p.property_type,
                         "status": p.status,
                         "amenities": p.amenities,
+                        "details": (p.meta or {}).get("extra", {}),
                     }
                     for p in db_props
                 ]
+                synced = [p.last_synced_at for p in db_props if p.last_synced_at]
                 db.close()
-                return {"count": len(items), "properties": items}
+                result = {"count": len(items), "properties": items}
+                if synced:
+                    result["as_of"] = max(synced).isoformat()
+                return result
             db.close()
         except Exception:
             pass

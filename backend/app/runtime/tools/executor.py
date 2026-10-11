@@ -48,7 +48,8 @@ class ToolExecutor:
         tool_name: str,
         arguments: Dict[str, Any],
         enabled_tool_ids: List[str],
-        timeout: int = 15
+        timeout: int = 15,
+        client_id: Optional[str] = None
     ) -> ToolResult:
         if tool_name not in enabled_tool_ids:
             logger.warning(f"Tool execution blocked: '{tool_name}' is not enabled for session.")
@@ -71,7 +72,10 @@ class ToolExecutor:
 
         try:
             logger.info(f"Executing tool '{tool_name}' (call_id: {tool_call_id})")
-            result_data = handler.execute(arguments, timeout=timeout)
+            if handler.accepts_context:
+                result_data = handler.execute(arguments, timeout=timeout, context={"client_id": client_id})
+            else:
+                result_data = handler.execute(arguments, timeout=timeout)
             return ToolResult(
                 tool_call_id=tool_call_id,
                 success=True,

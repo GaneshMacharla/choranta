@@ -88,6 +88,7 @@ export const PhoneCallTester: React.FC<PhoneCallTesterProps> = ({ agentId, agent
         agent_id: agentId,
         agent_version_id: agentVersionId,
         destination_number: number,
+        is_test: true,
       });
       setCallId(placed.id);
     } catch (err: any) {

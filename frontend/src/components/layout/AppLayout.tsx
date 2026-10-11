@@ -6,7 +6,7 @@ import { Header } from './Header';
 import { LoadingState } from '../common/LoadingState';
 
 export const AppLayout: React.FC = () => {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
     return (
@@ -18,6 +18,11 @@ export const AppLayout: React.FC = () => {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+
+  // Client accounts only have the client portal
+  if (user?.role === 'CLIENT') {
+    return <Navigate to="/portal" replace />;
   }
 
   return (

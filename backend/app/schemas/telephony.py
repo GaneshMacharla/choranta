@@ -110,6 +110,7 @@ class InitiateOutboundCallRequest(BaseModel):
     destination_number: str = Field(..., description="The customer phone number to call (e.g. 09876543210 or +919876543210)")
     flow_id: Optional[str] = Field(None, description="Optional Exotel Flow ID. Defaults to configured EXOTEL_FLOW_ID.")
     custom_field: Optional[str] = Field(None, description="Optional tracking metadata string")
+    is_test: bool = Field(False, description="Test call from the AI Employee's Tests step: never billed or blocked by the wallet")
     variables: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Custom lead/campaign variables (e.g. user_name, property_viewed, enquiry_budget) to ground the agent")
 
 

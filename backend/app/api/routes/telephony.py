@@ -32,6 +32,7 @@ from app.runtime.providers.telephony import TelephonyProvider
 from app.runtime.telephony.session import TelephonyMediaSession, active_telephony_calls
 from app.services.call_costing import estimate_call_cost
 from app.services.pricing import PricingSnapshot, get_pricing
+from app.services.billing import can_place_call
 from app.schemas.telephony import (
     CreatePhoneNumberRequest,
     UpdatePhoneNumberRequest,
@@ -245,6 +246,14 @@ async def exotel_inbound_call_webhook(
         logger.error(f"Readiness check failed for call on agent {route.agent_id}: {error_reasons}")
         rejection = telephony_provider.generate_reject_response(
             "The requested AI assistant is currently undergoing maintenance. Please call back shortly."
+        )
+        return Response(content=rejection, media_type=media_type)
+
+    # New inbound calls need prepaid balance (calls we placed were checked when dialled)
+    if not existing_call and not can_place_call(db, route.client_id):
+        logger.warning(f"Rejecting inbound call for client {route.client_id}: wallet balance exhausted.")
+        rejection = telephony_provider.generate_reject_response(
+            "This service is temporarily unavailable. Please call back later."
         )
         return Response(content=rejection, media_type=media_type)
 
@@ -800,6 +809,12 @@ def initiate_outbound_call_endpoint(
         raise HTTPException(status_code=400, detail="Agent is not ready for calls: " + "; ".join(readiness["errors"]))
     agent = db.get(Agent, agent_id)
 
+    if not req.is_test and not can_place_call(db, agent.client_id):
+        raise HTTPException(
+            status_code=402,
+            detail="Wallet balance is exhausted for this client. Record a payment to resume calls.",
+        )
+
     # Exotel must reach this server when the customer answers; fail fast instead of placing a dead call
     base_url = (settings.TELEPHONY_BASE_URL or "").rstrip("/")
     if not base_url.startswith("https://") or any(h in base_url for h in ("localhost", "127.0.0.1")):
@@ -852,7 +867,7 @@ def initiate_outbound_call_endpoint(
         status="INITIATED",
         started_at=now,
         duration_seconds=0.0,
-        metadata_={"exotel_response": call_result, "custom_field": req.custom_field, "variables": req.variables or {}}
+        metadata_={"exotel_response": call_result, "custom_field": req.custom_field, "variables": req.variables or {}, "is_test": req.is_test}
     )
     saved_call = call_repo.create(call_record)
 

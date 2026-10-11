@@ -15,16 +15,54 @@ class AuthService:
         self.user_repo = UserRepository(db)
 
     def authenticate_user(self, email: str, password: str) -> TokenResponse:
-        user = self.user_repo.get_by_email(email)
+        """
+        Password login is a lockout backup for the initial platform admin only;
+        everyone else signs in with Google.
+        """
+        normalized = (email or "").lower().strip()
+        if normalized != (settings.INITIAL_ADMIN_EMAIL or "").lower().strip():
+            raise AuthenticationException("Password login is disabled. Please use Sign in with Google.")
+
+        user = self.user_repo.get_by_email(normalized)
         if not user:
             raise AuthenticationException("Invalid email or password.")
-        
+
         if user.status != "ACTIVE":
             raise AuthenticationException("Internal account is inactive. Contact platform admin.")
 
         if not user.hashed_password or not verify_password(password, user.hashed_password):
             raise AuthenticationException("Invalid email or password.")
 
+        return self._issue_token(user)
+
+    def authenticate_google(self, credential: str) -> TokenResponse:
+        """
+        Verifies a Google Identity Services ID token and signs in the invited user with that
+        verified email. There is no self-signup: the email must already exist in Choranta.
+        """
+        if not settings.GOOGLE_CLIENT_ID:
+            raise AuthenticationException("Google Sign-In isn't configured on the server (GOOGLE_CLIENT_ID).")
+        try:
+            from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token as google_id_token
+
+            claims = google_id_token.verify_oauth2_token(credential, google_requests.Request(), settings.GOOGLE_CLIENT_ID)
+        except Exception:
+            raise AuthenticationException("Google sign-in failed. Please try again.")
+
+        if not claims.get("email") or not claims.get("email_verified"):
+            raise AuthenticationException("Your Google account email isn't verified.")
+
+        user = self.user_repo.get_by_email(str(claims["email"]).lower().strip())
+        if not user:
+            raise AuthenticationException(
+                f"{claims['email']} hasn't been invited to Choranta. Ask your administrator for access."
+            )
+        if user.status != "ACTIVE":
+            raise AuthenticationException("This account is inactive. Contact your administrator.")
+        return self._issue_token(user)
+
+    def _issue_token(self, user: User) -> TokenResponse:
         token = create_access_token(
             subject=user.id,
             claims={

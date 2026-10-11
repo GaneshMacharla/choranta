@@ -19,6 +19,11 @@ import { UsagePage } from './pages/UsagePage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { PortalLayout } from './components/portal/PortalLayout';
+import { PortalDashboardPage } from './pages/portal/PortalDashboardPage';
+import { PortalCallsPage } from './pages/portal/PortalCallsPage';
+import { PortalBillingPage } from './pages/portal/PortalBillingPage';
+import { PortalInventoryPage } from './pages/portal/PortalInventoryPage';
 
 /** Old Test Lab links open the agent's Tests step (or the AI Employees list). */
 function TestLabRedirect() {
@@ -35,6 +40,14 @@ export function App() {
           <Routes>
             {/* Public Login Route */}
             <Route path="/login" element={<LoginPage />} />
+
+            {/* Client portal (CLIENT accounts only) */}
+            <Route path="/portal" element={<PortalLayout />}>
+              <Route index element={<PortalDashboardPage />} />
+              <Route path="calls" element={<PortalCallsPage />} />
+              <Route path="billing" element={<PortalBillingPage />} />
+              <Route path="inventory" element={<PortalInventoryPage />} />
+            </Route>
 
             {/* Protected Internal Routes */}
             <Route element={<AppLayout />}>

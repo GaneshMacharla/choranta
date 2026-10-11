@@ -14,6 +14,8 @@ from app.db.init_db import seed_catalogs
 
 # Ensure test mode
 object.__setattr__(settings, "ENVIRONMENT", "test")
+# Billing tests enable wallet enforcement explicitly; other tests place calls freely
+object.__setattr__(settings, "BILLING_ENFORCED", False)
 from app.runtime.providers.registry import default_registry
 default_registry.enable_mock_providers()
 
@@ -101,14 +103,10 @@ def auth_headers(client):
 
 @pytest.fixture
 def operator_headers(client):
-    """Operator credentials header."""
-    response = client.post(
-        "/api/auth/login",
-        json={
-            "email": "operator@choranta.internal",
-            "password": "operatorPass2026!"
-        }
+    """Operator credentials header (operators sign in with Google, so mint the same token directly)."""
+    from app.core.security import create_access_token
+    token = create_access_token(
+        subject="usr_test_operator",
+        claims={"email": "operator@choranta.internal", "role": "OPERATOR", "name": "Test Operator"},
     )
-    assert response.status_code == 200, f"Operator login failed: {response.text}"
-    token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}

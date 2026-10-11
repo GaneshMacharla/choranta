@@ -6,7 +6,8 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<User>;
+  loginWithGoogle: (credential: string) => Promise<User>;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -44,13 +45,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initializeAuth();
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const response = await authService.login(email, password);
+  const startSession = (response: { access_token: string; user: User }) => {
     localStorage.setItem('choranta_token', response.access_token);
     localStorage.setItem('choranta_user', JSON.stringify(response.user));
     setToken(response.access_token);
     setUser(response.user);
+    return response.user;
   };
+
+  const login = async (email: string, password: string) => startSession(await authService.login(email, password));
+
+  const loginWithGoogle = async (credential: string) => startSession(await authService.loginWithGoogle(credential));
 
   const logout = () => {
     localStorage.removeItem('choranta_token');
@@ -66,6 +71,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         token,
         isLoading,
         login,
+        loginWithGoogle,
         logout,
         isAuthenticated: !!token && !!user,
       }}

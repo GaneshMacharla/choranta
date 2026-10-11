@@ -15,6 +15,17 @@ export const authService = {
     });
   },
 
+  loginWithGoogle: async (credential: string): Promise<LoginResponse> => {
+    return request<LoginResponse>('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ credential }),
+    });
+  },
+
+  getConfig: async (): Promise<{ google_client_id: string | null }> => {
+    return request<{ google_client_id: string | null }>('/auth/config');
+  },
+
   getCurrentUser: async (): Promise<User> => {
     return request<User>('/auth/me', {
       method: 'GET',

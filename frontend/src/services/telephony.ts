@@ -137,6 +137,8 @@ export interface InitiateOutboundCallInput {
   agent_version_id?: string;
   caller_id?: string;
   destination_number: string;
+  /** Test call from the Tests step: never billed or blocked by the wallet. */
+  is_test?: boolean;
   flow_id?: string;
   custom_field?: string;
 }

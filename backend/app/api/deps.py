@@ -126,25 +126,51 @@ def get_current_user_from_header_or_query(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return _verify_token_and_get_user(raw_token, db)
+    return _internal_only(_verify_token_and_get_user(raw_token, db))
 
 
-def get_current_user(
+def _internal_only(user: User) -> User:
+    """Client portal logins can never reach internal (studio) APIs."""
+    if user.role == "CLIENT":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: client accounts can only use the client portal.",
+        )
+    return user
+
+
+def get_any_user(
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
     db: Session = Depends(get_db)
 ) -> User:
-    """
-    Authenticate request via Supabase JWT or Internal JWT.
-    Enforces expiration, signature integrity, and active application profile verification.
-    """
+    """Authenticated user of any role (internal staff or client portal)."""
     if not credentials or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication credentials required. Please provide a valid Bearer token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     return _verify_token_and_get_user(credentials.credentials.strip(), db)
+
+
+def get_current_user(user: User = Depends(get_any_user)) -> User:
+    """
+    Authenticated internal user (ADMIN or OPERATOR). Enforces expiration, signature integrity,
+    active account, and rejects client portal accounts.
+    """
+    return _internal_only(user)
+
+
+def require_client_user(user: User = Depends(get_any_user), db: Session = Depends(get_db)) -> Tuple[User, str]:
+    """Client portal access: returns the user and the one client whose data they may see."""
+    from app.models.billing import ClientUser
+
+    if user.role != "CLIENT":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The client portal is for client accounts.")
+    link = db.get(ClientUser, user.id)
+    if not link:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account isn't linked to a client.")
+    return user, link.client_id
 
 
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
