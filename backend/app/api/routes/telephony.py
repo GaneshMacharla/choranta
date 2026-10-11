@@ -428,8 +428,12 @@ async def exotel_telephony_media_websocket(
     """
     await websocket.accept()
     telephony_provider = default_registry.get_telephony("exotel")
+    # Exotel may drop query parameters from the stream URL, so a missing token isn't fatal here:
+    # the stream must then belong to a call already routed through the token-checked Voicebot
+    # webhook (an unguessable CallSid with a live runtime session), which is enforced on "start".
     token = websocket.query_params.get("token", "")
-    if not telephony_provider.validate_webhook(str(websocket.url), {}, token):
+    token_valid = bool(token) and telephony_provider.validate_webhook(str(websocket.url), {}, token)
+    if token and not token_valid:
         logger.warning("Rejecting Exotel media stream: invalid token.")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -448,14 +452,26 @@ async def exotel_telephony_media_websocket(
 
             elif event_type == "start":
                 stream_sid, call_sid = telephony_provider.parse_stream_start(data)
-                logger.info(f"Exotel media stream starting: stream_sid={stream_sid}, call_sid={call_sid}")
+                start_info = data.get("start") or {}
+                logger.info(
+                    f"Exotel media stream starting: stream_sid={stream_sid}, call_sid={call_sid}, "
+                    f"media_format={start_info.get('media_format')}, start_keys={sorted(start_info.keys())}"
+                )
 
                 call_repo = CallRepository(db)
                 call_record = call_repo.get_by_provider_call_id(call_sid)
                 if not call_record:
                     logger.error(f"Cannot find active Call record for Exotel CallSid '{call_sid}'")
-                    await websocket.close()
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                     break
+
+                if not token_valid:
+                    custom_token = (start_info.get("custom_parameters") or {}).get("token", "")
+                    routed = bool(call_record.runtime_session_id) and call_record.status in ("ANSWERED", "RINGING")
+                    if not (custom_token and telephony_provider.validate_webhook(str(websocket.url), {}, custom_token)) and not routed:
+                        logger.warning(f"Rejecting Exotel media stream for call '{call_sid}': not routed via the Voicebot webhook.")
+                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                        break
 
                 media_session = TelephonyMediaSession(
                     websocket=websocket,

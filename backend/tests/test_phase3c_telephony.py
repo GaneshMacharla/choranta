@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import base64
@@ -568,3 +569,135 @@ def test_real_exotel_account_readiness_smoke():
     url = f"https://{settings.EXOTEL_SUBDOMAIN}/v1/Accounts/{settings.EXOTEL_ACCOUNT_SID}/Calls.json"
     resp = httpx.get(url, params={"PageSize": 1}, auth=(settings.EXOTEL_API_KEY, settings.EXOTEL_API_TOKEN), timeout=15)
     assert resp.status_code == 200
+
+
+# ===========================================================================
+# MEDIA STREAM AUTHENTICATION (Exotel may drop the ?token= query parameter)
+# ===========================================================================
+
+def _make_call(db: Session, telephony_setup, status: str, with_session: bool) -> Call:
+    session_id = None
+    if with_session:
+        rs = RuntimeSession(
+            id=generate_unique_id("ses_"),
+            client_id=telephony_setup["client"].id,
+            agent_id=telephony_setup["agent"].id,
+            agent_version_id=telephony_setup["version"].id,
+            status="ACTIVE",
+            metadata_={},
+            usage_json={},
+        )
+        db.add(rs)
+        db.commit()
+        session_id = rs.id
+    call = Call(
+        id=generate_unique_id("call_"),
+        client_id=telephony_setup["client"].id,
+        agent_id=telephony_setup["agent"].id,
+        agent_version_id=telephony_setup["version"].id,
+        caller_number="+918008538015",
+        destination_number="+914045209348",
+        direction="OUTBOUND",
+        status=status,
+        provider="exotel",
+        provider_call_id=generate_unique_id("exo_"),
+        runtime_session_id=session_id,
+    )
+    db.add(call)
+    db.commit()
+    return call
+
+
+def _start_frame(call: Call) -> str:
+    return json.dumps({
+        "event": "start",
+        "stream_sid": "stream_1",
+        "start": {"stream_sid": "stream_1", "call_sid": call.provider_call_id, "media_format": {"encoding": "base64", "sample_rate": "8000"}},
+    })
+
+
+def test_media_stream_without_token_accepted_for_routed_call(client: TestClient, telephony_setup, db: Session):
+    """A tokenless stream is attached when its CallSid was routed through the token-checked webhook."""
+    call = _make_call(db, telephony_setup, status="ANSWERED", with_session=True)
+    with patch.object(TelephonyMediaSession, "initialize", new=AsyncMock()) as init, \
+         patch.object(TelephonyMediaSession, "close", new=AsyncMock()):
+        with client.websocket_connect("/ws/telephony/exotel/media") as ws:
+            ws.send_text(json.dumps({"event": "connected"}))
+            ws.send_text(_start_frame(call))
+            ws.send_text(json.dumps({"event": "stop"}))
+    assert init.await_count == 1
+
+
+def test_media_stream_without_token_rejected_for_unrouted_call(client: TestClient, telephony_setup, db: Session):
+    """A tokenless stream for a call that never went through the webhook is refused."""
+    call = _make_call(db, telephony_setup, status="INITIATED", with_session=False)
+    with patch.object(TelephonyMediaSession, "initialize", new=AsyncMock()) as init:
+        with client.websocket_connect("/ws/telephony/exotel/media") as ws:
+            ws.send_text(_start_frame(call))
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_text()
+    assert init.await_count == 0
+
+
+def test_media_stream_with_wrong_token_rejected(client: TestClient, telephony_setup, db: Session, monkeypatch):
+    """An explicit but wrong token is still rejected outright."""
+    monkeypatch.setattr(settings, "EXOTEL_WEBHOOK_SECRET", "right_secret", raising=False)
+    from app.runtime.providers.registry import default_registry
+    provider = default_registry.get_telephony("exotel")
+    monkeypatch.setattr(provider, "validate_webhook", lambda url, params, sig: sig == "right_secret")
+    with client.websocket_connect("/ws/telephony/exotel/media?token=wrong") as ws:
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
+
+
+@pytest.mark.asyncio
+async def test_media_session_turns_only_on_real_speech(db: Session, telephony_setup):
+    """Silence/line noise must not trigger turns; one spoken sentence triggers exactly one turn."""
+    import math
+    import struct
+    from app.runtime.providers.telephony.exotel import ExotelTelephonyProvider
+
+    def frame_8k(amplitude: int) -> str:
+        samples = struct.pack("<160h", *(int(amplitude * math.sin(2 * math.pi * 220 * i / 8000)) for i in range(160)))
+        return base64.b64encode(samples).decode("ascii")  # 20 ms of Exotel 8 kHz PCM16
+
+    call_rec = Call(
+        id=generate_unique_id("call_"),
+        client_id=telephony_setup["client"].id,
+        agent_id=telephony_setup["agent"].id,
+        agent_version_id=telephony_setup["version"].id,
+        caller_number="+15551234567",
+        destination_number=telephony_setup["phone_number"].phone_number,
+        direction="INBOUND",
+        status="ACTIVE",
+        provider="exotel",
+        provider_call_id=generate_unique_id("exo_"),
+    )
+    db.add(call_rec)
+    db.commit()
+
+    session = TelephonyMediaSession(
+        websocket=AsyncMock(),
+        call_record=call_rec,
+        stream_sid="stream_vad",
+        db=db,
+        telephony_provider=ExotelTelephonyProvider(webhook_secret="x"),
+    )
+    turns = []
+
+    async def fake_turn(audio, t_start=None, t_end=None):
+        turns.append(len(audio))
+
+    session.execute_turn = fake_turn
+
+    for _ in range(150):  # 3 s of silence and hiss
+        await session.handle_media_payload(frame_8k(40))
+    await asyncio.sleep(0)
+    assert turns == []
+
+    for _ in range(50):   # 1 s of speech
+        await session.handle_media_payload(frame_8k(4000))
+    for _ in range(50):   # 1 s of silence ends the turn
+        await session.handle_media_payload(frame_8k(0))
+    await asyncio.sleep(0)
+    assert len(turns) == 1

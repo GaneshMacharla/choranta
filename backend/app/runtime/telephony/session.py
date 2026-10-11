@@ -5,7 +5,7 @@ import logging
 import struct
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from fastapi import WebSocket
 from sqlalchemy.orm import Session
 from app.core.config import settings
@@ -19,6 +19,7 @@ from app.runtime.lifecycle import SessionStatus
 from app.runtime.runtime import AgentRuntime
 from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony import TelephonyProvider
+from app.runtime.telephony.endpointing import SpeechEndpointer
 
 logger = logging.getLogger("choranta.runtime.telephony.session")
 
@@ -74,10 +75,9 @@ class TelephonyMediaSession:
         self.current_tts_task: Optional[asyncio.Task] = None
         self.closed = False
 
-        self.audio_buffer = bytearray()
-        self.speech_energy_count = 0
-        self.t_turn_speech_start: Optional[float] = None
-        self.t_turn_speech_end: Optional[float] = None
+        # Caller speech endpointing: utterances are complete phrases, never silence or noise
+        self.endpointer = SpeechEndpointer()
+        self.pending_utterances: List[bytes] = []
         self.t_call_start = time.perf_counter()
 
     async def initialize(self) -> None:
@@ -273,8 +273,12 @@ class TelephonyMediaSession:
             self.assistant_speaking = False
 
     async def execute_turn(self, pcm16_audio_bytes: bytes, t_start: Optional[float] = None, t_end: Optional[float] = None):
-        """Processes caller audio into STT, runs LLM, and streams back assistant audio."""
-        if self.turn_in_progress or not self.context or not self.runtime_session:
+        """Processes one complete caller utterance: STT, LLM (+ tools), then streams back assistant audio."""
+        if not self.context or not self.runtime_session or self.closed:
+            return
+        if self.turn_in_progress:
+            # Caller spoke while the agent was still working: answer it next instead of dropping it
+            self.pending_utterances.append(pcm16_audio_bytes)
             return
         self.turn_in_progress = True
 
@@ -291,17 +295,16 @@ class TelephonyMediaSession:
                 client_id=self.context.client_id
             )
 
-            # 1. Finalize STT
-            if self.streaming_stt_session:
-                transcript_res = await self.streaming_stt_session.finish()
-                self.streaming_stt_session = None
-            else:
-                transcript_res = await stt_provider.process_audio_async(pcm16_audio_bytes)
+            # 1. Transcribe the complete utterance (the endpointer already trimmed it to real speech)
+            transcript_res = await stt_provider.process_audio_async(pcm16_audio_bytes)
 
             t_stt_done = time.perf_counter()
             stt_latency_ms = round((t_stt_done - t_ref_end) * 1000, 2)
             user_text = transcript_res.text.strip()
             self.context.usage_tracker.record_stt(len(pcm16_audio_bytes) / (16000 * 2))
+            if not user_text:
+                logger.info("Discarding caller utterance with empty transcript.")
+                return
 
             self.emitter.emit(
                 RuntimeEventType.USER_TRANSCRIPT_FINAL,
@@ -431,6 +434,11 @@ class TelephonyMediaSession:
             logger.error(f"Error in telephony conversation turn: {e}")
         finally:
             self.turn_in_progress = False
+            if self.pending_utterances and not self.closed:
+                # Merge everything the caller said while we were busy into one follow-up turn
+                queued = b"".join(self.pending_utterances)
+                self.pending_utterances.clear()
+                asyncio.create_task(self.execute_turn(queued, t_end=time.perf_counter()))
 
     async def handle_media_payload(self, payload_b64: str) -> None:
         """Processes an incoming media frame from the telephony provider."""
@@ -443,37 +451,14 @@ class TelephonyMediaSession:
         if not pcm16_bytes:
             return
 
-        # Voice energy & barge-in
-        has_energy = _is_telephony_voice_energy(pcm16_bytes)
-        if has_energy:
-            self.speech_energy_count += 1
-            if self.t_turn_speech_start is None:
-                self.t_turn_speech_start = time.perf_counter()
-
-            if self.speech_energy_count >= 2 and self.assistant_speaking:
-                await self.handle_barge_in()
-        else:
-            self.speech_energy_count = max(0, self.speech_energy_count - 1)
-
-        # Stream audio frame to active STT session
-        stt_stream = await self.ensure_streaming_stt()
-        if stt_stream:
-            await stt_stream.send_audio(pcm16_bytes)
-
-        self.audio_buffer.extend(pcm16_bytes)
-
-        # If silence is maintained after speech, conclude turn automatically
-        # (the carrier streams continuous audio; 800ms silence concludes the turn)
-        if self.speech_energy_count == 0 and len(self.audio_buffer) >= 6400 and not self.turn_in_progress:
-            # 6400 bytes = 200ms audio buffer minimum
-            turn_pcm = bytes(self.audio_buffer)
-            self.audio_buffer.clear()
-            s_start = self.t_turn_speech_start
-            s_end = time.perf_counter()
-            self.t_turn_speech_start = None
-            asyncio.create_task(
-                self.execute_turn(turn_pcm, t_start=s_start, t_end=s_end)
-            )
+        for event in self.endpointer.process(pcm16_bytes):
+            if event.kind == "speech_start":
+                # Sustained caller speech while the agent talks = barge-in
+                if self.assistant_speaking:
+                    await self.handle_barge_in()
+            elif event.kind == "utterance":
+                logger.info(f"Caller utterance detected ({event.speech_ms:.0f} ms of speech).")
+                asyncio.create_task(self.execute_turn(event.audio, t_end=time.perf_counter()))
 
     async def close(self, reason: str = "normal") -> None:
         """Terminates active telephony session, ends runtime, and updates call record."""
