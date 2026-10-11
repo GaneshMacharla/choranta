@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time
+import weakref
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional, Set
 from fastapi import WebSocket
@@ -36,6 +37,20 @@ EVENT_FLUSH_INTERVAL_S = 0.5
 # Speaking-rate estimate used to work out how much of a sentence the caller heard before cutting in
 CHARS_PER_SECOND = 15.0
 CALL_ENDPOINTER_CONFIG = EndpointerConfig(end_silence_ms=600)
+# During the greeting, short caller replies ("Hello?", "Haan", "Who is this?") don't cancel it
+GREETING_IGNORE_MAX_WORDS = 4
+
+# Speech provider requests in flight across all calls, capped at the plan's concurrency limit
+_provider_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
+
+
+def _speech_provider_slot() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    slot = _provider_slots.get(loop)
+    if slot is None:
+        slot = asyncio.Semaphore(max(1, settings.CARTESIA_MAX_CONCURRENCY))
+        _provider_slots[loop] = slot
+    return slot
 
 
 class _SpokenSentence:
@@ -59,6 +74,7 @@ class _AssistantTurn:
         self.full_text_parts: List[str] = []
         self.committed = False
         self.started_audio = False
+        self.is_greeting = False
         self.t_reference: Optional[float] = None  # caller speech end, for latency logging
 
 
@@ -250,7 +266,8 @@ class TelephonyMediaSession:
         if not self.context or not self.runtime_session:
             return
         stt_provider = default_registry.get_stt(self.context.agent_spec.providers.stt)
-        transcript = await stt_provider.process_audio_async(audio)
+        async with _speech_provider_slot():
+            transcript = await stt_provider.process_audio_async(audio)
         user_text = (transcript.text or "").strip()
         self.context.usage_tracker.record_stt(len(audio) / (16000 * 2))
         stt_ms = round((time.perf_counter() - t_end) * 1000)
@@ -266,9 +283,30 @@ class TelephonyMediaSession:
             self._resume()
             return
 
+        greeting_active = bool(
+            self._turn and self._turn.is_greeting and self._turn_task and not self._turn_task.done()
+        )
+        if greeting_active and len(user_text.split()) <= GREETING_IGNORE_MAX_WORDS:
+            # Callers say "Hello?" on pickup; the greeting itself answers that
+            logger.info(f"Caller said '{user_text}' during the greeting; continuing the greeting.")
+            self._emit(RuntimeEventType.USER_TRANSCRIPT_FINAL, {
+                "text": user_text, "confidence": transcript.confidence, "latency_ms": stt_ms
+            })
+            if self._paused:
+                self._resume()
+            return
+
         self._emit(RuntimeEventType.USER_TRANSCRIPT_FINAL, {
             "text": user_text, "confidence": transcript.confidence, "latency_ms": stt_ms
         })
+
+        thinking = bool(
+            self._turn and not self._turn.started_audio and self._turn_task and not self._turn_task.done()
+        )
+        if thinking and is_backchannel(user_text):
+            # "Hello?" while the reply is being prepared: restarting would only delay it further
+            logger.info(f"Caller said '{user_text}' while the agent was preparing a reply; keeping the reply.")
+            return
 
         # A new caller turn replaces whatever the agent was saying or preparing
         await self._interrupt_current_turn()
@@ -347,8 +385,10 @@ class TelephonyMediaSession:
 
     async def _speak_text(self, text: str, is_greeting: bool = False) -> None:
         turn = self._turn
+        turn.is_greeting = is_greeting
         queue: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
-        for chunk in SentenceChunker().feed(text + " ") or [text]:
+        chunker = SentenceChunker()
+        for chunk in chunker.feed(text) + chunker.flush():
             await queue.put(chunk)
         await queue.put(None)
         turn.full_text_parts.append(text)
@@ -478,14 +518,16 @@ class TelephonyMediaSession:
 
     async def _synthesize(self, tts, sentence: _SpokenSentence) -> None:
         try:
-            async for chunk in tts.synthesize_stream(
-                text=sentence.text,
-                voice_id=self.context.agent_spec.voice.voice_id,
-                speed=self.context.agent_spec.voice.speed
-            ):
-                if chunk:
-                    sentence.audio.extend(self.telephony_provider.normalize_audio_outbound(chunk))
-                    sentence.updated.set()
+            # Sentences queue for a provider slot in order, so the next one to play goes first
+            async with _speech_provider_slot():
+                async for chunk in tts.synthesize_stream(
+                    text=sentence.text,
+                    voice_id=self.context.agent_spec.voice.voice_id,
+                    speed=self.context.agent_spec.voice.speed
+                ):
+                    if chunk:
+                        sentence.audio.extend(self.telephony_provider.normalize_audio_outbound(chunk))
+                        sentence.updated.set()
             self.context.usage_tracker.record_tts(len(sentence.audio) / 16000.0)
         except asyncio.CancelledError:
             raise

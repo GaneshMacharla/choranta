@@ -1,6 +1,7 @@
 import uuid
 import json
 import logging
+import threading
 import time
 from typing import Any, Dict, Iterator, List, Optional, Union
 from google import genai
@@ -24,6 +25,40 @@ GEMINI_FALLBACK_MODELS = (
 # monotonic time, so every turn doesn't pay for a failed request before falling back.
 MODEL_COOLDOWN_SECONDS = 600.0
 _model_cooldown_until: Dict[str, float] = {}
+
+
+class FirstTokenTimeout(TimeoutError):
+    """The model accepted the request but produced nothing within the first-token deadline."""
+
+
+def _first_with_timeout(iterator: Iterator[Any], timeout: Optional[float]) -> Any:
+    """
+    Returns next(iterator), giving up after `timeout` seconds. The blocking call runs in a daemon
+    thread; on timeout it is abandoned (its result is discarded when it eventually returns).
+    Raises StopIteration when the iterator is empty.
+    """
+    if not timeout:
+        return next(iterator)
+    result: Dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            result["value"] = next(iterator)
+        except StopIteration:
+            result["stop"] = True
+        except BaseException as e:  # surfaced to the caller below
+            result["error"] = e
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise FirstTokenTimeout(f"no response within {timeout:.1f}s")
+    if "error" in result:
+        raise result["error"]
+    if result.get("stop"):
+        raise StopIteration
+    return result["value"]
 
 
 def _models_available(models: List[str]) -> List[str]:
@@ -337,11 +372,23 @@ class GeminiLLMProvider(LLMProvider):
                 if "3.8" in candidate_model:
                     candidate_config.thinking_config = types.ThinkingConfig(thinking_budget=0)
 
-                for chunk in self._client.models.generate_content_stream(
+                chunks = iter(self._client.models.generate_content_stream(
                     model=candidate_model,
                     contents=contents,
                     config=candidate_config
-                ):
+                ))
+                # An overloaded model can accept the request and then stall; don't wait on it
+                try:
+                    first_chunk = _first_with_timeout(chunks, getattr(settings, "GEMINI_FIRST_TOKEN_TIMEOUT_S", None))
+                except StopIteration:
+                    first_chunk = None
+
+                def all_chunks():
+                    if first_chunk is not None:
+                        yield first_chunk
+                        yield from chunks
+
+                for chunk in all_chunks():
                     parsed = self._parse_response(chunk)
                     # Raw chunk text: _parse_response strips whitespace, which would glue words across chunks
                     delta = "".join(
@@ -375,14 +422,17 @@ class GeminiLLMProvider(LLMProvider):
                     raise
                 status_code = getattr(e, "code", getattr(e, "status_code", None))
                 err_text = str(e).lower()
-                if status_code in (429, 503) or "resource_exhausted" in err_text or "quota" in err_text:
+                timed_out = isinstance(e, FirstTokenTimeout)
+                if timed_out or status_code in (429, 503) or "resource_exhausted" in err_text or "quota" in err_text:
                     _model_cooldown_until[candidate_model] = time.monotonic() + MODEL_COOLDOWN_SECONDS
                 retryable = (
-                    status_code in (429, 500, 502, 503, 504)
+                    timed_out
+                    or status_code in (429, 500, 502, 503, 504)
                     or any(k in err_text for k in ("429", "503", "504", "resource_exhausted", "quota", "deadline_exceeded", "unavailable"))
                 )
                 if candidate_model != models_to_try[-1] and retryable:
-                    logger.warning(f"Gemini model {candidate_model} unavailable ({status_code}); trying fallback model.")
+                    reason = "too slow to respond" if timed_out else f"unavailable ({status_code})"
+                    logger.warning(f"Gemini model {candidate_model} {reason}; trying fallback model.")
                     continue
                 if settings.GEMINI_FALLBACK_TO_MOCK:
                     logger.warning(f"Gemini stream error ({type(e).__name__}: {str(e)}); using deterministic mock LLM fallback.")

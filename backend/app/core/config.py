@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_FALLBACK_TO_MOCK: bool = True
+    # Streaming requests that produce no output within this many seconds move on to the next model
+    GEMINI_FIRST_TOKEN_TIMEOUT_S: float = 3.0
+    # Cartesia plans cap concurrent requests (TTS + STT); stay at or below the plan's limit
+    CARTESIA_MAX_CONCURRENCY: int = 2
 
     # Mock-only pricing estimates. These never contribute to production billing.
     MOCK_STT_PRICE_PER_MINUTE: float = 0.02

@@ -14,6 +14,8 @@ BACKCHANNELS = {
     "ok", "okay", "k", "hmm", "hm", "mm", "mhm", "mmhmm", "uh huh", "uhhuh", "yeah", "yes", "yep", "yup", "right",
     "sure", "fine", "alright", "all right", "got it", "i see", "oh", "ah", "achha", "acha", "accha", "haan", "han",
     "ha", "ji", "haan ji", "ji haan", "theek hai", "thik hai", "theek", "thik", "nice", "great", "cool",
+    # "Hello?" while the agent talks usually means "I can hear you" / "go on", not a new question
+    "hello", "hi", "hey", "hello hello", "haan hello", "hello ji",
 }
 
 
