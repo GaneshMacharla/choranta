@@ -1,0 +1,386 @@
+export type UserRole = 'ADMIN' | 'OPERATOR';
+export type UserStatus = 'ACTIVE' | 'INACTIVE';
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  status: UserStatus;
+  created_at: string;
+}
+
+export type BusinessType = 
+  | 'CLINIC' 
+  | 'HOSPITAL' 
+  | 'SALON' 
+  | 'REAL_ESTATE' 
+  | 'HOTEL' 
+  | 'RESTAURANT' 
+  | 'CORPORATE' 
+  | 'OTHER';
+
+export type ClientStatus = 'ACTIVE' | 'INACTIVE';
+
+export interface Client {
+  id: string;
+  name: string;
+  business_type: BusinessType;
+  description?: string | null;
+  contact_name?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  timezone: string;
+  status: ClientStatus;
+  agent_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClientCreateInput {
+  name: string;
+  business_type: BusinessType;
+  description?: string;
+  contact_name?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  timezone?: string;
+}
+
+export interface ClientUpdateInput {
+  name?: string;
+  business_type?: BusinessType;
+  description?: string;
+  contact_name?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  timezone?: string;
+  status?: ClientStatus;
+}
+
+export type AgentStatus = 'DRAFT' | 'TESTING' | 'READY' | 'DEPLOYED' | 'PAUSED' | 'ARCHIVED';
+
+export interface Agent {
+  id: string;
+  client_id: string;
+  client_name?: string | null;
+  name: string;
+  role: string;
+  description?: string | null;
+  status: AgentStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentCreateInput {
+  client_id: string;
+  name: string;
+  role: string;
+  description?: string;
+  template_id?: string;
+}
+
+export interface AgentUpdateInput {
+  name?: string;
+  role?: string;
+  description?: string;
+  status?: AgentStatus;
+}
+
+export interface AgentVersion {
+  id: string;
+  agent_id: string;
+  version_number: number;
+  configuration_json: Record<string, any>;
+  status: string;
+  created_at: string;
+  created_by?: string | null;
+}
+
+export interface RecentClientItem {
+  id: string;
+  name: string;
+  business_type: BusinessType;
+  status: ClientStatus;
+  agent_count: number;
+  created_at: string;
+}
+
+export interface RecentAgentItem {
+  id: string;
+  client_id: string;
+  client_name?: string | null;
+  name: string;
+  role: string;
+  status: AgentStatus;
+  created_at: string;
+}
+
+export interface DashboardSummary {
+  total_clients: number;
+  active_clients: number;
+  total_agents: number;
+  active_agents: number;
+  recent_clients: RecentClientItem[];
+  recent_agents: RecentAgentItem[];
+}
+
+// ==========================================
+// PHASE 2: AGENT SPEC & CONFIGURATION TYPES
+// ==========================================
+
+export interface AgentIdentity {
+  name: string;
+  organization: string;
+  persona: string;
+}
+
+export interface BusinessHours {
+  timezone?: string;
+  monday_friday?: string;
+  [key: string]: any;
+}
+
+export interface ContactInformation {
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  [key: string]: any;
+}
+
+export interface AgentBusinessContext {
+  business_name: string;
+  business_type: string;
+  business_hours: BusinessHours;
+  location: string;
+  contact_information: ContactInformation;
+}
+
+export interface AgentInstructions {
+  primary_goal: string;
+  responsibilities: string[];
+  rules: string[];
+  restrictions: string[];
+  escalation_rules: string[];
+}
+
+export interface AgentConversationStyle {
+  tone: string;
+  verbosity: string;
+  greeting: string;
+  farewell: string;
+  interruption_behavior: string;
+}
+
+export interface AgentLanguageConfig {
+  primary: string;
+  supported: string[];
+}
+
+export interface AgentVoiceConfig {
+  provider: string;
+  voice_id?: string | null;
+  language: string;
+  speed: number;
+}
+
+export interface AgentProviderConfig {
+  stt: string;
+  llm: string;
+  tts: string;
+  telephony?: string | null;
+}
+
+export interface AgentVariable {
+  name: string;
+  description: string;
+  data_type: string;
+  default_value?: any;
+  required: boolean;
+  source?: string;
+  extraction_instructions: string;
+}
+
+export interface AgentVariablesConfig {
+  inputs: AgentVariable[];
+  outputs: AgentVariable[];
+}
+
+export interface AgentTemplatePreview {
+  role?: string;
+  persona?: string;
+  sample_greeting?: string;
+  key_capabilities?: string[];
+  input_variables?: string[];
+  output_variables?: string[];
+  enabled_tools?: string[];
+}
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  role?: string;
+  description: string;
+  category: string;
+  capabilities?: string[];
+  supported_capabilities?: string[];
+  is_featured?: boolean;
+  recommended_role?: string;
+  preview?: AgentTemplatePreview;
+  default_config?: Record<string, any>;
+  default_configuration?: Record<string, any>;
+}
+
+export interface AgentConfigurationData {
+  identity: AgentIdentity;
+  business_context: AgentBusinessContext;
+  instructions: AgentInstructions;
+  conversation: AgentConversationStyle;
+  languages: AgentLanguageConfig;
+  knowledge_sources: string[];
+  tools: string[];
+  integrations: string[];
+  variables: AgentVariablesConfig;
+  voice: AgentVoiceConfig;
+  providers: AgentProviderConfig;
+}
+
+export interface ValidationIssue {
+  field: string;
+  message: string;
+  severity: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+}
+
+export interface FieldDiff {
+  field: string;
+  old_value: any;
+  new_value: any;
+}
+
+export interface VersionComparison {
+  base_version_number: number;
+  compare_version_number: number;
+  changes: FieldDiff[];
+  summary: string;
+}
+
+export interface KnowledgeSource {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  description?: string | null;
+  metadata?: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Tool {
+  id: string;
+  name: string;
+  description: string;
+  input_schema: Record<string, any>;
+  output_schema: Record<string, any>;
+  executor_type: string;
+  timeout: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Integration {
+  id: string;
+  name: string;
+  description?: string | null;
+  category: string;
+  provider: string;
+  connection_status: string;
+  metadata?: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CartesiaVoice {
+  id: string;
+  name: string;
+  gender?: string | null;
+  language?: string | null;
+  description?: string | null;
+  tagline?: string | null;
+  country?: string | null;
+  preview_url?: string | null;
+  is_default: boolean;
+  provider: string;
+}
+
+// ==========================================
+// PHASE 3A: VOICE RUNTIME FOUNDATION TYPES
+// ==========================================
+
+export interface ReadinessCheckResult {
+  ready: boolean;
+  errors: string[];
+  warnings: string[];
+  agent_id: string;
+  version_id: string;
+  version_number?: number | null;
+}
+
+export interface RuntimeSession {
+  id: string;
+  client_id: string;
+  agent_id: string;
+  agent_version_id: string;
+  status: string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  metadata: Record<string, any>;
+  usage: Record<string, any>;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeEvent {
+  id: string;
+  session_id: string;
+  client_id: string;
+  agent_id: string;
+  agent_version_id: string;
+  event_type: string;
+  payload: Record<string, any>;
+  timestamp: string;
+  created_at: string;
+}
+
+export interface SimulateTurnResult {
+  session_id: string;
+  transcript: string;
+  assistant_response: string;
+  audio_duration_seconds: number;
+  tool_calls_executed: number;
+  usage: Record<string, any>;
+  events?: RuntimeEvent[];
+}
+
+export type StreamTurnEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'tool'; status: 'started' | 'completed'; tool_name: string; success?: boolean }
+  | {
+      type: 'done';
+      transcript: string;
+      assistant_response: string;
+      display_text: string;
+      tool_calls_executed: number;
+      usage: Record<string, any>;
+      events: RuntimeEvent[];
+    }
+  | { type: 'error'; message: string };
+
+

@@ -1,0 +1,103 @@
+import logging
+import traceback
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from app.core.config import settings
+from app.core.exceptions import ChorantaException
+from app.db.init_db import init_db
+from app.api.routes import (
+    auth, clients, agents, dashboard,
+    agent_configuration, catalogs, runtime,
+    websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("choranta")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup validation and seeding
+    logger.info("Initializing Choranta Internal Agent Studio backend...")
+    init_db()
+    yield
+    # Shutdown
+    logger.info("Shutting down Choranta backend...")
+
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    description="Internal operating system for configuring, testing, and managing AI voice employees.",
+    lifespan=lifespan
+)
+
+# CORS Middleware (Origin-validated)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+)
+
+
+# Exception handler for domain/application exceptions
+@app.exception_handler(ChorantaException)
+async def choranta_exception_handler(request: Request, exc: ChorantaException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.message,
+            "details": exc.details,
+            "type": exc.__class__.__name__
+        }
+    )
+
+
+# Global fallback exception handler (prevents stack trace leakage in production)
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled system error on {request.method} {request.url.path}: {exc}\n{traceback.format_exc()}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": "An internal system error occurred. Operations staff have been notified.",
+            "type": "InternalServerError"
+        }
+    )
+
+
+# Health check
+@app.get("/health", tags=["System"])
+def health_check():
+    return {
+        "status": "healthy",
+        "service": "choranta-backend",
+        "version": settings.VERSION,
+        "environment": settings.ENVIRONMENT,
+        "runtime_mode": settings.RUNTIME_MODE,
+        "external_provider_calls_enabled": settings.RUNTIME_MODE == "real"
+    }
+
+
+# Include API routes
+app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
+app.include_router(clients.router, prefix=settings.API_V1_PREFIX)
+app.include_router(agents.router, prefix=settings.API_V1_PREFIX)
+app.include_router(agent_configuration.router, prefix=settings.API_V1_PREFIX)
+app.include_router(catalogs.router, prefix=settings.API_V1_PREFIX)
+app.include_router(dashboard.router, prefix=settings.API_V1_PREFIX)
+app.include_router(runtime.router, prefix=settings.API_V1_PREFIX)
+app.include_router(mock_environment.router, prefix=settings.API_V1_PREFIX)
+app.include_router(test_scenarios.router, prefix=settings.API_V1_PREFIX)
+app.include_router(telephony.router, prefix=settings.API_V1_PREFIX)
+app.include_router(telephony.router)
+app.include_router(telephony.ws_router)
+app.include_router(websocket_audio.router)
+app.include_router(webrtc_audio.router)
