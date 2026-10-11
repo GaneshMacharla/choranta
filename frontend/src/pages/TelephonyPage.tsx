@@ -34,6 +34,8 @@ import { LoadingState } from '../components/common/LoadingState';
 import { EmptyState } from '../components/common/EmptyState';
 import { ErrorState } from '../components/common/ErrorState';
 
+const AGENT_SOURCE_PREFIX = 'agent:';
+
 export const TelephonyPage: React.FC = () => {
   const [overview, setOverview] = useState<TelephonyOverview | null>(null);
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
@@ -194,15 +196,30 @@ export const TelephonyPage: React.FC = () => {
   const handleInitiateOutboundCall = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!dialSourceNumberId || !dialDestinationNumber) {
-      setFormError('Please select a provisioned caller number and enter a recipient number.');
+      setFormError('Please choose who is calling and enter a recipient number.');
       return;
     }
     setDialing(true);
     setFormError(null);
     setDialSuccessMessage(null);
     try {
+      let source: { phone_number_id: string } | { agent_id: string; agent_version_id: string };
+      if (dialSourceNumberId.startsWith(AGENT_SOURCE_PREFIX)) {
+        // Call directly as an agent using its latest published version (caller ID: EXOTEL_CALLER_ID)
+        const agentId = dialSourceNumberId.slice(AGENT_SOURCE_PREFIX.length);
+        const versions = await agentsService.getVersions(agentId);
+        const published = versions
+          .filter((v) => v.status === 'PUBLISHED')
+          .sort((a, b) => b.version_number - a.version_number)[0];
+        if (!published) {
+          throw new Error('This agent has no published version yet. Publish a version first.');
+        }
+        source = { agent_id: agentId, agent_version_id: published.id };
+      } else {
+        source = { phone_number_id: dialSourceNumberId };
+      }
       const res = await telephonyService.initiateOutboundCall({
-        phone_number_id: dialSourceNumberId,
+        ...source,
         destination_number: dialDestinationNumber.trim(),
       });
       setDialSuccessMessage(
@@ -627,19 +644,23 @@ export const TelephonyPage: React.FC = () => {
           </div>
 
           <Select
-            label="Calling From (Provisioned Number)"
+            label="Calling From"
             value={dialSourceNumberId}
             onChange={(e) => setDialSourceNumberId(e.target.value)}
             options={[
-              { value: '', label: 'Select assigned number...' },
+              { value: '', label: 'Select a number or agent...' },
               ...phoneNumbers
                 .filter((p) => p.agent_id && p.status === 'ACTIVE')
                 .map((p) => ({
                   value: p.id,
                   label: `${p.phone_number} — ${p.agent_name || 'AI Agent'} (${p.client_name || 'Client'})`,
                 })),
+              ...agents.map((a) => ({
+                value: `${AGENT_SOURCE_PREFIX}${a.id}`,
+                label: `${a.name} — call as agent (default ExoPhone)`,
+              })),
             ]}
-            helperText="The virtual number (Caller ID) that will display on the recipient's phone."
+            helperText="A provisioned number uses its assigned agent. Calling as an agent uses its latest published version and the ExoPhone in EXOTEL_CALLER_ID."
             required
           />
 

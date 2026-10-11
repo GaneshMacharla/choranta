@@ -212,16 +212,36 @@ async def exotel_inbound_call_webhook(
     elif existing_call:
         # Outbound call answered by the customer: start its runtime session now
         call_record = existing_call
+        custom_vars = dict((call_record.metadata_ or {}).get("variables") or {})
+
+        # If variables missing, look up lead by destination phone number
+        from app.models.lead import Lead
+        lead = db.query(Lead).filter(Lead.phone == call_record.destination_number).first()
+        if not lead and len(call_record.destination_number) >= 10:
+            lead = db.query(Lead).filter(Lead.phone.endswith(call_record.destination_number[-10:])).first()
+        if lead:
+            custom_vars.setdefault("user_name", lead.name)
+            custom_vars.setdefault("lead_id", lead.id)
+            if lead.property_viewed:
+                custom_vars.setdefault("property_viewed", lead.property_viewed)
+            if lead.enquiry_location:
+                custom_vars.setdefault("enquiry_location", lead.enquiry_location)
+            if lead.enquiry_budget:
+                custom_vars.setdefault("enquiry_budget", lead.enquiry_budget)
+            if lead.enquiry_bhk:
+                custom_vars.setdefault("enquiry_bhk", lead.enquiry_bhk)
+
         session_obj = runtime.start_session(
             agent_id=call_record.agent_id,
             agent_version_id=call_record.agent_version_id,
             metadata={
                 "origin": "telephony_outbound",
                 "call_id": call_record.id,
-                "provider": "exotel",
+                "provider": call_record.provider or "exotel",
                 "caller": call_record.caller_number,
                 "destination": call_record.destination_number,
-                "phone_number_id": call_record.phone_number_id
+                "phone_number_id": call_record.phone_number_id,
+                **custom_vars
             }
         )
         call_record.runtime_session_id = session_obj.id
@@ -769,7 +789,7 @@ def initiate_outbound_call_endpoint(
         status="INITIATED",
         started_at=now,
         duration_seconds=0.0,
-        metadata_={"exotel_response": call_result, "custom_field": req.custom_field}
+        metadata_={"exotel_response": call_result, "custom_field": req.custom_field, "variables": req.variables or {}}
     )
     saved_call = call_repo.create(call_record)
 

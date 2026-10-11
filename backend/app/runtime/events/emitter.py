@@ -80,7 +80,11 @@ class EventEmitter:
             except Exception as e:
                 logger.error(f"Error in event listener for {event_type}: {e}")
 
-        if self._buffer is not None:
+        if not session_id:
+            # runtime_events.session_id references runtime_sessions; events that happen before a
+            # session exists (e.g. an outbound call that hasn't been answered) are log-only.
+            pass
+        elif self._buffer is not None:
             self._buffer.append(RuntimeEvent(
                 id=event_id,
                 session_id=session_id,
@@ -107,6 +111,11 @@ class EventEmitter:
                 )
                 self.event_repo.create(db_record)
             except Exception as e:
+                # Leave the caller's session usable: a failed flush otherwise poisons every later query
+                try:
+                    self.db.rollback()
+                except Exception:
+                    pass
                 logger.error(f"Failed to persist runtime event {event_id}: {e}")
 
         logger.info(
