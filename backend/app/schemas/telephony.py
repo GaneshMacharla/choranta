@@ -85,6 +85,7 @@ class CallResponse(BaseModel):
     termination_reason: Optional[str] = None
     recording_url: Optional[str] = None
     has_recording: bool = False
+    cost: Optional[Dict[str, Any]] = None  # estimated INR cost: total, per_minute, breakdown, rates
     transcript_summary: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime

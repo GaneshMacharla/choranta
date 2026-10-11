@@ -20,6 +20,7 @@ import { LoadingState } from '../components/common/LoadingState';
 import { EmptyState } from '../components/common/EmptyState';
 import { ErrorState } from '../components/common/ErrorState';
 import { CallRecordingPlayer } from '../components/telephony/CallRecordingPlayer';
+import { CallCostCard, formatInrPerMinute } from '../components/telephony/CallCostCard';
 
 export const CallsPage: React.FC = () => {
   const [calls, setCalls] = useState<Call[]>([]);
@@ -220,6 +221,7 @@ export const CallsPage: React.FC = () => {
                   <th className="px-5 py-3 font-medium">Client & AI Employee</th>
                   <th className="px-5 py-3 font-medium">Status</th>
                   <th className="px-5 py-3 font-medium">Duration</th>
+                  <th className="px-5 py-3 font-medium">Cost</th>
                   <th className="px-5 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
@@ -253,6 +255,12 @@ export const CallsPage: React.FC = () => {
                     <td className="px-5 py-3.5">{getStatusBadge(call.status)}</td>
                     <td className="px-5 py-3.5 text-xs text-slate-300 font-mono">
                       {formatDuration(call.duration_seconds)}
+                    </td>
+                    <td className="px-5 py-3.5 text-xs font-mono whitespace-nowrap">
+                      <span className="text-amber-300">{formatInrPerMinute(call.cost)}</span>
+                      {call.cost && (
+                        <span className="block text-[10px] text-slate-500">₹{call.cost.total.toFixed(2)} total</span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5 text-right">
                       <Button
@@ -368,6 +376,8 @@ export const CallsPage: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {callDetail.cost && <CallCostCard cost={callDetail.cost} />}
 
             {/* Turn Latency & Telemetry */}
             {callDetail.usage && (

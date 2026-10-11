@@ -45,6 +45,26 @@ export interface PhoneNumberReadiness {
   agent_version_id?: string;
 }
 
+export interface CallCost {
+  currency: 'INR';
+  estimated: boolean;
+  duration_seconds: number;
+  billed_minutes: number;
+  breakdown: { telephony: number; speech_to_text: number; text_to_speech: number; llm: number };
+  total: number;
+  per_minute: number | null;
+  llm_provider?: string;
+  rates: {
+    telephony_per_minute_inr: number;
+    billing_pulse_seconds: number;
+    stt_usd_per_minute: number;
+    tts_usd_per_minute: number;
+    llm_input_usd_per_million_tokens: number;
+    llm_output_usd_per_million_tokens: number;
+    usd_to_inr: number;
+  };
+}
+
 export interface Call {
   id: string;
   client_id: string;
@@ -68,6 +88,7 @@ export interface Call {
   termination_reason?: string;
   recording_url?: string;
   has_recording?: boolean;
+  cost?: CallCost | null;
   transcript_summary?: string;
   metadata?: Record<string, any>;
   created_at: string;

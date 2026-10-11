@@ -1,4 +1,5 @@
 import logging
+from app.runtime.tools.catalog import describe_tools
 import threading
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -340,7 +341,7 @@ class AgentRuntime:
             )
             context.conversation.add_user_message(user_text)
 
-            available_tools_list = [{"name": t, "id": t} for t in context.active_tools]
+            available_tools_list = describe_tools(self.db, context.active_tools)
 
             def run_llm(tools):
                 final = None
@@ -484,7 +485,7 @@ class AgentRuntime:
                 client_id=context.client_id
             )
 
-            available_tools_list = [{"name": t, "id": t} for t in context.active_tools]
+            available_tools_list = describe_tools(self.db, context.active_tools)
             llm_result = llm_p.generate(
                 system_instruction=context.conversation.system_instruction,
                 messages=context.conversation.to_llm_messages(),

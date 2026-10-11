@@ -1,10 +1,11 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 
 class SessionUsage(BaseModel):
     mode: str = "mock"
     simulated: bool = True
+    llm_provider: Optional[str] = None
     stt_seconds: float = 0.0
     tts_seconds: float = 0.0
     llm_input_tokens: int = 0
@@ -18,11 +19,12 @@ class UsageTracker:
     Tracks raw usage without calculating financial costs/pricing.
     """
 
-    def __init__(self, mode: str = "mock"):
+    def __init__(self, mode: str = "mock", llm_provider: Optional[str] = None):
         normalized_mode = "real" if mode == "provider" else mode
         self.usage = SessionUsage(
             mode=normalized_mode,
-            simulated=normalized_mode == "mock"
+            simulated=normalized_mode == "mock",
+            llm_provider=llm_provider
         )
 
     def record_stt(self, duration_seconds: float) -> None:

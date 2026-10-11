@@ -43,7 +43,7 @@ class RuntimeContext:
         }
 
         # Operational metrics tracking
-        self.usage_tracker = UsageTracker(settings.RUNTIME_MODE)
+        self.usage_tracker = UsageTracker(settings.RUNTIME_MODE, llm_provider=agent_spec.providers.llm)
 
         # Resolved opening greeting with variable substitution
         self.resolved_greeting = self._resolve_greeting(agent_spec, self.metadata)

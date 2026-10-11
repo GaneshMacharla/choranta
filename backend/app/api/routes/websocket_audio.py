@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from app.runtime.tools.catalog import describe_tools
 import struct
 import time
 from datetime import datetime, timezone
@@ -372,7 +373,7 @@ async def runtime_audio_websocket(
                 client_id=context.client_id
             )
 
-            available_tools_list = [{"name": t, "id": t} for t in context.active_tools]
+            available_tools_list = describe_tools(db, context.active_tools)
             llm_result = await llm_provider.generate_async(
                 system_instruction=context.conversation.system_instruction,
                 messages=context.conversation.to_llm_messages(),

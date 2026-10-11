@@ -100,6 +100,8 @@ class RuntimeReadinessChecker:
                 errors.append("Cartesia API key (CARTESIA_API_KEY) is not configured in server environment.")
             if spec.providers.llm == "gemini" and not settings.GEMINI_API_KEY:
                 errors.append("Gemini API key (GEMINI_API_KEY) is not configured in server environment.")
+            if spec.providers.llm == "sarvam" and not settings.SARVAM_API_KEY:
+                errors.append("Sarvam API key (SARVAM_API_KEY) is not configured in server environment.")
 
         # 8. Check Tools
         if not spec.tools.enabled:

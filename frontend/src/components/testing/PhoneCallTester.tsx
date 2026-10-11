@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { PhoneCall, PhoneOutgoing, AlertTriangle, CheckCircle } from 'lucide-react';
 import { Button } from '../common/Button';
 import { telephonyService, CallDetail } from '../../services/telephony';
+import { CallCostCard } from '../telephony/CallCostCard';
 
 const STORAGE_KEY = 'choranta_test_phone_number';
 const POLL_MS = 2000;
@@ -180,6 +181,8 @@ export const PhoneCallTester: React.FC<PhoneCallTesterProps> = ({ agentId, agent
           </div>
         </div>
       )}
+
+      {call && !isLive && call.cost && <CallCostCard cost={call.cost} />}
 
       <p className="text-[11px] leading-relaxed text-slate-500">
         Exotel rings your phone from the configured ExoPhone; when you answer, the agent greets you. Exotel trial

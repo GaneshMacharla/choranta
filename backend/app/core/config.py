@@ -49,10 +49,40 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_FALLBACK_TO_MOCK: bool = True
+    # Sarvam LLM (OpenAI-compatible chat completions)
+    SARVAM_API_KEY: Optional[str] = None
+    SARVAM_BASE_URL: str = "https://api.sarvam.ai/v1"
+    SARVAM_LLM_MODEL: str = "sarvam-105b-conversations"  # Sarvam's model for real-time voice agents
+    SARVAM_REASONING_EFFORT: str = "none"                # "none" disables thinking for low latency
+    SARVAM_MAX_TOKENS: int = 400
+    SARVAM_TIMEOUT_S: float = 10.0
+    SARVAM_FALLBACK_TO_GEMINI: bool = True               # use Gemini for a turn if Sarvam errors
     # Streaming requests that produce no output within this many seconds move on to the next model
     GEMINI_FIRST_TOKEN_TIMEOUT_S: float = 3.0
     # Cartesia plans cap concurrent requests (TTS + STT); stay at or below the plan's limit
     CARTESIA_MAX_CONCURRENCY: int = 2
+
+    # --------------------------------------------------------
+    # Call cost estimates (set these to your plans' actual rates)
+    # --------------------------------------------------------
+    TELEPHONY_RATE_PER_MINUTE_INR: float = 0.80     # Exotel outbound to mobile (third-party estimates ₹0.60–1.20)
+    TELEPHONY_BILLING_PULSE_SECONDS: int = 60       # carrier bills per started pulse
+    STT_USD_PER_MINUTE: float = 0.00118             # Cartesia ink-whisper batch: 1 credit / 2 s at Startup $39.2 per 1M credits
+    TTS_USD_PER_MINUTE: float = 0.0353              # Cartesia Sonic: ~900 chars (credits) per audio minute at Startup $39.2 per 1M
+    LLM_INPUT_USD_PER_MILLION_TOKENS: float = 0.30  # Gemini 3.5 Flash-Lite input
+    LLM_OUTPUT_USD_PER_MILLION_TOKENS: float = 2.50 # Gemini 3.5 Flash-Lite output
+    SARVAM_INPUT_INR_PER_MILLION_TOKENS: float = 29.28   # sarvam-105b(-conversations), Aug 2026 price
+    SARVAM_OUTPUT_INR_PER_MILLION_TOKENS: float = 73.20
+    USD_TO_INR: float = 88.0
+
+    # --------------------------------------------------------
+    # Phone call behaviour (cost control)
+    # --------------------------------------------------------
+    VOICE_MAX_REPLY_CHARS: int = 280          # stop the agent's reply after the sentence that crosses this
+    VOICE_PREFETCH_SENTENCES: int = 1         # sentences synthesized ahead of playback (unheard audio is still billed)
+    CALL_SILENCE_REPROMPT_S: float = 8.0      # caller silent this long -> "Are you still there?"
+    CALL_SILENCE_HANGUP_S: float = 8.0        # still silent after the reprompt -> goodbye and hang up
+    CALL_MAX_DURATION_S: int = 600            # wrap up and hang up after this many seconds
 
     # Mock-only pricing estimates. These never contribute to production billing.
     MOCK_STT_PRICE_PER_MINUTE: float = 0.02

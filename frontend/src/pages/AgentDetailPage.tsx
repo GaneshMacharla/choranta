@@ -113,6 +113,7 @@ const STT_PROVIDER_OPTIONS: { value: string; label: string }[] = [
 
 const LLM_PROVIDER_OPTIONS: { value: string; label: string }[] = [
   { value: 'gemini', label: 'Google Gemini (Gemini 3.8 Flash / Realtime)' },
+  { value: 'sarvam', label: 'Sarvam (sarvam-105b-conversations, Indian languages)' },
   { value: 'mock_llm', label: 'Mock LLM (Deterministic Test Mode)' },
 ];
 

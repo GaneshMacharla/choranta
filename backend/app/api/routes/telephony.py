@@ -30,6 +30,7 @@ from app.runtime.readiness.checker import RuntimeReadinessChecker
 from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony import TelephonyProvider
 from app.runtime.telephony.session import TelephonyMediaSession, active_telephony_calls
+from app.services.call_costing import estimate_call_cost
 from app.schemas.telephony import (
     CreatePhoneNumberRequest,
     UpdatePhoneNumberRequest,
@@ -81,6 +82,18 @@ def _recording_path(c: Call) -> Optional[str]:
     return path if os.path.isfile(path) else None
 
 
+def _call_cost(c: Call, db: Session) -> Optional[Dict[str, Any]]:
+    """Estimated INR cost of a finished call (None while it is still in progress)."""
+    if c.status not in ("COMPLETED", "FAILED", "TERMINATED") or not c.duration_seconds:
+        return None
+    usage: Dict[str, Any] = {}
+    if c.runtime_session_id:
+        session_obj = db.get(RuntimeSession, c.runtime_session_id)
+        if session_obj and isinstance(session_obj.usage_json, dict):
+            usage = session_obj.usage_json
+    return estimate_call_cost(c.duration_seconds, usage)
+
+
 def _format_call_response(c: Call, db: Session) -> CallResponse:
     client = db.query(Client).filter(Client.id == c.client_id).first() if c.client_id else None
     agent = db.query(Agent).filter(Agent.id == c.agent_id).first() if c.agent_id else None
@@ -109,6 +122,7 @@ def _format_call_response(c: Call, db: Session) -> CallResponse:
         termination_reason=c.termination_reason,
         recording_url=c.recording_url,
         has_recording=bool(_recording_path(c)),
+        cost=_call_cost(c, db),
         transcript_summary=c.transcript_summary,
         metadata=c.metadata_ if isinstance(c.metadata_, dict) else {},
         created_at=c.created_at,
