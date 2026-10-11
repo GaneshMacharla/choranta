@@ -31,6 +31,7 @@ from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony import TelephonyProvider
 from app.runtime.telephony.session import TelephonyMediaSession, active_telephony_calls
 from app.services.call_costing import estimate_call_cost
+from app.services.pricing import PricingSnapshot, get_pricing
 from app.schemas.telephony import (
     CreatePhoneNumberRequest,
     UpdatePhoneNumberRequest,
@@ -82,8 +83,15 @@ def _recording_path(c: Call) -> Optional[str]:
     return path if os.path.isfile(path) else None
 
 
-def _call_cost(c: Call, db: Session) -> Optional[Dict[str, Any]]:
-    """Estimated INR cost of a finished call (None while it is still in progress)."""
+# Fields of a call's cost that operators may see: the client charge, not our costs or margin
+CLIENT_CHARGE_FIELDS = ("currency", "estimated", "duration_seconds", "billed_minutes", "charge_total", "charge_per_minute")
+
+
+def _call_cost(c: Call, db: Session, pricing: Optional[PricingSnapshot] = None, internal: bool = True) -> Optional[Dict[str, Any]]:
+    """
+    Estimated INR cost and client charge of a finished call (None while still in progress).
+    Admins (internal=True) get the full breakdown; everyone else gets the client charge only.
+    """
     if c.status not in ("COMPLETED", "FAILED", "TERMINATED") or not c.duration_seconds:
         return None
     usage: Dict[str, Any] = {}
@@ -91,10 +99,22 @@ def _call_cost(c: Call, db: Session) -> Optional[Dict[str, Any]]:
         session_obj = db.get(RuntimeSession, c.runtime_session_id)
         if session_obj and isinstance(session_obj.usage_json, dict):
             usage = session_obj.usage_json
-    return estimate_call_cost(c.duration_seconds, usage)
+    cost = estimate_call_cost(c.duration_seconds, usage, pricing or get_pricing(db))
+    if internal:
+        return cost
+    return {key: cost[key] for key in CLIENT_CHARGE_FIELDS}
 
 
-def _format_call_response(c: Call, db: Session) -> CallResponse:
+def _sees_internal_costs(user: Optional[User]) -> bool:
+    return user is not None and user.role == "ADMIN"
+
+
+def _format_call_response(
+    c: Call,
+    db: Session,
+    viewer: Optional[User] = None,
+    pricing: Optional[PricingSnapshot] = None,
+) -> CallResponse:
     client = db.query(Client).filter(Client.id == c.client_id).first() if c.client_id else None
     agent = db.query(Agent).filter(Agent.id == c.agent_id).first() if c.agent_id else None
     version = db.query(AgentVersion).filter(AgentVersion.id == c.agent_version_id).first() if c.agent_version_id else None
@@ -122,7 +142,7 @@ def _format_call_response(c: Call, db: Session) -> CallResponse:
         termination_reason=c.termination_reason,
         recording_url=c.recording_url,
         has_recording=bool(_recording_path(c)),
-        cost=_call_cost(c, db),
+        cost=_call_cost(c, db, pricing, internal=_sees_internal_costs(viewer)),
         transcript_summary=c.transcript_summary,
         metadata=c.metadata_ if isinstance(c.metadata_, dict) else {},
         created_at=c.created_at,
@@ -735,7 +755,8 @@ def list_calls(
         direction=direction,
         client_id=client_id
     )
-    return [_format_call_response(c, db) for c in calls]
+    pricing = get_pricing(db)
+    return [_format_call_response(c, db, current_user, pricing) for c in calls]
 
 
 @router.post("/calls/outbound", response_model=CallResponse, status_code=status.HTTP_201_CREATED)
@@ -845,7 +866,7 @@ def initiate_outbound_call_endpoint(
         payload={"call_id": saved_call.id, "direction": "OUTBOUND", "provider_call_id": provider_call_id}
     )
 
-    return _format_call_response(saved_call, db)
+    return _format_call_response(saved_call, db, current_user)
 
 
 @router.get("/calls/{call_id}/recording")
@@ -877,7 +898,7 @@ def get_call_detail(
     if not call_obj:
         raise HTTPException(status_code=404, detail=f"Call '{call_id}' not found.")
 
-    formatted_base = _format_call_response(call_obj, db)
+    formatted_base = _format_call_response(call_obj, db, current_user)
 
     events_list = []
     usage_dict = {}

@@ -221,7 +221,7 @@ export const CallsPage: React.FC = () => {
                   <th className="px-5 py-3 font-medium">Client & AI Employee</th>
                   <th className="px-5 py-3 font-medium">Status</th>
                   <th className="px-5 py-3 font-medium">Duration</th>
-                  <th className="px-5 py-3 font-medium">Cost</th>
+                  <th className="px-5 py-3 font-medium">Charge</th>
                   <th className="px-5 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
@@ -259,7 +259,10 @@ export const CallsPage: React.FC = () => {
                     <td className="px-5 py-3.5 text-xs font-mono whitespace-nowrap">
                       <span className="text-amber-300">{formatInrPerMinute(call.cost)}</span>
                       {call.cost && (
-                        <span className="block text-[10px] text-slate-500">₹{call.cost.total.toFixed(2)} total</span>
+                        <span className="block text-[10px] text-slate-500">₹{call.cost.charge_total.toFixed(2)} total</span>
+                      )}
+                      {call.cost?.per_minute != null && (
+                        <span className="block text-[10px] text-slate-600">cost ₹{call.cost.per_minute.toFixed(2)}/min</span>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right">

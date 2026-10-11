@@ -20,6 +20,8 @@ def rates(monkeypatch):
         "LLM_INPUT_USD_PER_MILLION_TOKENS": 1.0,
         "LLM_OUTPUT_USD_PER_MILLION_TOKENS": 2.0,
         "USD_TO_INR": 100.0,
+        "DEFAULT_INFRA_COST_PER_MINUTE_INR": 0.0,
+        "DEFAULT_PROFIT_PERCENT": 0.0,
     }.items():
         monkeypatch.setattr(settings, key, value, raising=False)
 
@@ -29,7 +31,7 @@ def test_cost_breakdown_and_per_minute(rates):
         "stt_seconds": 60, "tts_seconds": 30, "llm_input_tokens": 1_000_000, "llm_output_tokens": 500_000,
     })
     assert cost["currency"] == "INR"
-    assert cost["breakdown"] == {"telephony": 2.0, "speech_to_text": 1.0, "text_to_speech": 2.5, "llm": 200.0}
+    assert cost["breakdown"] == {"telephony": 2.0, "speech_to_text": 1.0, "text_to_speech": 2.5, "llm": 200.0, "infra": 0.0}
     assert cost["total"] == 205.5
     assert cost["per_minute"] == 102.75
 
@@ -70,8 +72,20 @@ def test_completed_call_includes_cost(client: TestClient, auth_headers: dict, te
     db.commit()
 
     detail = client.get(f"/api/telephony/calls/{call.id}", headers=auth_headers).json()
-    assert detail["cost"]["breakdown"] == {"telephony": 2.0, "speech_to_text": 0.5, "text_to_speech": 5.0, "llm": 0.0}
+    assert detail["cost"]["breakdown"] == {"telephony": 2.0, "speech_to_text": 0.5, "text_to_speech": 5.0, "llm": 0.0, "infra": 0.0}
     assert detail["cost"]["per_minute"] == 5.0
 
     listed = [c for c in client.get("/api/telephony/calls", headers=auth_headers).json() if c["id"] == call.id]
     assert listed[0]["cost"]["total"] == 7.5
+
+
+def test_infra_and_profit_give_client_charge(rates):
+    from app.services.pricing import PricingSnapshot
+    # 2 min call: telephony Rs2 + infra 2 x Rs0.30 = Rs2.60 cost; +40% = Rs3.64 charge
+    cost = estimate_call_cost(120, {}, PricingSnapshot(profit_percent=40.0, infra_cost_per_minute_inr=0.30))
+    assert cost["breakdown"]["infra"] == 0.6
+    assert cost["total"] == 2.6
+    assert cost["profit"] == 1.04
+    assert cost["charge_total"] == 3.64
+    assert cost["charge_per_minute"] == 1.82
+    assert estimate_call_cost(0, {})["charge_per_minute"] is None

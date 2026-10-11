@@ -45,16 +45,24 @@ export interface PhoneNumberReadiness {
   agent_version_id?: string;
 }
 
+/**
+ * Call cost and client charge. Operators receive only the charge fields; admins also get
+ * our cost (breakdown, total, per_minute), the profit and the rates.
+ */
 export interface CallCost {
   currency: 'INR';
   estimated: boolean;
   duration_seconds: number;
   billed_minutes: number;
-  breakdown: { telephony: number; speech_to_text: number; text_to_speech: number; llm: number };
-  total: number;
-  per_minute: number | null;
+  charge_total: number;
+  charge_per_minute: number | null;
+  breakdown?: { telephony: number; speech_to_text: number; text_to_speech: number; llm: number; infra: number };
+  total?: number;
+  per_minute?: number | null;
+  profit_percent?: number;
+  profit?: number;
   llm_provider?: string;
-  rates: {
+  rates?: {
     telephony_per_minute_inr: number;
     billing_pulse_seconds: number;
     stt_usd_per_minute: number;
@@ -62,6 +70,7 @@ export interface CallCost {
     llm_input_usd_per_million_tokens: number;
     llm_output_usd_per_million_tokens: number;
     usd_to_inr: number;
+    infra_per_minute_inr: number;
   };
 }
 

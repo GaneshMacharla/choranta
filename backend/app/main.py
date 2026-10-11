@@ -10,7 +10,7 @@ from app.db.init_db import init_db
 from app.api.routes import (
     auth, clients, agents, dashboard,
     agent_configuration, catalogs, runtime,
-    websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios
+    websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing
 )
 
 logging.basicConfig(
@@ -97,6 +97,7 @@ app.include_router(runtime.router, prefix=settings.API_V1_PREFIX)
 app.include_router(mock_environment.router, prefix=settings.API_V1_PREFIX)
 app.include_router(test_scenarios.router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router, prefix=settings.API_V1_PREFIX)
+app.include_router(pricing.router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)

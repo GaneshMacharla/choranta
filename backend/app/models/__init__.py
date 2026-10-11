@@ -13,6 +13,7 @@ from app.models.call import Call
 from app.models.test_scenario import TestScenario, TestRun, TestRunEvent
 from app.models.property import Property
 from app.models.lead import Lead
+from app.models.pricing_settings import PricingSettings
 
 __all__ = [
     "User",
@@ -34,5 +35,6 @@ __all__ = [
     "TestRun",
     "TestRunEvent",
     "Property",
-    "Lead"
+    "Lead",
+    "PricingSettings"
 ]

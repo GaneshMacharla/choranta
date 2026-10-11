@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     SARVAM_INPUT_INR_PER_MILLION_TOKENS: float = 29.28   # sarvam-105b(-conversations), Aug 2026 price
     SARVAM_OUTPUT_INR_PER_MILLION_TOKENS: float = 73.20
     USD_TO_INR: float = 88.0
+    # Pricing defaults until an admin sets them in Settings (stored in pricing_settings)
+    DEFAULT_PROFIT_PERCENT: float = 40.0
+    DEFAULT_INFRA_COST_PER_MINUTE_INR: float = 0.30
 
     # --------------------------------------------------------
     # Phone call behaviour (cost control)
