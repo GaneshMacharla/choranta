@@ -629,12 +629,13 @@ class TelephonyMediaSession:
                 async for chunk in tts.synthesize_stream(
                     text=sentence.text,
                     voice_id=self.context.agent_spec.voice.voice_id,
-                    speed=self.context.agent_spec.voice.speed
+                    speed=self.context.agent_spec.voice.speed,
+                    language=self.context.agent_spec.languages.primary
                 ):
                     if chunk:
                         sentence.audio.extend(self.telephony_provider.normalize_audio_outbound(chunk))
                         sentence.updated.set()
-            self.context.usage_tracker.record_tts(len(sentence.audio) / 16000.0)
+            self.context.usage_tracker.record_tts(len(sentence.audio) / 16000.0, characters=len(sentence.text))
         except asyncio.CancelledError:
             raise
         except Exception as e:

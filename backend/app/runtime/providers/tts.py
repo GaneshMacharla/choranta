@@ -13,7 +13,8 @@ class TTSProvider(BaseProvider):
         voice_id: Optional[str] = None,
         speed: float = 1.0,
         pitch: float = 0.0,
-        emotion: Optional[str] = None
+        emotion: Optional[str] = None,
+        language: Optional[str] = None
     ) -> AudioResult:
         """Synthesize text into audio representation."""
         pass
@@ -24,7 +25,8 @@ class TTSProvider(BaseProvider):
         voice_id: Optional[str] = None,
         speed: float = 1.0,
         pitch: float = 0.0,
-        emotion: Optional[str] = None
+        emotion: Optional[str] = None,
+        language: Optional[str] = None
     ):
         """Asynchronously stream raw audio bytes chunks for the synthesized speech."""
         result = self.synthesize(text, voice_id=voice_id, speed=speed, pitch=pitch, emotion=emotion)

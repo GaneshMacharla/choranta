@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     SARVAM_MAX_TOKENS: int = 400
     SARVAM_TIMEOUT_S: float = 10.0
     SARVAM_FALLBACK_TO_GEMINI: bool = True               # use Gemini for a turn if Sarvam errors
+    SARVAM_STT_MODEL: str = "saaras:v4"
+    SARVAM_STT_LANGUAGE: str = "unknown"                 # "unknown" = auto-detect (Hindi/English/Telugu/...)
+    SARVAM_TTS_MODEL: str = "bulbul:v3"
+    SARVAM_TTS_SPEAKER: str = "shubh"                    # used when the agent's voice id isn't a Sarvam speaker
+    SARVAM_TTS_LANGUAGE: str = ""                        # empty = agent's primary language
+    SARVAM_TTS_STREAMING: bool = True                    # WebSocket streaming; REST fallback
+
+    # Use these providers for every agent regardless of its own settings (e.g. "sarvam"); empty = agent's choice
+    STT_PROVIDER_OVERRIDE: str = ""
+    TTS_PROVIDER_OVERRIDE: str = ""
+    LLM_PROVIDER_OVERRIDE: str = ""
     # Streaming requests that produce no output within this many seconds move on to the next model
     GEMINI_FIRST_TOKEN_TIMEOUT_S: float = 3.0
     # Cartesia plans cap concurrent requests (TTS + STT); stay at or below the plan's limit
@@ -71,8 +82,10 @@ class Settings(BaseSettings):
     TTS_USD_PER_MINUTE: float = 0.0353              # Cartesia Sonic: ~900 chars (credits) per audio minute at Startup $39.2 per 1M
     LLM_INPUT_USD_PER_MILLION_TOKENS: float = 0.30  # Gemini 3.5 Flash-Lite input
     LLM_OUTPUT_USD_PER_MILLION_TOKENS: float = 2.50 # Gemini 3.5 Flash-Lite output
-    SARVAM_INPUT_INR_PER_MILLION_TOKENS: float = 29.28   # sarvam-105b(-conversations), Aug 2026 price
-    SARVAM_OUTPUT_INR_PER_MILLION_TOKENS: float = 73.20
+    SARVAM_INPUT_INR_PER_MILLION_TOKENS: float = 15.0    # sarvam-105b(-conversations), Sarvam pricing page
+    SARVAM_OUTPUT_INR_PER_MILLION_TOKENS: float = 60.0
+    SARVAM_STT_INR_PER_HOUR: float = 30.0                # billed per second of audio
+    SARVAM_TTS_INR_PER_10K_CHARS: float = 30.0           # Bulbul v3
     USD_TO_INR: float = 88.0
     # Pricing defaults until an admin sets them in Settings (stored in pricing_settings)
     DEFAULT_PROFIT_PERCENT: float = 40.0

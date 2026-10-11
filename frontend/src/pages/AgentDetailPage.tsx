@@ -108,6 +108,7 @@ const getLanguageOptions = (currentValue?: string): { value: string; label: stri
 
 const STT_PROVIDER_OPTIONS: { value: string; label: string }[] = [
   { value: 'cartesia', label: 'Cartesia (Realtime Streaming WebSocket STT)' },
+  { value: 'sarvam', label: 'Sarvam (Saaras v4, Indian languages)' },
   { value: 'mock_stt', label: 'Mock STT (Deterministic Test Mode)' },
 ];
 
@@ -119,6 +120,7 @@ const LLM_PROVIDER_OPTIONS: { value: string; label: string }[] = [
 
 const TTS_PROVIDER_OPTIONS: { value: string; label: string }[] = [
   { value: 'cartesia', label: 'Cartesia (Sonic Ultra-Low Latency TTS)' },
+  { value: 'sarvam', label: 'Sarvam (Bulbul v3, Indian voices)' },
   { value: 'mock_tts', label: 'Mock TTS (Deterministic Test Mode)' },
 ];
 

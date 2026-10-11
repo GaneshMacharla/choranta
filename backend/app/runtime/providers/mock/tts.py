@@ -41,7 +41,8 @@ class MockTTSProvider(TTSProvider):
         voice_id: Optional[str] = None,
         speed: float = 1.0,
         pitch: float = 0.0,
-        emotion: Optional[str] = None
+        emotion: Optional[str] = None,
+        language: Optional[str] = None
     ) -> AudioResult:
         if self._error_message:
             raise RuntimeError(self._error_message)
@@ -71,7 +72,8 @@ class MockTTSProvider(TTSProvider):
         voice_id: Optional[str] = None,
         speed: float = 1.0,
         pitch: float = 0.0,
-        emotion: Optional[str] = None
+        emotion: Optional[str] = None,
+        language: Optional[str] = None
     ):
         if self._error_message:
             raise RuntimeError(self._error_message)

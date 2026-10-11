@@ -601,10 +601,11 @@ class AgentRuntime:
                 audio_res = tts_p.synthesize(
                     text=assistant_text,
                     voice_id=spec.voice.voice_id,
-                    speed=spec.voice.speed
+                    speed=spec.voice.speed,
+                    language=spec.languages.primary
                 )
                 audio_duration_seconds = audio_res.duration_seconds
-                context.usage_tracker.record_tts(audio_duration_seconds)
+                context.usage_tracker.record_tts(audio_duration_seconds, characters=len(assistant_text))
 
                 self.emitter.emit(
                     RuntimeEventType.TTS_COMPLETED,

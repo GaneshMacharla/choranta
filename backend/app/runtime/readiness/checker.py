@@ -83,7 +83,9 @@ class RuntimeReadinessChecker:
         if spec.schema_version != "1.0":
             errors.append(f"Unsupported schema version '{spec.schema_version}'. Expected '1.0'.")
 
-        # 7. Check Provider readiness
+        # 7. Check Provider readiness (after any *_PROVIDER_OVERRIDE settings)
+        from app.runtime.providers.overrides import apply_provider_overrides
+        spec = apply_provider_overrides(spec)
         if not spec.providers.stt or not self.registry.has_stt(spec.providers.stt):
             errors.append(f"Configured STT provider '{spec.providers.stt}' is not registered.")
 
@@ -95,12 +97,12 @@ class RuntimeReadinessChecker:
 
         # In provider mode, verify required credentials
         from app.core.config import settings
-        if self.registry.mode == "provider":
+        if self.registry.mode in ("provider", "real"):
             if (spec.providers.stt == "cartesia" or spec.providers.tts == "cartesia") and not settings.CARTESIA_API_KEY:
                 errors.append("Cartesia API key (CARTESIA_API_KEY) is not configured in server environment.")
             if spec.providers.llm == "gemini" and not settings.GEMINI_API_KEY:
                 errors.append("Gemini API key (GEMINI_API_KEY) is not configured in server environment.")
-            if spec.providers.llm == "sarvam" and not settings.SARVAM_API_KEY:
+            if "sarvam" in (spec.providers.stt, spec.providers.tts, spec.providers.llm) and not settings.SARVAM_API_KEY:
                 errors.append("Sarvam API key (SARVAM_API_KEY) is not configured in server environment.")
 
         # 8. Check Tools

@@ -30,8 +30,19 @@ def estimate_call_cost(duration_seconds: Optional[float], usage: Optional[Dict[s
     billed_seconds = math.ceil(duration / pulse) * pulse if duration > 0 else 0
     telephony = billed_seconds / 60.0 * settings.TELEPHONY_RATE_PER_MINUTE_INR
 
-    stt = float(usage.get("stt_seconds") or 0.0) / 60.0 * settings.STT_USD_PER_MINUTE * fx
-    tts = float(usage.get("tts_seconds") or 0.0) / 60.0 * settings.TTS_USD_PER_MINUTE * fx
+    stt_seconds = float(usage.get("stt_seconds") or 0.0)
+    tts_seconds = float(usage.get("tts_seconds") or 0.0)
+    stt_provider = usage.get("stt_provider") or "cartesia"
+    tts_provider = usage.get("tts_provider") or "cartesia"
+    if stt_provider == "sarvam":  # Sarvam bills STT per second, priced per hour in rupees
+        stt = stt_seconds / 3600.0 * settings.SARVAM_STT_INR_PER_HOUR
+    else:
+        stt = stt_seconds / 60.0 * settings.STT_USD_PER_MINUTE * fx
+    if tts_provider == "sarvam":  # Sarvam bills TTS per character
+        characters = int(usage.get("tts_characters") or 0) or int(tts_seconds * 15)  # ~15 chars/s if not tracked
+        tts = characters / 10_000 * settings.SARVAM_TTS_INR_PER_10K_CHARS
+    else:
+        tts = tts_seconds / 60.0 * settings.TTS_USD_PER_MINUTE * fx
     input_millions = int(usage.get("llm_input_tokens") or 0) / 1_000_000
     output_millions = int(usage.get("llm_output_tokens") or 0) / 1_000_000
     llm_provider = usage.get("llm_provider") or "gemini"
@@ -71,6 +82,8 @@ def estimate_call_cost(duration_seconds: Optional[float], usage: Optional[Dict[s
         "charge_total": _round(charge_total),
         "charge_per_minute": _round(charge_total / minutes) if minutes > 0 else None,
         "llm_provider": llm_provider,
+        "stt_provider": stt_provider,
+        "tts_provider": tts_provider,
         "rates": {
             "telephony_per_minute_inr": settings.TELEPHONY_RATE_PER_MINUTE_INR,
             "billing_pulse_seconds": pulse,

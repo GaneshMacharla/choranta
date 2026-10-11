@@ -13,6 +13,8 @@ from app.runtime.providers.cartesia.stt import CartesiaSTTProvider
 from app.runtime.providers.cartesia.tts import CartesiaTTSProvider
 from app.runtime.providers.gemini.llm import GeminiLLMProvider
 from app.runtime.providers.sarvam.llm import SarvamLLMProvider
+from app.runtime.providers.sarvam.stt import SarvamSTTProvider
+from app.runtime.providers.sarvam.tts import SarvamTTSProvider
 from app.runtime.providers.telephony.exotel import ExotelTelephonyProvider
 
 
@@ -56,12 +58,16 @@ class ProviderRegistry:
             self.register_tts("cartesia", CartesiaTTSProvider())
             self.register_llm("gemini", GeminiLLMProvider())
             self.register_llm("sarvam", SarvamLLMProvider())
+            self.register_stt("sarvam", SarvamSTTProvider())
+            self.register_tts("sarvam", SarvamTTSProvider())
             self.register_telephony("exotel", ExotelTelephonyProvider())
         else:
             # Mock mode: alias canonical provider names to mock implementations for fast local test execution
             self.register_stt("cartesia", MockSTTProvider("cartesia"))
             self.register_llm("gemini", MockLLMProvider("gemini"))
             self.register_llm("sarvam", MockLLMProvider("sarvam"))
+            self.register_stt("sarvam", MockSTTProvider("sarvam"))
+            self.register_tts("sarvam", MockTTSProvider("sarvam"))
             self.register_tts("cartesia", MockTTSProvider("cartesia"))
             self.register_telephony("exotel", MockTelephonyProvider("exotel"))
 
@@ -72,6 +78,8 @@ class ProviderRegistry:
         self.register_tts("cartesia", CartesiaTTSProvider())
         self.register_llm("gemini", GeminiLLMProvider())
         self.register_llm("sarvam", SarvamLLMProvider())
+        self.register_stt("sarvam", SarvamSTTProvider())
+        self.register_tts("sarvam", SarvamTTSProvider())
         self.register_telephony("exotel", ExotelTelephonyProvider())
 
     def enable_mock_providers(self) -> None:
@@ -80,6 +88,8 @@ class ProviderRegistry:
         self.register_stt("cartesia", MockSTTProvider("cartesia"))
         self.register_llm("gemini", MockLLMProvider("gemini"))
         self.register_llm("sarvam", MockLLMProvider("sarvam"))
+        self.register_stt("sarvam", MockSTTProvider("sarvam"))
+        self.register_tts("sarvam", MockTTSProvider("sarvam"))
         self.register_tts("cartesia", MockTTSProvider("cartesia"))
         self.register_telephony("exotel", MockTelephonyProvider("exotel"))
 

@@ -3,6 +3,7 @@ from app.schemas.agent_spec import CanonicalAgentSpec
 from app.runtime.conversation import ConversationState
 from app.runtime.usage.tracker import UsageTracker
 from app.core.config import settings
+from app.runtime.providers.overrides import apply_provider_overrides
 
 
 class RuntimeContext:
@@ -24,6 +25,7 @@ class RuntimeContext:
         self.agent_id = agent_id
         self.client_id = client_id
         self.agent_version_id = agent_version_id
+        agent_spec = apply_provider_overrides(agent_spec)
         self.agent_spec = agent_spec
         self.metadata = metadata or {}
 
@@ -43,7 +45,12 @@ class RuntimeContext:
         }
 
         # Operational metrics tracking
-        self.usage_tracker = UsageTracker(settings.RUNTIME_MODE, llm_provider=agent_spec.providers.llm)
+        self.usage_tracker = UsageTracker(
+            settings.RUNTIME_MODE,
+            llm_provider=agent_spec.providers.llm,
+            stt_provider=agent_spec.providers.stt,
+            tts_provider=agent_spec.providers.tts,
+        )
 
         # Resolved opening greeting with variable substitution
         self.resolved_greeting = self._resolve_greeting(agent_spec, self.metadata)

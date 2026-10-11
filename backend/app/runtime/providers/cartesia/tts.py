@@ -67,7 +67,8 @@ class CartesiaTTSProvider(TTSProvider):
         voice_id: Optional[str] = None,
         speed: float = 1.0,
         pitch: float = 0.0,
-        emotion: Optional[str] = None
+        emotion: Optional[str] = None,
+        language: Optional[str] = None
     ) -> AudioResult:
         """
         Synthesizes text into raw PCM 16-bit 16kHz mono audio bytes synchronously.
@@ -107,7 +108,8 @@ class CartesiaTTSProvider(TTSProvider):
         voice_id: Optional[str] = None,
         speed: float = 1.0,
         pitch: float = 0.0,
-        emotion: Optional[str] = None
+        emotion: Optional[str] = None,
+        language: Optional[str] = None
     ) -> AsyncIterator[bytes]:
         """
         Asynchronously streams raw PCM chunks directly from Cartesia.
