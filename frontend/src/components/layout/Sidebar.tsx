@@ -6,7 +6,6 @@ import {
   Bot,
   Settings,
   PhoneCall,
-  FlaskConical,
   Wrench,
   BookOpen,
   Puzzle,
@@ -33,7 +32,6 @@ export const Sidebar: React.FC = () => {
     { name: 'Overview', path: '/', icon: LayoutDashboard },
     { name: 'Clients', path: '/clients', icon: Building2 },
     { name: 'AI Employees', path: '/agents', icon: Bot },
-    { name: 'Test Lab', path: '/test-lab', icon: FlaskConical },
     
     { name: 'Calls', path: '/calls', icon: PhoneCall },
     { name: 'Telephony', path: '/telephony', icon: Radio },

@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useSearchParams } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { AppLayout } from './components/layout/AppLayout';
 import { LoginPage } from './pages/LoginPage';
@@ -9,7 +9,6 @@ import { ClientsPage } from './pages/ClientsPage';
 import { ClientDetailPage } from './pages/ClientDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
-import { TestLabPage } from './pages/TestLabPage';
 import { TelephonyPage } from './pages/TelephonyPage';
 import { CallsPage } from './pages/CallsPage';
 import { ToolsPage } from './pages/ToolsPage';
@@ -20,6 +19,13 @@ import { UsagePage } from './pages/UsagePage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+
+/** Old Test Lab links open the agent's Tests step (or the AI Employees list). */
+function TestLabRedirect() {
+  const [searchParams] = useSearchParams();
+  const agentId = searchParams.get('agentId');
+  return <Navigate to={agentId ? `/agents/${agentId}?tab=tests` : '/agents'} replace />;
+}
 
 export function App() {
   return (
@@ -37,7 +43,8 @@ export function App() {
               <Route path="/clients/:id" element={<ClientDetailPage />} />
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/agents/:id" element={<AgentDetailPage />} />
-              <Route path="/test-lab" element={<TestLabPage />} />
+              {/* Testing now lives in each AI Employee's final "Tests" step */}
+              <Route path="/test-lab" element={<TestLabRedirect />} />
               <Route path="/telephony" element={<TelephonyPage />} />
               <Route path="/calls" element={<CallsPage />} />
 

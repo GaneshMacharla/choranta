@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   Bot,
   ArrowLeft,
@@ -62,7 +62,7 @@ import {
   VersionComparison,
 } from '../types';
 import { VoicePickerModal } from '../components/voice/VoicePickerModal';
-import { VoiceScenarioSuite } from '../components/testing/VoiceScenarioSuite';
+import { AgentTestingWorkbench } from '../components/testing/AgentTestingWorkbench';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { StatusBadge, Badge } from '../components/common/Badge';
@@ -216,7 +216,8 @@ export const AgentDetailPage: React.FC = () => {
   const [toolsList, setToolsList] = useState<Tool[]>([]);
   const [integrationsList, setIntegrationsList] = useState<Integration[]>([]);
 
-  // Navigation tab
+  // Navigation tab (?tab=tests opens the testing step directly)
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<
     | 'instructions'
     | 'variables'
@@ -225,7 +226,7 @@ export const AgentDetailPage: React.FC = () => {
     | 'settings'
     | 'tests'
     | 'versions'
-  >('instructions');
+  >(searchParams.get('tab') === 'tests' ? 'tests' : 'instructions');
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1952,57 +1953,33 @@ export const AgentDetailPage: React.FC = () => {
       )}
 
       {/* ========================================================= */}
-      {/* TAB 5: TESTS (VOICE SCENARIO SUITE & TEST LAB LAUNCHER) */}
+      {/* TAB 5: TESTS (final step: test the published AI Employee before deploying) */}
       {/* ========================================================= */}
       {activeTab === 'tests' && (
         <div className="space-y-6">
           <Card
-            title="Test Scenarios &amp; Interactive Voice Lab"
-            subtitle="Deterministic multi-turn voice simulation against mock tools (zero provider credits consumed)"
+            title="Test your AI Employee"
+            subtitle="Final step before deploying: talk to the published version by voice, phone or chat, and run scenario regressions"
           >
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="green" dot>
-                    Deterministic Mock Mode Enforced
-                  </Badge>
-                  <span className="text-xs text-slate-400">
-                    12 Real Estate Lead Qualification scenarios available
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-slate-300 max-w-2xl leading-relaxed">
-                  Run end-to-end multi-turn conversations testing lead lookups, inventory filtering, Telugu/Hindi code-switching, calendar slots, and CRM write-backs with complete transcripts and assertion checks.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <Button
-                  variant="primary"
-                  onClick={() => navigate(`/test-lab?agentId=${agent.id}&versionId=${versions[0]?.id || ''}`)}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white border-none shadow-md"
-                >
-                  <FlaskConical className="mr-1.5 h-3.5 w-3.5" /> Open Interactive Test Lab
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={handleSimulateMockCall}
-                  isLoading={isSimulatingMockCall}
-                  disabled={versions.length === 0}
-                >
-                  <PhoneCall className="mr-1.5 h-3.5 w-3.5" /> Simulate Mock Call
-                </Button>
-              </div>
+              <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                {versions.length === 0
+                  ? 'Publish a version first (Versions tab); tests always run against an immutable published version.'
+                  : 'Pick the version to test below, then start a browser voice call, call your phone, chat, or run the scenario suite.'}
+              </p>
+              <Button
+                variant="secondary"
+                onClick={handleSimulateMockCall}
+                isLoading={isSimulatingMockCall}
+                disabled={versions.length === 0}
+                className="shrink-0"
+              >
+                <PhoneCall className="mr-1.5 h-3.5 w-3.5" /> Simulate Mock Call
+              </Button>
             </div>
           </Card>
 
-          {/* Embedded Enterprise Voice Scenario Suite */}
-          <VoiceScenarioSuite
-            selectedAgentId={agent.id}
-            selectedVersionId={versions[0]?.id || ''}
-            runtimeMode="mock"
-            agents={[agent]}
-            versions={versions}
-          />
+          <AgentTestingWorkbench agentId={agent.id} />
         </div>
       )}
 

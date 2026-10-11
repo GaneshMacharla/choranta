@@ -75,10 +75,10 @@ export const ProvidersPage: React.FC = () => {
           <Button
             variant="primary"
             size="sm"
-            onClick={() => navigate('/test-lab')}
+            onClick={() => navigate('/agents')}
             leftIcon={<FlaskConical className="h-3.5 w-3.5" />}
           >
-            Launch Voice Test Lab
+            Test an AI Employee
           </Button>
         </div>
       </div>

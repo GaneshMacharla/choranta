@@ -60,7 +60,7 @@ export const UsagePage: React.FC = () => {
           <Button
             variant="primary"
             size="sm"
-            onClick={() => navigate('/test-lab')}
+            onClick={() => navigate('/agents')}
             leftIcon={<FlaskConical className="h-3.5 w-3.5" />}
           >
             Live Turn Telemetry
@@ -106,10 +106,10 @@ export const UsagePage: React.FC = () => {
             </p>
             <div className="pt-3 border-t border-[#102d38]">
               <button
-                onClick={() => navigate('/test-lab')}
+                onClick={() => navigate('/agents')}
                 className="text-[#00df8f] hover:text-[#00f59b] text-xs font-medium inline-flex items-center gap-1"
               >
-                View in Voice Test Lab <ArrowUpRight className="h-3 w-3" />
+                Test in an AI Employee <ArrowUpRight className="h-3 w-3" />
               </button>
             </div>
           </div>

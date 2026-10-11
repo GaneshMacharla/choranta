@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   FlaskConical,
   Play,
@@ -23,13 +23,13 @@ import {
   PhoneCall,
   PhoneOff,
 } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import { agentsService } from '../services/agents';
-import { runtimeService } from '../services/runtime';
-import { request } from '../services/api';
-import { testScenariosService, TestRun, TestScenario } from '../services/testScenarios';
-import { VoiceScenarioSuite } from '../components/testing/VoiceScenarioSuite';
-import { PhoneCallTester } from '../components/testing/PhoneCallTester';
+import { useAuth } from '../../context/AuthContext';
+import { agentsService } from '../../services/agents';
+import { runtimeService } from '../../services/runtime';
+import { request } from '../../services/api';
+import { testScenariosService, TestRun, TestScenario } from '../../services/testScenarios';
+import { VoiceScenarioSuite } from './VoiceScenarioSuite';
+import { PhoneCallTester } from './PhoneCallTester';
 import {
   Agent,
   AgentVersion,
@@ -37,13 +37,13 @@ import {
   RuntimeSession,
   RuntimeEvent,
   SimulateTurnResult,
-} from '../types';
-import { Card } from '../components/common/Card';
-import { Button } from '../components/common/Button';
-import { Select } from '../components/common/Select';
-import { StatusBadge, Badge } from '../components/common/Badge';
-import { LoadingState } from '../components/common/LoadingState';
-import { ErrorState } from '../components/common/ErrorState';
+} from '../../types';
+import { Card } from '../common/Card';
+import { Button } from '../common/Button';
+import { Select } from '../common/Select';
+import { StatusBadge, Badge } from '../common/Badge';
+import { LoadingState } from '../common/LoadingState';
+import { ErrorState } from '../common/ErrorState';
 
 interface LiveChatMessage {
   id: string;
@@ -77,10 +77,19 @@ const StreamingText: React.FC<{ message: LiveChatMessage }> = ({ message }) => {
   );
 };
 
-export const TestLabPage: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const initialAgentId = searchParams.get('agentId') || '';
-  const initialVersionId = searchParams.get('versionId') || '';
+interface AgentTestingWorkbenchProps {
+  /** The AI Employee being tested; the agent picker is hidden and this agent is always used. */
+  agentId: string;
+  /** Version to preselect (defaults to the latest published version). */
+  initialVersionId?: string;
+}
+
+/**
+ * Testing step of an AI Employee: browser voice call, real phone call, streaming chat and
+ * scenario regressions against the agent's published versions.
+ */
+export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ agentId, initialVersionId = '' }) => {
+  const initialAgentId = agentId;
   const { token } = useAuth();
 
   // Agents & Versions catalog
@@ -196,6 +205,11 @@ export const TestLabPage: React.FC = () => {
       setMockCompanyName(ag.client_name);
     }
   }, [selectedAgentId, agents]);
+
+  // The workbench always tests the AI Employee it is embedded in
+  useEffect(() => {
+    setSelectedAgentId(agentId);
+  }, [agentId]);
 
   // 1. Initial Load: list agents
   useEffect(() => {
@@ -1015,7 +1029,7 @@ export const TestLabPage: React.FC = () => {
   };
 
   if (isLoading) {
-    return <LoadingState message="Loading Voice Runtime Test Lab..." />;
+    return <LoadingState message="Loading testing tools..." />;
   }
 
   if (error) {
@@ -1023,37 +1037,7 @@ export const TestLabPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 pb-16">
-      {/* HEADER */}
-      <div className="flex flex-col gap-4 rounded-xl border border-[#1b1f2d] bg-[#0c0e14] p-5 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-slate-400 mb-2">
-            <span className="font-semibold text-slate-200">Voice Runtime</span>
-            <span>&bull;</span>
-            <span className="font-mono text-purple-400">Realtime Voice Providers</span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-950/60 border border-purple-800/40 text-purple-400">
-              <FlaskConical className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold tracking-tight text-slate-100">Runtime Test Lab</h1>
-                <Badge variant={runtimeMode === 'mock' ? 'yellow' : 'purple'} dot>
-                  {runtimeMode === 'mock' ? 'MOCK RUNTIME ACTIVE' : 'CARTESIA + GEMINI ACTIVE'}
-                </Badge>
-              </div>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {runtimeMode === 'mock'
-                  ? 'Safe simulated voice transport with no external provider calls.'
-                  : 'Streaming audio transport connecting Cartesia (STT &amp; TTS) and Google Gemini (LLM) over WebSockets.'}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
+    <div className="space-y-6">
       {/* COMPACT TEST AGENT LAUNCHER */}
       <section className="overflow-hidden rounded-2xl border border-[#1b1f2d] bg-[#0c0e14] text-slate-100 shadow-xl">
         <div className="flex items-center justify-between px-5 py-4">
@@ -1434,18 +1418,13 @@ export const TestLabPage: React.FC = () => {
         <Card title="Agent & Pinned Version" className="lg:col-span-1">
           <div className="space-y-4 text-xs">
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">Select AI Employee</label>
-              <Select
-                options={agents.map((ag) => ({
-                  value: ag.id,
-                  label: `${ag.name} (${ag.role})`,
-                }))}
-                value={selectedAgentId}
-                onChange={(e) => setSelectedAgentId(e.target.value)}
-                disabled={activeSession?.status === 'ACTIVE'}
-                placeholder="Choose AI Employee..."
-                size="sm"
-              />
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">AI Employee</label>
+              <p className="rounded border border-[#232736] bg-[#10121a] px-2.5 py-2 text-slate-200">
+                {(() => {
+                  const ag = agents.find((a) => a.id === selectedAgentId);
+                  return ag ? `${ag.name} (${ag.role})` : selectedAgentId;
+                })()}
+              </p>
             </div>
 
             <div>
