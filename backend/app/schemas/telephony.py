@@ -84,6 +84,7 @@ class CallResponse(BaseModel):
     duration_seconds: float
     termination_reason: Optional[str] = None
     recording_url: Optional[str] = None
+    has_recording: bool = False
     transcript_summary: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime

@@ -67,6 +67,7 @@ export interface Call {
   duration_seconds: number;
   termination_reason?: string;
   recording_url?: string;
+  has_recording?: boolean;
   transcript_summary?: string;
   metadata?: Record<string, any>;
   created_at: string;
@@ -168,6 +169,24 @@ export const telephonyService = {
 
   async getCall(id: string): Promise<CallDetail> {
     return request<CallDetail>(`/telephony/calls/${id}`);
+  },
+
+  /** Fetches the call's stereo WAV recording with the user's auth token. */
+  async getRecordingBlob(id: string): Promise<Blob> {
+    const token = localStorage.getItem('choranta_token');
+    const response = await fetch(`/api/telephony/calls/${id}/recording`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        detail = (await response.json())?.detail || detail;
+      } catch {
+        // non-JSON error body
+      }
+      throw new Error(detail || 'Could not load the recording.');
+    }
+    return response.blob();
   },
 
   async initiateOutboundCall(data: InitiateOutboundCallInput): Promise<Call> {

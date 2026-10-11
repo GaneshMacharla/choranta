@@ -23,7 +23,7 @@ class EndpointerConfig:
 
 @dataclass
 class EndpointerEvent:
-    kind: str                           # "speech_start" or "utterance"
+    kind: str                           # "speech_start", "utterance" or "speech_discarded"
     audio: bytes = b""                  # full utterance audio (pre-roll included) for "utterance"
     speech_ms: float = 0.0
 
@@ -104,6 +104,9 @@ class SpeechEndpointer:
             self._end_speech()
             if voiced_ms >= self.config.min_utterance_ms:
                 events.append(EndpointerEvent(kind="utterance", audio=audio, speech_ms=voiced_ms))
+            else:
+                # Speech started but turned out to be a short noise burst
+                events.append(EndpointerEvent(kind="speech_discarded", speech_ms=voiced_ms))
         return events
 
     def flush(self) -> Optional[EndpointerEvent]:

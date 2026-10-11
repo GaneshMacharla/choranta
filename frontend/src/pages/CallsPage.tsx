@@ -19,6 +19,7 @@ import { Select } from '../components/common/Select';
 import { LoadingState } from '../components/common/LoadingState';
 import { EmptyState } from '../components/common/EmptyState';
 import { ErrorState } from '../components/common/ErrorState';
+import { CallRecordingPlayer } from '../components/telephony/CallRecordingPlayer';
 
 export const CallsPage: React.FC = () => {
   const [calls, setCalls] = useState<Call[]>([]);
@@ -311,8 +312,11 @@ export const CallsPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Audio Recording Player (if available) */}
-            {callDetail.recording_url && (
+            {/* Choranta's own stereo recording of both sides of the call */}
+            {callDetail.has_recording && <CallRecordingPlayer callId={callDetail.id} />}
+
+            {/* Carrier recording (if the carrier provided a playable link) */}
+            {!callDetail.has_recording && callDetail.recording_url && (
               <div className="p-3 bg-[#052b20]/25 border border-[#0a4d39]/50 rounded space-y-2">
                 <span className="text-xs font-semibold text-[#00df8f] flex items-center gap-1.5">
                   <Volume2 className="h-4 w-4" />

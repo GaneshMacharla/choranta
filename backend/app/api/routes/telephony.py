@@ -1,11 +1,13 @@
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from urllib.parse import urlencode
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, Response, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.api.deps import get_db, require_admin, require_operator
 from app.core.config import settings
@@ -70,6 +72,15 @@ def _format_phone_number_response(pn: PhoneNumber, db: Session) -> PhoneNumberRe
     )
 
 
+def _recording_path(c: Call) -> Optional[str]:
+    """Absolute path of the call's own stereo recording, if one was saved and still exists."""
+    name = (c.metadata_ or {}).get("recording_file") if isinstance(c.metadata_, dict) else None
+    if not name or os.path.basename(name) != name:
+        return None
+    path = os.path.join(settings.RECORDINGS_DIR, name)
+    return path if os.path.isfile(path) else None
+
+
 def _format_call_response(c: Call, db: Session) -> CallResponse:
     client = db.query(Client).filter(Client.id == c.client_id).first() if c.client_id else None
     agent = db.query(Agent).filter(Agent.id == c.agent_id).first() if c.agent_id else None
@@ -97,6 +108,7 @@ def _format_call_response(c: Call, db: Session) -> CallResponse:
         duration_seconds=c.duration_seconds,
         termination_reason=c.termination_reason,
         recording_url=c.recording_url,
+        has_recording=bool(_recording_path(c)),
         transcript_summary=c.transcript_summary,
         metadata=c.metadata_ if isinstance(c.metadata_, dict) else {},
         created_at=c.created_at,
@@ -822,6 +834,22 @@ def initiate_outbound_call_endpoint(
     return _format_call_response(saved_call, db)
 
 
+@router.get("/calls/{call_id}/recording")
+def get_call_recording(
+    call_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_operator)
+):
+    """Streams the call's stereo WAV recording (caller on the left channel, agent on the right)."""
+    call_obj = CallRepository(db).get_by_id(call_id)
+    if not call_obj:
+        raise HTTPException(status_code=404, detail=f"Call '{call_id}' not found.")
+    path = _recording_path(call_obj)
+    if not path:
+        raise HTTPException(status_code=404, detail="No recording is available for this call.")
+    return FileResponse(path, media_type="audio/wav", filename=f"{call_id}.wav")
+
+
 @router.get("/calls/{call_id}", response_model=CallDetailResponse)
 
 def get_call_detail(
@@ -862,7 +890,9 @@ def get_call_detail(
         # Parse conversation turns from events
         for e in db_events:
             if e.event_type == RuntimeEventType.USER_TRANSCRIPT_FINAL.value:
-                txt = e.payload_json.get("text", "")
+                txt = (e.payload_json.get("text") or "").strip()
+                if not txt:
+                    continue
                 conversation_list.append({
                     "role": "caller",
                     "content": txt,

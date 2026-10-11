@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     EXOTEL_FLOW_ID: Optional[str] = "1341429"
     # ExoPhone shown as caller ID on outbound calls placed directly by an agent
     EXOTEL_CALLER_ID: Optional[str] = None
+    # Where phone call recordings (stereo WAV: caller left, agent right) are stored
+    RECORDINGS_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "recordings")
     RUN_REAL_TELEPHONY_TESTS: bool = False
 
 

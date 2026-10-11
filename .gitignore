@@ -32,3 +32,6 @@ dist-ssr/
 .idea/
 *.swp
 
+
+# Phone call recordings (personal voice data)
+recordings/
