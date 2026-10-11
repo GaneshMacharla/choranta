@@ -97,7 +97,14 @@ class CallDetailResponse(CallResponse):
 
 
 class InitiateOutboundCallRequest(BaseModel):
-    phone_number_id: str = Field(..., description="ID of the provisioned PhoneNumber in Choranta Studio")
+    """
+    Call from a provisioned number (phone_number_id; uses its assigned agent) or directly as an
+    agent (agent_id + agent_version_id; caller ID from caller_id or EXOTEL_CALLER_ID).
+    """
+    phone_number_id: Optional[str] = Field(None, description="ID of the provisioned PhoneNumber in Choranta Studio")
+    agent_id: Optional[str] = Field(None, description="Agent to place the call as (when not using phone_number_id)")
+    agent_version_id: Optional[str] = Field(None, description="Published AgentVersion to run (with agent_id)")
+    caller_id: Optional[str] = Field(None, description="ExoPhone to call from (defaults to EXOTEL_CALLER_ID)")
     destination_number: str = Field(..., description="The customer phone number to call (e.g. 09876543210 or +919876543210)")
     flow_id: Optional[str] = Field(None, description="Optional Exotel Flow ID. Defaults to configured EXOTEL_FLOW_ID.")
     custom_field: Optional[str] = Field(None, description="Optional tracking metadata string")

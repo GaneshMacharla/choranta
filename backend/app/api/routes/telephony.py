@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from urllib.parse import urlencode
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, Response, Depends, HTTPException, Query, status
@@ -151,61 +152,92 @@ async def exotel_inbound_call_webhook(
     payload = telephony_provider.parse_inbound_call_webhook(params)
     logger.info(f"Inbound call received: {payload.caller_number} -> {payload.destination_number} (CallSid={payload.provider_call_id})")
 
-    # 3. Resolve destination phone number
-    phone_repo = PhoneNumberRepository(db)
-    phone_record = phone_repo.get_by_e164(payload.destination_number)
+    # 3. Resolve which agent handles the call.
+    # A call we placed ourselves (outbound) already has a Call record keyed by Exotel's CallSid
+    # that pins the agent version; anything else is routed by the dialled phone number.
+    call_repo = CallRepository(db)
+    existing_call = call_repo.get_by_provider_call_id(payload.provider_call_id)
 
-    if not phone_record:
-        logger.warning(f"Unconfigured phone number called: {payload.destination_number}")
-        rejection = telephony_provider.generate_reject_response(
-            "Thank you for calling. This phone number is not currently configured for an AI employee."
+    if existing_call:
+        route = SimpleNamespace(
+            id=existing_call.phone_number_id,
+            agent_id=existing_call.agent_id,
+            agent_version_id=existing_call.agent_version_id,
+            client_id=existing_call.client_id,
         )
-        return Response(content=rejection, media_type=media_type)
+    else:
+        phone_repo = PhoneNumberRepository(db)
+        phone_record = phone_repo.get_by_e164(payload.destination_number)
 
-    if phone_record.status != "ACTIVE":
-        logger.warning(f"Inactive phone number called: {phone_record.phone_number} (status={phone_record.status})")
-        rejection = telephony_provider.generate_reject_response(
-            "This service is temporarily inactive. Please contact support."
-        )
-        return Response(content=rejection, media_type=media_type)
+        if not phone_record:
+            logger.warning(f"Unconfigured phone number called: {payload.destination_number}")
+            rejection = telephony_provider.generate_reject_response(
+                "Thank you for calling. This phone number is not currently configured for an AI employee."
+            )
+            return Response(content=rejection, media_type=media_type)
 
-    if not phone_record.agent_id or not phone_record.agent_version_id:
-        logger.warning(f"Phone number {phone_record.phone_number} has no assigned AgentVersion.")
-        rejection = telephony_provider.generate_reject_response(
-            "No AI employee is currently assigned to this phone number."
-        )
-        return Response(content=rejection, media_type=media_type)
+        if phone_record.status != "ACTIVE":
+            logger.warning(f"Inactive phone number called: {phone_record.phone_number} (status={phone_record.status})")
+            rejection = telephony_provider.generate_reject_response(
+                "This service is temporarily inactive. Please contact support."
+            )
+            return Response(content=rejection, media_type=media_type)
+
+        if not phone_record.agent_id or not phone_record.agent_version_id:
+            logger.warning(f"Phone number {phone_record.phone_number} has no assigned AgentVersion.")
+            rejection = telephony_provider.generate_reject_response(
+                "No AI employee is currently assigned to this phone number."
+            )
+            return Response(content=rejection, media_type=media_type)
+        route = phone_record
 
     # 4. Verify deployment readiness
     checker = RuntimeReadinessChecker(db, default_registry)
-    readiness = checker.check(phone_record.agent_id, phone_record.agent_version_id)
+    readiness = checker.check(route.agent_id, route.agent_version_id)
     if not readiness["ready"]:
         error_reasons = "; ".join(readiness["errors"])
-        logger.error(f"Readiness check failed for inbound call on agent {phone_record.agent_id}: {error_reasons}")
+        logger.error(f"Readiness check failed for call on agent {route.agent_id}: {error_reasons}")
         rejection = telephony_provider.generate_reject_response(
             "The requested AI assistant is currently undergoing maintenance. Please call back shortly."
         )
         return Response(content=rejection, media_type=media_type)
 
-    # 5. Check idempotency (prevent duplicate Call / Session creation on webhook retries)
-    call_repo = CallRepository(db)
-    existing_call = call_repo.get_by_provider_call_id(payload.provider_call_id)
-
+    # 5. Idempotency: webhook retries reuse the existing Call / Session
     runtime = AgentRuntime(db, registry=default_registry)
     emitter = EventEmitter(db)
 
-    if existing_call:
+    if existing_call and existing_call.runtime_session_id:
         call_record = existing_call
         session_id = existing_call.runtime_session_id
+    elif existing_call:
+        # Outbound call answered by the customer: start its runtime session now
+        call_record = existing_call
+        session_obj = runtime.start_session(
+            agent_id=call_record.agent_id,
+            agent_version_id=call_record.agent_version_id,
+            metadata={
+                "origin": "telephony_outbound",
+                "call_id": call_record.id,
+                "provider": "exotel",
+                "caller": call_record.caller_number,
+                "destination": call_record.destination_number,
+                "phone_number_id": call_record.phone_number_id
+            }
+        )
+        call_record.runtime_session_id = session_obj.id
+        call_record.status = "ANSWERED"
+        call_record.answered_at = datetime.now(timezone.utc)
+        call_repo.update(call_record)
+        session_id = session_obj.id
     else:
         # Create Call Record in RINGING state
         call_id = generate_unique_id("call", 12)
         call_record = Call(
             id=call_id,
-            client_id=phone_record.client_id,
-            agent_id=phone_record.agent_id,
-            agent_version_id=phone_record.agent_version_id,
-            phone_number_id=phone_record.id,
+            client_id=route.client_id,
+            agent_id=route.agent_id,
+            agent_version_id=route.agent_version_id,
+            phone_number_id=route.id,
             provider="exotel",
             provider_call_id=payload.provider_call_id,
             direction="INBOUND",
@@ -219,15 +251,15 @@ async def exotel_inbound_call_webhook(
 
         # 6. Create RuntimeSession with pinned immutable version
         session_obj = runtime.start_session(
-            agent_id=phone_record.agent_id,
-            agent_version_id=phone_record.agent_version_id,
+            agent_id=route.agent_id,
+            agent_version_id=route.agent_version_id,
             metadata={
                 "origin": "telephony_inbound",
                 "call_id": call_id,
                 "provider": "exotel",
                 "caller": payload.caller_number,
                 "destination": payload.destination_number,
-                "phone_number_id": phone_record.id
+                "phone_number_id": route.id
             }
         )
         call_record.runtime_session_id = session_obj.id
@@ -239,36 +271,36 @@ async def exotel_inbound_call_webhook(
     emitter.emit(
         RuntimeEventType.CALL_RECEIVED,
         session_id=session_id or "",
-        agent_id=phone_record.agent_id,
-        agent_version_id=phone_record.agent_version_id,
-        client_id=phone_record.client_id,
+        agent_id=route.agent_id,
+        agent_version_id=route.agent_version_id,
+        client_id=route.client_id,
         payload={"call_id": call_record.id, "caller": payload.caller_number, "destination": payload.destination_number}
     )
 
     emitter.emit(
         RuntimeEventType.CALL_ROUTING_STARTED,
         session_id=session_id or "",
-        agent_id=phone_record.agent_id,
-        agent_version_id=phone_record.agent_version_id,
-        client_id=phone_record.client_id,
-        payload={"phone_number_id": phone_record.id}
+        agent_id=route.agent_id,
+        agent_version_id=route.agent_version_id,
+        client_id=route.client_id,
+        payload={"phone_number_id": route.id}
     )
 
     emitter.emit(
         RuntimeEventType.CALL_ROUTED,
         session_id=session_id or "",
-        agent_id=phone_record.agent_id,
-        agent_version_id=phone_record.agent_version_id,
-        client_id=phone_record.client_id,
-        payload={"agent_id": phone_record.agent_id, "agent_version_id": phone_record.agent_version_id}
+        agent_id=route.agent_id,
+        agent_version_id=route.agent_version_id,
+        client_id=route.client_id,
+        payload={"agent_id": route.agent_id, "agent_version_id": route.agent_version_id}
     )
 
     emitter.emit(
         RuntimeEventType.CALL_ANSWERED,
         session_id=session_id or "",
-        agent_id=phone_record.agent_id,
-        agent_version_id=phone_record.agent_version_id,
-        client_id=phone_record.client_id,
+        agent_id=route.agent_id,
+        agent_version_id=route.agent_version_id,
+        client_id=route.client_id,
         payload={"call_id": call_record.id, "provider_call_id": payload.provider_call_id}
     )
 
@@ -654,42 +686,62 @@ def initiate_outbound_call_endpoint(
     Triggers an outbound call to a customer via the configured telephony carrier (Exotel).
     Once the customer answers, Exotel connects the call to the AI Employee.
     """
-    phone_repo = PhoneNumberRepository(db)
-    phone_record = phone_repo.get_by_id(req.phone_number_id)
-    if not phone_record:
-        # Fallback to check if phone_number_id is an E.164 phone string
-        phone_record = phone_repo.get_by_e164(req.phone_number_id)
-    if not phone_record:
-        raise HTTPException(status_code=404, detail=f"Phone number '{req.phone_number_id}' not found.")
+    phone_record: Optional[PhoneNumber] = None
+    if req.phone_number_id:
+        phone_repo = PhoneNumberRepository(db)
+        phone_record = phone_repo.get_by_id(req.phone_number_id) or phone_repo.get_by_e164(req.phone_number_id)
+        if not phone_record:
+            raise HTTPException(status_code=404, detail=f"Phone number '{req.phone_number_id}' not found.")
+        if not phone_record.agent_id or not phone_record.agent_version_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Phone number '{phone_record.phone_number}' is not assigned to an AI Employee."
+            )
+        agent_id, agent_version_id = phone_record.agent_id, phone_record.agent_version_id
+        caller_id = phone_record.phone_number
+        provider_name = phone_record.provider or "exotel"
+    elif req.agent_id and req.agent_version_id:
+        agent_id, agent_version_id = req.agent_id, req.agent_version_id
+        caller_id = req.caller_id or getattr(settings, "EXOTEL_CALLER_ID", None)
+        if not caller_id:
+            raise HTTPException(
+                status_code=400,
+                detail="No caller ID: set EXOTEL_CALLER_ID in backend/.env to your ExoPhone, or pass caller_id."
+            )
+        provider_name = "exotel"
+    else:
+        raise HTTPException(status_code=400, detail="Provide phone_number_id, or agent_id and agent_version_id.")
 
-    if not phone_record.agent_id or not phone_record.agent_version_id:
+    readiness = RuntimeReadinessChecker(db, default_registry).check(agent_id, agent_version_id)
+    if not readiness["ready"]:
+        raise HTTPException(status_code=400, detail="Agent is not ready for calls: " + "; ".join(readiness["errors"]))
+    agent = db.get(Agent, agent_id)
+
+    # Exotel must reach this server when the customer answers; fail fast instead of placing a dead call
+    base_url = (settings.TELEPHONY_BASE_URL or "").rstrip("/")
+    if not base_url.startswith("https://") or any(h in base_url for h in ("localhost", "127.0.0.1")):
         raise HTTPException(
             status_code=400,
-            detail=f"Phone number '{phone_record.phone_number}' is not assigned to an AI Employee."
+            detail="TELEPHONY_BASE_URL must be a public https:// address Exotel can reach (e.g. your ngrok URL)."
         )
 
-    agent = db.query(Agent).filter(Agent.id == phone_record.agent_id).first()
-    version = db.query(AgentVersion).filter(AgentVersion.id == phone_record.agent_version_id).first()
-    if not agent or not version:
-        raise HTTPException(status_code=400, detail="Assigned agent or agent version not found.")
-
-    flow_id = req.flow_id or getattr(settings, "EXOTEL_FLOW_ID", None) or "1341429"
-    account_sid = getattr(settings, "EXOTEL_ACCOUNT_SID", "evokevoice1")
+    flow_id = req.flow_id or getattr(settings, "EXOTEL_FLOW_ID", None)
+    account_sid = getattr(settings, "EXOTEL_ACCOUNT_SID", None)
+    if not flow_id or not account_sid:
+        raise HTTPException(status_code=400, detail="EXOTEL_FLOW_ID and EXOTEL_ACCOUNT_SID must be configured.")
     flow_url = f"http://my.exotel.com/{account_sid}/exoml/start_voice/{flow_id}"
-
-    base_url = settings.TELEPHONY_BASE_URL or "http://127.0.0.1:8000"
     status_callback_url = _with_token(f"{base_url}/api/telephony/exotel/status")
 
-    telephony_provider = default_registry.get_telephony(phone_record.provider or "exotel")
+    telephony_provider = default_registry.get_telephony(provider_name)
 
     # Initiate carrier call
     try:
         call_result = telephony_provider.initiate_outbound_call(
             customer_number=req.destination_number,
-            caller_id=phone_record.phone_number,
+            caller_id=caller_id,
             flow_url=flow_url,
             status_callback_url=status_callback_url,
-            custom_field=req.custom_field or f"agent:{phone_record.agent_id}"
+            custom_field=req.custom_field or f"agent:{agent_id}"
         )
     except Exception as exc:
         logger.error(f"Failed to initiate outbound call: {exc}")
@@ -705,14 +757,14 @@ def initiate_outbound_call_endpoint(
     call_id = generate_unique_id("call", 10)
     call_record = Call(
         id=call_id,
-        client_id=phone_record.client_id,
-        agent_id=phone_record.agent_id,
-        agent_version_id=phone_record.agent_version_id,
-        phone_number_id=phone_record.id,
-        provider=phone_record.provider or "exotel",
+        client_id=agent.client_id,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        phone_number_id=phone_record.id if phone_record else None,
+        provider=provider_name,
         provider_call_id=provider_call_id,
         direction="OUTBOUND",
-        caller_number=phone_record.phone_number,
+        caller_number=caller_id,
         destination_number=req.destination_number,
         status="INITIATED",
         started_at=now,
@@ -725,10 +777,9 @@ def initiate_outbound_call_endpoint(
     emitter.emit(
         RuntimeEventType.CALL_INITIATED,
         session_id="",
-        agent_id=phone_record.agent_id,
-
-        agent_version_id=phone_record.agent_version_id,
-        client_id=phone_record.client_id,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        client_id=agent.client_id,
         payload={"call_id": saved_call.id, "direction": "OUTBOUND", "provider_call_id": provider_call_id}
     )
 

@@ -29,6 +29,7 @@ import { runtimeService } from '../services/runtime';
 import { request } from '../services/api';
 import { testScenariosService, TestRun, TestScenario } from '../services/testScenarios';
 import { VoiceScenarioSuite } from '../components/testing/VoiceScenarioSuite';
+import { PhoneCallTester } from '../components/testing/PhoneCallTester';
 import {
   Agent,
   AgentVersion,
@@ -1098,6 +1099,7 @@ export const TestLabPage: React.FC = () => {
           <div className="inline-flex rounded-full bg-[#151824] p-1 shadow-inner">
             {[
               { id: 'voice' as const, label: 'Voice Call', icon: Mic },
+              { id: 'phone' as const, label: 'Phone Call', icon: PhoneCall },
               { id: 'chat' as const, label: 'Chat Turn', icon: Sparkles },
               { id: 'scenarios' as const, label: 'Scenarios & Regressions', icon: Layers },
             ].map(({ id: modeId, label, icon: Icon }) => (
@@ -1210,6 +1212,12 @@ export const TestLabPage: React.FC = () => {
               versions={versions}
             />
           </div>
+        ) : testMode === 'phone' ? (
+          <PhoneCallTester
+            agentId={selectedAgentId}
+            agentVersionId={selectedVersionId}
+            ready={!!readiness?.ready}
+          />
         ) : testMode === 'chat' ? (
           <div className="space-y-3 px-5 py-5 text-left">
             <div ref={chatScrollRef} className="max-h-72 min-h-[160px] space-y-2 overflow-y-auto rounded-lg border border-[#1b1f2d] bg-[#080b10] p-3">
@@ -1311,7 +1319,7 @@ export const TestLabPage: React.FC = () => {
                   ))}
                 </div>
                 <p className="text-lg text-slate-200">
-                  {testMode === 'phone' ? 'Phone testing is not available yet' : 'Start a call to test the agent'}
+                  Start a call to test the agent
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
                   {activeSession && activeSession.status === 'ACTIVE'
@@ -1340,7 +1348,7 @@ export const TestLabPage: React.FC = () => {
               </span>
             </div>
 
-            {webrtcStatus === 'CONNECTED' ? (
+            {testMode === 'phone' ? null : webrtcStatus === 'CONNECTED' ? (
               <Button
                 type="button"
                 variant="danger"
@@ -1385,7 +1393,7 @@ export const TestLabPage: React.FC = () => {
                 type="button"
                 variant="primary"
                 className="min-w-[180px] rounded-full bg-emerald-600 text-white hover:bg-emerald-500 font-semibold shadow-md"
-                disabled={testMode === 'phone' || !readiness?.ready}
+                disabled={!readiness?.ready}
                 isLoading={isStartingSession}
                 onClick={handleStartSession}
               >

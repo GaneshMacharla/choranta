@@ -99,8 +99,12 @@ export interface TelephonyOverview {
   active_calls_now: number;
 }
 
+/** Call from a provisioned number (phone_number_id) or directly as an agent (agent_id + agent_version_id). */
 export interface InitiateOutboundCallInput {
-  phone_number_id: string;
+  phone_number_id?: string;
+  agent_id?: string;
+  agent_version_id?: string;
+  caller_id?: string;
   destination_number: string;
   flow_id?: string;
   custom_field?: string;
@@ -128,7 +132,7 @@ export const telephonyService = {
 
   async updatePhoneNumber(id: string, data: UpdatePhoneNumberInput): Promise<PhoneNumber> {
     return request<PhoneNumber>(`/telephony/numbers/${id}`, {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify(data),
     });
   },

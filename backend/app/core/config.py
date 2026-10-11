@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     EXOTEL_WEBHOOK_SECRET: Optional[str] = None
     TELEPHONY_BASE_URL: Optional[str] = None
     EXOTEL_FLOW_ID: Optional[str] = "1341429"
+    # ExoPhone shown as caller ID on outbound calls placed directly by an agent
+    EXOTEL_CALLER_ID: Optional[str] = None
     RUN_REAL_TELEPHONY_TESTS: bool = False
 
 

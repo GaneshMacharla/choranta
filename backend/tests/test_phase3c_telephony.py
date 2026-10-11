@@ -366,7 +366,7 @@ def test_calls_history_listing_and_detail(client: TestClient, auth_headers: dict
     assert detail_data["transcript_summary"] == "Hello! How can I help you today?"
 
 
-def test_outbound_call_endpoint_initiation(client: TestClient, telephony_setup, auth_headers, db: Session):
+def test_outbound_call_endpoint_initiation(client: TestClient, telephony_setup, auth_headers, db: Session, outbound_settings):
     """Verifies that an outbound call can be triggered via POST /api/telephony/calls/outbound."""
     pn = telephony_setup["phone_number"]
 
@@ -390,6 +390,95 @@ def test_outbound_call_endpoint_initiation(client: TestClient, telephony_setup, 
     persisted = db.query(Call).filter(Call.provider_call_id == data["provider_call_id"]).first()
     assert persisted is not None
     assert persisted.direction == "OUTBOUND"
+
+
+@pytest.fixture
+def outbound_settings(monkeypatch):
+    """Exotel outbound configuration independent of the developer's .env."""
+    monkeypatch.setattr(settings, "TELEPHONY_BASE_URL", "https://choranta.example.com", raising=False)
+    monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", "08047112233", raising=False)
+    monkeypatch.setattr(settings, "EXOTEL_FLOW_ID", "123456", raising=False)
+    monkeypatch.setattr(settings, "EXOTEL_ACCOUNT_SID", "choranta_test", raising=False)
+
+
+def test_outbound_call_directly_as_agent(client: TestClient, telephony_setup, auth_headers, db: Session, outbound_settings):
+    """An agent can call a number without a provisioned PhoneNumber, using EXOTEL_CALLER_ID."""
+    resp = client.post(
+        "/api/telephony/calls/outbound",
+        headers=auth_headers,
+        json={
+            "agent_id": telephony_setup["agent"].id,
+            "agent_version_id": telephony_setup["version"].id,
+            "destination_number": "09876543210",
+        }
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["direction"] == "OUTBOUND"
+    assert data["phone_number_id"] is None
+    assert data["caller_number"] == "08047112233"
+    assert data["agent_version_id"] == telephony_setup["version"].id
+
+    # Customer answers: Voicebot webhook routes by CallSid even though no PhoneNumber exists
+    answered = client.get(
+        "/api/telephony/exotel/inbound",
+        params={"CallSid": data["provider_call_id"], "CallFrom": "09876543210", "CallTo": "08047112233"},
+    )
+    assert "ws/telephony/exotel/media" in answered.json()["url"]
+    call = db.query(Call).filter(Call.id == data["id"]).first()
+    db.refresh(call)
+    assert call.status == "ANSWERED"
+    assert call.runtime_session_id is not None
+
+
+def test_outbound_call_validates_setup(client: TestClient, telephony_setup, auth_headers, outbound_settings, monkeypatch):
+    """Missing caller ID or a non-public base URL fails fast with an actionable error."""
+    body = {
+        "agent_id": telephony_setup["agent"].id,
+        "agent_version_id": telephony_setup["version"].id,
+        "destination_number": "09876543210",
+    }
+
+    monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", None, raising=False)
+    resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json=body)
+    assert resp.status_code == 400
+    assert "EXOTEL_CALLER_ID" in resp.json()["detail"]
+
+    monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", "08047112233", raising=False)
+    monkeypatch.setattr(settings, "TELEPHONY_BASE_URL", "http://127.0.0.1:8000", raising=False)
+    resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json=body)
+    assert resp.status_code == 400
+    assert "TELEPHONY_BASE_URL" in resp.json()["detail"]
+
+    resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json={"destination_number": "09876543210"})
+    assert resp.status_code == 400
+
+
+def test_outbound_call_answered_starts_agent_session(client: TestClient, telephony_setup, auth_headers, db: Session, outbound_settings):
+    """When the customer answers, Exotel's Voicebot webhook must start a runtime session for the outbound call."""
+    pn = telephony_setup["phone_number"]
+    placed = client.post(
+        "/api/telephony/calls/outbound",
+        headers=auth_headers,
+        json={"phone_number_id": pn.id, "destination_number": "+919876543210"}
+    ).json()
+    assert placed["runtime_session_id"] is None
+
+    # Exotel reports the customer as CallFrom and the ExoPhone as CallTo; routing must
+    # still find the outbound call by its CallSid.
+    resp = client.get(
+        "/api/telephony/exotel/inbound",
+        params={"CallSid": placed["provider_call_id"], "CallFrom": "09876543210", "CallTo": "08000000000"},
+    )
+    assert resp.status_code == 200
+    assert "ws/telephony/exotel/media" in resp.json()["url"]
+
+    calls = db.query(Call).filter(Call.provider_call_id == placed["provider_call_id"]).all()
+    assert len(calls) == 1
+    db.refresh(calls[0])
+    assert calls[0].direction == "OUTBOUND"
+    assert calls[0].status == "ANSWERED"
+    assert calls[0].runtime_session_id is not None
 
 
 
