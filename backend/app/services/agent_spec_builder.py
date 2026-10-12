@@ -63,7 +63,8 @@ class AgentSpecBuilder:
                 "name": client.contact_name,
                 "email": client.contact_email,
                 "phone": client.contact_phone
-            }
+            },
+            call_direction=draft.business_context.call_direction or "inbound"
         )
 
         # 4. Instructions
@@ -81,7 +82,10 @@ class AgentSpecBuilder:
             verbosity=draft.conversation.verbosity or "concise",
             greeting=draft.conversation.greeting.strip() or f"Hello, thank you for calling {client.name}. How can I assist you today?",
             farewell=draft.conversation.farewell.strip() or f"Thank you for contacting {client.name}. Have a great day.",
-            interruption_behavior=draft.conversation.interruption_behavior or "pause_and_listen"
+            interruption_behavior=draft.conversation.interruption_behavior or "pause_and_listen",
+            limits=draft.conversation.limits.model_copy(update={
+                "end_call_phrases": [p.strip() for p in draft.conversation.limits.end_call_phrases if p.strip()]
+            })
         )
 
         # 6. Languages

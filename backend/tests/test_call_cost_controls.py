@@ -5,10 +5,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.runtime.call_limits import DEFAULT_MAX_TOOL_ROUNDS, resolve_call_limits
 from app.runtime.providers.base import LLMResult, ToolCallRequest
 from app.runtime.providers.registry import default_registry
 from app.runtime.telephony import session as session_module
 from app.runtime.telephony.speech_text import clean_for_speech
+from app.schemas.agent_spec import CallLimitsSpec
 from test_phase3c_telephony import telephony_setup  # noqa: F401
 from test_telephony_realtime import (  # noqa: F401
     FakeLLM, FakeWebSocket, _assistant_messages, _session, _shutdown, _until, fakes,
@@ -121,5 +123,137 @@ async def test_phone_style_instructions_are_added_once(db: Session, telephony_se
         instructions = s.context.conversation.system_instruction
         assert instructions.count(session_module.PHONE_STYLE_MARKER) == 1
         assert "end_call" in instructions
+    finally:
+        await _shutdown(s)
+
+
+# ---------------------------------------------------------------------------
+# Per-agent call limits (conversation.limits) override the platform defaults
+# ---------------------------------------------------------------------------
+
+def _set_limits(s, **values):
+    # model_construct skips the dashboard bounds so tests can use sub-second timings
+    s.context.agent_spec.conversation.limits = CallLimitsSpec.model_construct(**values)
+
+
+def test_call_limits_fall_back_to_settings(monkeypatch):
+    monkeypatch.setattr(settings, "CALL_MAX_DURATION_S", 600, raising=False)
+    monkeypatch.setattr(settings, "VOICE_MAX_REPLY_CHARS", 280, raising=False)
+    defaults = resolve_call_limits(None)
+    assert (defaults.max_call_duration_s, defaults.max_reply_chars, defaults.max_tool_rounds) == (600, 280, DEFAULT_MAX_TOOL_ROUNDS)
+    assert defaults.end_call_phrases == ()
+
+
+def test_end_call_phrase_matching():
+    limits = resolve_call_limits(None).__class__(600, 8, 8, 280, 4, ("not interested", "bye"))
+    assert limits.matches_end_call_phrase("Not interested!")
+    assert limits.matches_end_call_phrase("okay bye")
+    assert not limits.matches_end_call_phrase("I am not interested in 2BHK, show me 3BHK instead")
+    assert not limits.matches_end_call_phrase("byepass road")
+
+
+@pytest.mark.asyncio
+async def test_agent_silence_limits_override_settings(db: Session, telephony_setup, fakes, monkeypatch):
+    monkeypatch.setattr(settings, "CALL_SILENCE_REPROMPT_S", 999, raising=False)
+    monkeypatch.setattr(settings, "CALL_SILENCE_HANGUP_S", 999, raising=False)
+    s = _session(db, telephony_setup)
+    _set_limits(s, silence_reprompt_s=0.3, silence_hangup_s=0.3)
+    s.websocket = ClosableWebSocket()
+    s._last_activity = 0.0
+    watchdog = asyncio.create_task(s._watchdog())
+    try:
+        await _until(lambda: s.websocket.closed, timeout=10)
+        assert s._end_reason == "caller_silent"
+    finally:
+        watchdog.cancel()
+        await _shutdown(s)
+
+
+@pytest.mark.asyncio
+async def test_agent_max_call_duration_ends_call(db: Session, telephony_setup, fakes, monkeypatch):
+    monkeypatch.setattr(settings, "CALL_MAX_DURATION_S", 0, raising=False)
+    s = _session(db, telephony_setup)
+    _set_limits(s, max_call_duration_s=60)
+    s.websocket = ClosableWebSocket()
+    s.t_call_start -= 120
+    watchdog = asyncio.create_task(s._watchdog())
+    try:
+        await _until(lambda: s.websocket.closed, timeout=10)
+        assert s._end_reason == "max_duration"
+    finally:
+        watchdog.cancel()
+        await _shutdown(s)
+
+
+@pytest.mark.asyncio
+async def test_end_call_phrase_hangs_up_without_llm(db: Session, telephony_setup, fakes):
+    s = _session(db, telephony_setup)
+    _set_limits(s, end_call_phrases=["not interested"])
+    s.websocket = ClosableWebSocket()
+    fakes["stt"].transcripts[640] = "Sorry, not interested."
+    try:
+        await s.execute_turn(b"\x00\x00" * 320)
+        await _until(lambda: s.websocket.closed, timeout=10)
+        assert s._end_reason == "end_call_phrase"
+        assert fakes["llm"].calls == []
+        assert " ".join(fakes["tts"].spoken) == s._farewell()  # spoken sentence by sentence
+    finally:
+        await _shutdown(s)
+
+
+@pytest.mark.asyncio
+async def test_long_sentence_with_end_call_phrase_keeps_talking(db: Session, telephony_setup, fakes):
+    s = _session(db, telephony_setup)
+    _set_limits(s, end_call_phrases=["not interested"])
+    fakes["llm"].replies = ["Sure, let me check 3BHK options."]
+    fakes["stt"].transcripts[640] = "I am not interested in 2BHK, show me 3BHK options please"
+    try:
+        await s.execute_turn(b"\x00\x00" * 320)
+        await _until(lambda: s._turn_task is not None and s._turn_task.done(), timeout=10)
+        assert len(fakes["llm"].calls) == 1
+        assert s._end_reason is None
+    finally:
+        await _shutdown(s)
+
+
+@pytest.mark.asyncio
+async def test_agent_reply_cap_overrides_settings(db: Session, telephony_setup, fakes, monkeypatch):
+    monkeypatch.setattr(settings, "VOICE_MAX_REPLY_CHARS", 1000, raising=False)
+    s = _session(db, telephony_setup)
+    _set_limits(s, max_reply_chars=40)
+    fakes["llm"].replies = ["We have a lovely flat in Whitefield today. It has two bedrooms. It also has a pool."]
+    fakes["stt"].transcripts[640] = "Tell me everything"
+    try:
+        await s.execute_turn(b"\x00\x00" * 320)
+        await _until(lambda: s._turn_task is not None and s._turn_task.done(), timeout=10)
+        assert fakes["tts"].spoken == ["We have a lovely flat in Whitefield today."]
+    finally:
+        await _shutdown(s)
+
+
+class ToolLoopLLM(FakeLLM):
+    """Keeps asking for a tool while tools are offered; answers in text once they're withheld."""
+    def generate_stream(self, system_instruction, messages, available_tools=None, temperature=0.7, model=None):
+        self.calls.append(messages)
+        if available_tools:
+            yield LLMResult(text="", finish_reason="tool_calls", usage={},
+                            tool_calls=[ToolCallRequest(id=f"t{len(self.calls)}", tool_name="lookup", arguments={})])
+        else:
+            yield "Here is what I found. "
+            yield LLMResult(text="Here is what I found.", finish_reason="stop", usage={})
+
+
+@pytest.mark.asyncio
+async def test_agent_max_tool_rounds_limits_llm_calls(db: Session, telephony_setup, fakes, monkeypatch):
+    llm = ToolLoopLLM([])
+    monkeypatch.setattr(default_registry, "get_llm", lambda name: llm)
+    s = _session(db, telephony_setup)
+    _set_limits(s, max_tool_rounds=1)
+    fakes["stt"].transcripts[640] = "Find me a flat"
+    try:
+        await s.execute_turn(b"\x00\x00" * 320)
+        await _until(lambda: s._turn_task is not None and s._turn_task.done(), timeout=10)
+        assert len(llm.calls) == 2  # one tool round, then a final answer without tools
+        assert fakes["tts"].spoken == ["Here is what I found."]
     finally:
         await _shutdown(s)

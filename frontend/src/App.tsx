@@ -9,6 +9,7 @@ import { ClientsPage } from './pages/ClientsPage';
 import { ClientDetailPage } from './pages/ClientDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
+import { AgentCreateWizardPage } from './pages/AgentCreateWizardPage';
 import { TelephonyPage } from './pages/TelephonyPage';
 import { CallsPage } from './pages/CallsPage';
 import { ToolsPage } from './pages/ToolsPage';
@@ -55,6 +56,7 @@ export function App() {
               <Route path="/clients" element={<ClientsPage />} />
               <Route path="/clients/:id" element={<ClientDetailPage />} />
               <Route path="/agents" element={<AgentsPage />} />
+              <Route path="/agents/new" element={<AgentCreateWizardPage />} />
               <Route path="/agents/:id" element={<AgentDetailPage />} />
               {/* Testing now lives in each AI Employee's final "Tests" step */}
               <Route path="/test-lab" element={<TestLabRedirect />} />

@@ -22,6 +22,7 @@ class BusinessContextSpec(BaseModel):
     business_hours: Dict[str, Any] = Field(default_factory=dict)
     location: str = ""
     contact_information: Dict[str, Any] = Field(default_factory=dict)
+    call_direction: str = Field(default="inbound", description="inbound, outbound or both")
 
 
 class InstructionsSpec(BaseModel):
@@ -32,6 +33,16 @@ class InstructionsSpec(BaseModel):
     escalation_rules: List[str] = Field(default_factory=list, description="Conditions for escalating to human")
 
 
+class CallLimitsSpec(BaseModel):
+    """Per-agent call limits; None falls back to the platform default in settings."""
+    max_call_duration_s: Optional[int] = Field(default=None, ge=60, le=3600, description="Wrap up and hang up after this many seconds")
+    silence_reprompt_s: Optional[float] = Field(default=None, ge=3, le=60, description="Caller silent this long -> reprompt")
+    silence_hangup_s: Optional[float] = Field(default=None, ge=3, le=120, description="Still silent after the reprompt -> hang up")
+    max_reply_chars: Optional[int] = Field(default=None, ge=80, le=1000, description="Stop a reply after the sentence that crosses this")
+    max_tool_rounds: Optional[int] = Field(default=None, ge=1, le=6, description="Tool calls allowed per caller turn")
+    end_call_phrases: List[str] = Field(default_factory=list, description="Caller phrases that end the call without an LLM round")
+
+
 class ConversationSpec(BaseModel):
     tone: str = Field(default="professional", description="Tone (e.g. professional, friendly, warm, casual)")
     verbosity: str = Field(default="concise", description="Verbosity (concise, balanced, detailed)")
@@ -39,6 +50,7 @@ class ConversationSpec(BaseModel):
     farewell: str = Field(default="", description="Closing phrase when concluding session")
     interruption_behavior: str = Field(default="pause_and_listen", description="How to handle caller interruption")
     fallback_response: Optional[str] = Field(default="I understand. How else may I assist you?", description="Fallback response")
+    limits: CallLimitsSpec = Field(default_factory=CallLimitsSpec, description="Cost-saving call limits")
 
 
 class LanguagesSpec(BaseModel):

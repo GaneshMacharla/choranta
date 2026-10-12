@@ -135,15 +135,9 @@ export const AgentsPage: React.FC = () => {
   };
 
   const handleSelectBlank = () => {
-    setSelectedTemplate(null);
-    setCreateForm((prev) => ({
-      ...prev,
-      name: '',
-      role: '',
-      description: '',
-      template_id: undefined,
-    }));
-    setCreationStep('configure');
+    // From scratch goes through the guided wizard (AI-drafted instructions, voice, call limits)
+    setIsCreateModalOpen(false);
+    navigate('/agents/new');
   };
 
   useEffect(() => {
@@ -561,7 +555,7 @@ export const AgentsPage: React.FC = () => {
                       Blank Voice Employee
                     </h3>
                     <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                      Start from an empty slate. Manually author prompt instructions, create custom input/output variables, attach tools, and configure your own voice and language settings.
+                      Describe the employee in plain words and let AI draft its instructions, then pick a voice, attach tools and set call limits in a guided wizard.
                     </p>
                   </div>
 
@@ -591,7 +585,7 @@ export const AgentsPage: React.FC = () => {
                     onClick={handleSelectBlank}
                     rightIcon={<ArrowRight className="h-3.5 w-3.5" />}
                   >
-                    Start Blank
+                    Start from Scratch
                   </Button>
                 </div>
               </div>

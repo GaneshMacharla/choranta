@@ -154,7 +154,10 @@ export interface AgentBusinessContext {
   business_hours: BusinessHours;
   location: string;
   contact_information: ContactInformation;
+  call_direction?: CallDirection;
 }
+
+export type CallDirection = 'inbound' | 'outbound' | 'both';
 
 export interface AgentInstructions {
   primary_goal: string;
@@ -170,7 +173,27 @@ export interface AgentConversationStyle {
   greeting: string;
   farewell: string;
   interruption_behavior: string;
+  limits: AgentCallLimits;
 }
+
+/** Per-agent call limits; null = platform default. */
+export interface AgentCallLimits {
+  max_call_duration_s: number | null;
+  silence_reprompt_s: number | null;
+  silence_hangup_s: number | null;
+  max_reply_chars: number | null;
+  max_tool_rounds: number | null;
+  end_call_phrases: string[];
+}
+
+export const EMPTY_CALL_LIMITS: AgentCallLimits = {
+  max_call_duration_s: null,
+  silence_reprompt_s: null,
+  silence_hangup_s: null,
+  max_reply_chars: null,
+  max_tool_rounds: null,
+  end_call_phrases: [],
+};
 
 export interface AgentLanguageConfig {
   primary: string;
@@ -384,3 +407,20 @@ export type StreamTurnEvent =
   | { type: 'error'; message: string };
 
 
+
+export interface AgentDraftRequest {
+  client_id: string;
+  name: string;
+  role: string;
+  call_direction: CallDirection;
+  primary_language: string;
+  supported_languages: string[];
+  description: string;
+  business_notes: string;
+}
+
+export interface AgentDraftResponse {
+  configuration: AgentConfigurationData;
+  draft_source: 'ai' | 'fallback';
+  message?: string | null;
+}

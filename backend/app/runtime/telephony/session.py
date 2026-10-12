@@ -19,7 +19,8 @@ from app.repositories.runtime_session_repository import RuntimeSessionRepository
 from app.runtime.conversation import ConversationRole
 from app.runtime.events.emitter import EventEmitter
 from app.runtime.events.types import RuntimeEventType
-from app.runtime.runtime import AgentRuntime, MAX_TOOL_ROUNDS
+from app.runtime.runtime import AgentRuntime
+from app.runtime.call_limits import CallLimits, resolve_call_limits
 from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony import TelephonyProvider
 from app.runtime.telephony.endpointing import SpeechEndpointer, EndpointerConfig
@@ -366,6 +367,11 @@ class TelephonyMediaSession:
         # A new caller turn replaces whatever the agent was saying or preparing
         await self._interrupt_current_turn()
         self._add_user_text(user_text)
+        if self.limits.matches_end_call_phrase(user_text):
+            # "Not interested", "bye": say goodbye without paying for an LLM round
+            logger.info(f"Caller said end-call phrase '{user_text}'; hanging up.")
+            self._say_then_hang_up(self._farewell(), "end_call_phrase")
+            return
         self._start_turn(self._respond(t_end))
 
     # ------------------------------------------------------------------
@@ -458,7 +464,8 @@ class TelephonyMediaSession:
         turn.t_reference = t_reference
         llm = default_registry.get_llm(self.context.agent_spec.providers.llm)
         tools = self._tool_defs or [END_CALL_TOOL]
-        max_chars = max(0, settings.VOICE_MAX_REPLY_CHARS)
+        limits = self.limits
+        max_chars = max(0, limits.max_reply_chars)
         queued_chars = 0
         capped = False
 
@@ -477,7 +484,7 @@ class TelephonyMediaSession:
                     llm.generate_stream,
                     system_instruction=self.context.conversation.system_instruction,
                     messages=messages,
-                    available_tools=tools if rounds < MAX_TOOL_ROUNDS else None,
+                    available_tools=tools if rounds < limits.max_tool_rounds else None,
                 )
                 streamed_text: List[str] = []
                 try:
@@ -509,7 +516,7 @@ class TelephonyMediaSession:
                 if capped:
                     logger.info(f"Agent reply capped at {queued_chars} characters.")
                     break
-                if final is None or not final.tool_calls or rounds >= MAX_TOOL_ROUNDS:
+                if final is None or not final.tool_calls or rounds >= limits.max_tool_rounds:
                     break
 
                 if any(tc.tool_name == "end_call" for tc in final.tool_calls):
@@ -725,6 +732,11 @@ class TelephonyMediaSession:
         if conversation.messages and conversation.messages[0].role == ConversationRole.SYSTEM:
             conversation.messages[0].content = conversation.system_instruction.strip()
 
+    @property
+    def limits(self) -> CallLimits:
+        """This agent's call limits, with platform defaults for anything it leaves unset."""
+        return resolve_call_limits(self.context.agent_spec if self.context else None)
+
     def _farewell(self) -> str:
         farewell = (self.context.agent_spec.conversation.farewell or "").strip() if self.context else ""
         return farewell or DEFAULT_FAREWELL
@@ -764,16 +776,17 @@ class TelephonyMediaSession:
                     continue
                 if not self._is_idle():
                     continue
+                limits = self.limits
                 elapsed = time.perf_counter() - self.t_call_start
-                if settings.CALL_MAX_DURATION_S and elapsed >= settings.CALL_MAX_DURATION_S:
+                if limits.max_call_duration_s and elapsed >= limits.max_call_duration_s:
                     logger.info(f"Call {self.call_record.id} reached the maximum duration; wrapping up.")
                     self._say_then_hang_up(self._farewell(), "max_duration")
                     continue
                 silent = time.monotonic() - self._last_activity
-                if not self._reprompted and silent >= settings.CALL_SILENCE_REPROMPT_S:
+                if not self._reprompted and silent >= limits.silence_reprompt_s:
                     self._reprompted = True
                     self._start_turn(self._speak_text(SILENCE_REPROMPT_TEXT))
-                elif self._reprompted and silent >= settings.CALL_SILENCE_HANGUP_S:
+                elif self._reprompted and silent >= limits.silence_hangup_s:
                     logger.info(f"Caller silent on call {self.call_record.id}; hanging up.")
                     self._say_then_hang_up(SILENCE_GOODBYE_TEXT, "caller_silent")
         except asyncio.CancelledError:

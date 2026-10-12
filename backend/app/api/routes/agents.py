@@ -5,7 +5,9 @@ from app.api.deps import get_db, get_current_user, require_admin
 from app.models.user import User
 from app.schemas.agent import AgentCreate, AgentUpdate, AgentResponse, AgentListResponse, AgentStatusEnum
 from app.schemas.agent_spec import AgentVersionResponse, VersionComparisonResponse
+from app.schemas.agent_draft import AgentDraftRequest, AgentDraftResponse
 from app.services.agent_service import AgentService
+from app.services.agent_draft_service import AgentDraftService
 from app.services.agent_version_service import AgentVersionService
 
 router = APIRouter(prefix="/agents", tags=["AI Employees"])
@@ -30,6 +32,16 @@ def list_agents(
         status=status,
         search=search
     )
+
+
+@router.post("/draft-configuration", response_model=AgentDraftResponse)
+def draft_agent_configuration(
+    payload: AgentDraftRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Draft an AI Employee's configuration from a plain-language description (nothing is saved)."""
+    return AgentDraftService(db).draft(payload)
 
 
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)

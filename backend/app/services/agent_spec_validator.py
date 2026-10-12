@@ -46,6 +46,18 @@ class AgentSpecValidator:
         if not spec.conversation.greeting or len(spec.conversation.greeting.strip()) < 5:
             warnings.append(ValidationErrorItem(field="conversation.greeting", message="A distinct greeting message is recommended.", severity="warning"))
 
+        if spec.business_context.call_direction not in ("inbound", "outbound", "both"):
+            errors.append(ValidationErrorItem(field="business_context.call_direction", message="Call direction must be inbound, outbound or both."))
+
+        limits = spec.conversation.limits
+        if limits.max_call_duration_s and limits.max_call_duration_s > 1800:
+            warnings.append(ValidationErrorItem(field="conversation.limits.max_call_duration_s", message="Calls longer than 30 minutes are costly; consider a lower maximum.", severity="warning"))
+        if len(limits.end_call_phrases) > 10:
+            warnings.append(ValidationErrorItem(field="conversation.limits.end_call_phrases", message="More than 10 end-call phrases raises the risk of hanging up on real callers.", severity="warning"))
+        short_phrases = [p for p in limits.end_call_phrases if len(p.strip()) < 3]
+        if short_phrases:
+            warnings.append(ValidationErrorItem(field="conversation.limits.end_call_phrases", message=f"Very short end-call phrases may hang up by mistake: {', '.join(short_phrases)}", severity="warning"))
+
         # 5. Languages
         if not spec.languages.primary:
             errors.append(ValidationErrorItem(field="languages.primary", message="Primary spoken language is required."))

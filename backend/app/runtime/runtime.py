@@ -24,6 +24,7 @@ from app.runtime.events.types import RuntimeEventType
 from app.runtime.providers.registry import ProviderRegistry, default_registry
 from app.runtime.tools.executor import ToolExecutor
 from app.runtime.readiness.checker import RuntimeReadinessChecker
+from app.runtime.call_limits import resolve_call_limits
 
 logger = logging.getLogger("choranta.runtime")
 
@@ -31,10 +32,6 @@ logger = logging.getLogger("choranta.runtime")
 # API routes build a new AgentRuntime per request, so per-instance state would lose
 # conversation history between turns and force a database rehydration every turn.
 _ACTIVE_CONTEXTS: Dict[str, RuntimeContext] = {}
-
-# Maximum LLM -> tool -> LLM rounds per turn. The final round is sent without tools so the
-# model must answer in text (models often chain calls, e.g. search then update the lead).
-MAX_TOOL_ROUNDS = 4
 
 # Serializes deferred turn writes per session so the latest snapshot always wins.
 _PERSIST_LOCKS: Dict[str, threading.Lock] = defaultdict(threading.Lock)
@@ -369,7 +366,8 @@ class AgentRuntime:
             )
 
             tool_rounds = 0
-            while llm_result.tool_calls and tool_rounds < MAX_TOOL_ROUNDS:
+            max_tool_rounds = resolve_call_limits(spec).max_tool_rounds
+            while llm_result.tool_calls and tool_rounds < max_tool_rounds:
                 tool_rounds += 1
                 context.conversation.add_assistant_message(
                     content=llm_result.text,
@@ -405,7 +403,7 @@ class AgentRuntime:
                     # Separate any pre-tool text from the continuation in the chat bubble
                     streamed_parts.append(" ")
                     yield {"type": "delta", "text": " "}
-                llm_result = yield from run_llm(available_tools_list if tool_rounds < MAX_TOOL_ROUNDS else None)
+                llm_result = yield from run_llm(available_tools_list if tool_rounds < max_tool_rounds else None)
 
             assistant_text = llm_result.text or getattr(spec.conversation, "fallback_response", None) or "I understand. How else may I assist you?"
             if not llm_result.text:
@@ -515,7 +513,8 @@ class AgentRuntime:
 
             # Handle tool calling loop
             tool_rounds = 0
-            while llm_result.tool_calls and tool_rounds < MAX_TOOL_ROUNDS:
+            max_tool_rounds = resolve_call_limits(spec).max_tool_rounds
+            while llm_result.tool_calls and tool_rounds < max_tool_rounds:
                 tool_rounds += 1
                 # Append assistant message with tool calls
                 context.conversation.add_assistant_message(
@@ -569,7 +568,7 @@ class AgentRuntime:
                 llm_result = llm_p.generate(
                     system_instruction=context.conversation.system_instruction,
                     messages=context.conversation.to_llm_messages(),
-                    available_tools=available_tools_list if tool_rounds < MAX_TOOL_ROUNDS else None
+                    available_tools=available_tools_list if tool_rounds < max_tool_rounds else None
                 )
                 context.usage_tracker.record_llm(
                     llm_result.usage.get("input_tokens", 0),
