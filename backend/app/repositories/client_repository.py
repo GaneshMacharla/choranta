@@ -1,6 +1,6 @@
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.models.client import Client
 from app.models.agent import Agent
 
@@ -29,7 +29,8 @@ class ClientRepository:
         if business_type:
             query = query.filter(Client.business_type == business_type)
         if search:
-            query = query.filter(Client.name.ilike(f"%{search.strip()}%"))
+            term = f"%{search.strip()}%"
+            query = query.filter(or_(Client.name.ilike(term), Client.client_code.ilike(term)))
         
         total = query.count()
         items = query.order_by(Client.created_at.desc()).offset(skip).limit(limit).all()

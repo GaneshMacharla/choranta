@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
-import { AlertTriangle, PhoneCall, Clock, IndianRupee, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, PhoneCall, Clock, IndianRupee, Wallet } from 'lucide-react';
+import { portalAgentRequestsService } from '../../services/agentRequests';
 import { Card } from '../../components/common/Card';
 import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
@@ -53,14 +54,16 @@ export const PortalDashboardPage: React.FC = () => {
   const [summary, setSummary] = useState<PortalSummary | null>(null);
   const [payment, setPayment] = useState<PaymentInstructions | null>(null);
   const [planCount, setPlanCount] = useState(0);
+  const [hasEmployee, setHasEmployee] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([portalService.summary(), portalService.paymentInstructions(), plansService.list()])
-      .then(([s, p, plans]) => {
+    Promise.all([portalService.summary(), portalService.paymentInstructions(), plansService.list(), portalAgentRequestsService.me()])
+      .then(([s, p, plans, me]) => {
         setSummary(s);
         setPayment(p);
         setPlanCount(plans.length);
+        setHasEmployee(me.has_ai_employee);
       })
       .catch((err) => setError(err.message || 'Could not load your dashboard.'));
   }, []);
@@ -73,12 +76,33 @@ export const PortalDashboardPage: React.FC = () => {
   if (!plan && planCount > 0 && !hasSkippedPlanChoice(user?.id)) return <Navigate to="/portal/plans" replace />;
   const planCoversCalls = !!plan?.usable && plan.credits_remaining > 0;
   const showLowBalance = wallet.low_balance && !planCoversCalls;
+  const hasPaid = !!plan?.usable || wallet.balance_inr > 0;
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div>
         <h1 className="text-xl font-bold">{summary.client_name}</h1>
         <p className="text-xs text-slate-400">Welcome back, {summary.user_name}</p>
       </div>
+
+      {hasPaid && !hasEmployee && (
+        <div className="flex flex-col gap-4 rounded-xl border border-[#0a4d39] bg-gradient-to-r from-[#052b20] to-[#071c22] p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#00df8f]/15 text-[#00df8f]">
+              <Bot className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-base font-semibold text-slate-100">Create your first AI employee</p>
+              <p className="text-sm text-slate-400">Tell us your company name, type of business and a name for it. We'll set up the rest.</p>
+            </div>
+          </div>
+          <Link
+            to="/portal/employees"
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-[#00df8f] px-4 py-2 text-sm font-semibold text-[#04110c] hover:bg-[#00c97f]"
+          >
+            Get started <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+      )}
 
       {(showLowBalance || wallet.calls_blocked) && (
         <div className={`flex items-start gap-2 rounded-lg border p-3 text-xs ${wallet.calls_blocked ? 'border-rose-800/60 bg-rose-950/40 text-rose-200' : 'border-amber-700/60 bg-amber-950/30 text-amber-200'}`}>

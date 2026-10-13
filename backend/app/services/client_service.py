@@ -90,6 +90,7 @@ class ClientService:
         agent_count = self.agent_repo.count_by_client(client.id)
         return ClientResponse(
             id=client.id,
+            client_code=client.client_code,
             name=client.name,
             business_type=client.business_type,
             description=client.description,

@@ -24,6 +24,8 @@ export type ClientStatus = 'ACTIVE' | 'INACTIVE';
 
 export interface Client {
   id: string;
+  /** Short unique id shown to admins and the client, e.g. CL-10001 */
+  client_code?: string | null;
   name: string;
   business_type: BusinessType;
   description?: string | null;
@@ -250,6 +252,9 @@ export interface AgentTemplate {
   is_featured?: boolean;
   recommended_role?: string;
   preview?: AgentTemplatePreview;
+  /** Client business types this template suits (e.g. CLINIC), used to recommend it */
+  business_types?: string[];
+  call_direction?: CallDirection;
   default_config?: Record<string, any>;
   default_configuration?: Record<string, any>;
 }

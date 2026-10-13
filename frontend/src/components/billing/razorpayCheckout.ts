@@ -28,6 +28,15 @@ const loadCheckoutScript = () =>
  * Resolves true when paid and verified, false if the person closed Checkout.
  */
 export async function payWithRazorpay(order: PaymentOrder): Promise<boolean> {
+  if (order.simulated) {
+    // Testing mode: no gateway, the backend records the payment as if Razorpay had confirmed it
+    const amount = (order.amount_paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    if (!window.confirm(`TEST MODE: simulate a successful payment of ₹${amount} for "${order.description}"? No money is charged.`)) {
+      return false;
+    }
+    await portalService.simulatePayment(order.order_id);
+    return true;
+  }
   await loadCheckoutScript();
   return new Promise<boolean>((resolve, reject) => {
     const checkout = new window.Razorpay({

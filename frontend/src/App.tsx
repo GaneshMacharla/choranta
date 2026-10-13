@@ -19,6 +19,8 @@ import { ProvidersPage } from './pages/ProvidersPage';
 import { UsagePage } from './pages/UsagePage';
 import { PlansPage } from './pages/PlansPage';
 import { CampaignsPage, CampaignDetailPage, InstantOutboundPage, InstantOutboundDetailPage } from './pages/CampaignsPage';
+import { AgentRequestsPage } from './pages/AgentRequestsPage';
+import { PortalEmployeesPage } from './pages/portal/PortalEmployeesPage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -57,6 +59,7 @@ export function App() {
             <Route path="/portal" element={<PortalLayout />}>
               <Route index element={<PortalDashboardPage />} />
               <Route path="calls" element={<PortalCallsPage />} />
+              <Route path="employees" element={<PortalEmployeesPage />} />
               <Route path="campaigns" element={<PortalCampaignsPage />} />
               <Route path="campaigns/:id" element={<PortalCampaignDetailPage />} />
               <Route path="instant-outbound" element={<PortalInstantOutboundPage />} />
@@ -75,6 +78,7 @@ export function App() {
               <Route path="/clients/:id" element={<ClientDetailPage />} />
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/agents/new" element={<AgentCreateWizardPage />} />
+              <Route path="/agent-requests" element={<AgentRequestsPage />} />
               <Route path="/agents/:id" element={<AgentDetailPage />} />
               {/* Testing now lives in each AI Employee's final "Tests" step */}
               <Route path="/test-lab" element={<TestLabRedirect />} />

@@ -79,17 +79,15 @@ def test_completed_call_includes_cost(client: TestClient, auth_headers: dict, te
     assert listed[0]["cost"]["total"] == 7.5
 
 
-def test_client_charge_is_credits_per_billed_minute(rates):
+def test_client_charge_is_real_cost_plus_profit(rates):
     from app.services.pricing import PricingSnapshot
-    # 2 min call: telephony Rs2 + infra 2 x Rs0.30 = Rs2.60 cost; 2 billed min x 7 credits = Rs14 charge
-    pricing = PricingSnapshot(profit_percent=40.0, infra_cost_per_minute_inr=0.30, credits_per_minute=7.0)
-    cost = estimate_call_cost(120, {}, pricing)
+    # 2 min call: telephony Rs2 + infra 2 x Rs0.30 = Rs2.60 cost; +40% profit = Rs3.64 charge (= 3.64 credits)
+    cost = estimate_call_cost(120, {}, PricingSnapshot(profit_percent=40.0, infra_cost_per_minute_inr=0.30))
     assert cost["breakdown"]["infra"] == 0.6
     assert cost["total"] == 2.6
-    assert cost["charge_total"] == 14.0
-    assert cost["charge_per_minute"] == 7.0
-    assert cost["profit"] == 11.4
-    assert cost["profit_percent"] == 438.5
-    # A 61 s call bills 2 started minutes
-    assert estimate_call_cost(61, {}, pricing)["charge_total"] == 14.0
+    assert cost["profit_percent"] == 40.0
+    assert cost["profit"] == 1.04
+    assert cost["charge_total"] == 3.64
+    assert cost["charge_per_minute"] == 1.82
+    assert estimate_call_cost(0, {})["charge_per_minute"] is None
     assert estimate_call_cost(0, {})["charge_per_minute"] is None

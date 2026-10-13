@@ -1,4 +1,11 @@
 import os
+
+# Before any app import: app startup (init_db) must never touch the database in the developer's .env
+STARTUP_DATABASE_FILE = "./test_choranta_startup.db"
+os.environ["DATABASE_URL"] = f"sqlite:///{STARTUP_DATABASE_FILE}"
+# Tests set payment modes themselves; a developer's .env must not switch them on
+os.environ["SIMULATED_PAYMENTS"] = "false"
+
 from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +21,10 @@ from app.db.init_db import seed_catalogs
 
 # Ensure test mode
 object.__setattr__(settings, "ENVIRONMENT", "test")
+# Tests never reach real providers, whatever RUNTIME_MODE the developer's .env sets
+object.__setattr__(settings, "RUNTIME_MODE", "mock")
+for _override in ("STT_PROVIDER_OVERRIDE", "TTS_PROVIDER_OVERRIDE", "LLM_PROVIDER_OVERRIDE"):
+    object.__setattr__(settings, _override, "")  # each test agent uses its own providers
 # Billing tests enable wallet enforcement explicitly; other tests place calls freely
 object.__setattr__(settings, "BILLING_ENFORCED", False)
 from app.runtime.providers.registry import default_registry
@@ -22,6 +33,15 @@ default_registry.enable_mock_providers()
 TEST_DATABASE_URL = "sqlite:///./test_choranta_run.db"
 test_engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 30})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+
+
+@pytest.fixture(autouse=True)
+def empty_tts_cache():
+    """Speech audio cached by one test must not replace synthesis in the next."""
+    from app.runtime.telephony import tts_cache
+    tts_cache.clear()
+    yield
+    tts_cache.clear()
 
 
 
@@ -56,11 +76,14 @@ def setup_test_db():
     except Exception:
         pass
     test_engine.dispose()
-    if os.path.exists("./test_choranta.db"):
-        try:
-            os.remove("./test_choranta.db")
-        except Exception:
-            pass
+    from app.db.session import engine as startup_engine
+    startup_engine.dispose()  # release the file so it can be deleted on Windows
+    for leftover in ("./test_choranta.db", STARTUP_DATABASE_FILE):
+        if os.path.exists(leftover):
+            try:
+                os.remove(leftover)
+            except Exception:
+                pass
 
 
 

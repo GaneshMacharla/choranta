@@ -285,8 +285,11 @@ def active_test_session(db):
     return runtime_session
 
 
-def test_websocket_barge_in_and_latency_instrumentation(client, auth_headers, active_test_session, db):
+@pytest.mark.timeout(60)  # a missing server message must fail the test, not hang the suite
+def test_websocket_barge_in_and_latency_instrumentation(client, auth_headers, active_test_session, db, monkeypatch):
     """Verifies WebSocket real-time audio turn, barge-in cancellation, and latency metrics."""
+    # Partial transcripts only come from streaming STT, which is off by default
+    monkeypatch.setattr(settings, "CARTESIA_ENABLE_STREAMING_STT", True, raising=False)
     session_id = active_test_session.id
     token = auth_headers["Authorization"].split(" ")[1]
     ws_url = f"/ws/runtime/sessions/{session_id}/audio?token={token}"
@@ -307,10 +310,12 @@ def test_websocket_barge_in_and_latency_instrumentation(client, auth_headers, ac
         # 1. Start conversational turn
         ws.send_json({"type": "start"})
 
-        # Send speech audio frame with voice energy
+        # Send speech: the server needs 3 consecutive voiced frames before it treats input as speech
+        # (filters mic noise and echo); 5 while the assistant talks would be a barge-in
         import struct
         loud_chunk = struct.pack("<800h", *([1500] * 800))  # 50ms at 16kHz
-        ws.send_bytes(loud_chunk)
+        for _ in range(4):
+            ws.send_bytes(loud_chunk)
 
         # Receive partial transcript from streaming STT
         partial_msg = None

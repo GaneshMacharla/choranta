@@ -1632,7 +1632,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
                   }`}
                 >
                   <Radio className="h-3 w-3 inline mr-1" />
-                  Live Voice (Cartesia + Gemini)
+                  Live Voice (Sarvam)
                 </button>
                 <button
                   onClick={() => {
@@ -1811,7 +1811,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
                                 }`}
                               >
                                 <div className="text-[10px] text-slate-500 mb-0.5 flex items-center gap-1">
-                                  <span>{msg.sender === 'caller' ? 'Caller' : 'AI Employee (Cartesia)'}</span>
+                                  <span>{msg.sender === 'caller' ? 'Caller' : 'AI Employee'}</span>
                                   <span>{msg.time}</span>
                                   {msg.interrupted && (
                                     <span className="text-rose-400 font-medium">[Interrupted]</span>
@@ -1884,7 +1884,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               ) : activeTab === 'stream' ? (
                 /* REALTIME VOICE WEBSOCKET STREAMING CONSOLE */
                 <Card
-                  title="Realtime Voice Stream (Cartesia + Gemini)"
+                  title="Realtime Voice Stream (Sarvam)"
                   subtitle="PCM 16-bit 16kHz Full-Duplex Audio Transport"
                 >
                   <div className="space-y-4 text-xs">
@@ -2023,7 +2023,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
                                 >
                                   <div className="flex items-center justify-between gap-4 text-[10px] text-slate-400 mb-1">
                                     <span className="font-semibold uppercase">
-                                      {msg.sender === 'caller' ? 'Caller (Browser)' : 'AI Employee (Cartesia)'}
+                                      {msg.sender === 'caller' ? 'Caller (Browser)' : 'AI Employee'}
                                     </span>
                                     <span>{msg.time}</span>
                                   </div>
@@ -2232,15 +2232,15 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
                 <div className="space-y-2 text-[11px]">
                   <div className="flex items-center justify-between p-2 rounded bg-[#06141a] border border-[#143c49]">
                     <span className="text-slate-400">STT Provider:</span>
-                    <span className="font-mono font-semibold text-purple-400">Cartesia (Ink-2)</span>
+                    <span className="font-mono font-semibold text-purple-400">Sarvam (Saaras v4)</span>
                   </div>
                   <div className="flex items-center justify-between p-2 rounded bg-[#06141a] border border-[#143c49]">
                     <span className="text-slate-400">LLM Provider:</span>
-                    <span className="font-mono font-semibold text-[#00df8f]">Gemini 3.8 Flash</span>
+                    <span className="font-mono font-semibold text-[#00df8f]">Sarvam (105B)</span>
                   </div>
                   <div className="flex items-center justify-between p-2 rounded bg-[#0c0e14] border border-[#1b1f2d]">
                     <span className="text-slate-400">TTS Provider:</span>
-                    <span className="font-mono font-semibold text-emerald-400">Cartesia (Sonic-2)</span>
+                    <span className="font-mono font-semibold text-emerald-400">Sarvam (Bulbul v3)</span>
                   </div>
                   <div className="flex items-center justify-between p-2 rounded bg-[#0c0e14] border border-[#1b1f2d]">
                     <span className="text-slate-400">Audio Protocol:</span>

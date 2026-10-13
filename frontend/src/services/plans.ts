@@ -8,15 +8,15 @@ export interface Plan {
   monthly_price_with_gst_inr: number;
   /** Credits granted each period (1 credit = ₹1); they expire when the period ends */
   monthly_credits: number;
-  /** Platform rate: credits one billed call minute costs */
-  credits_per_minute: number;
+  /** Average credits a call minute has cost recently (calls cost real cost + profit, so this varies) */
+  avg_credits_per_minute: number;
   approx_minutes: number;
   max_concurrent_calls: number | null;
   is_active: boolean;
   sort_order: number;
 }
 
-export type PlanInput = Omit<Plan, 'id' | 'monthly_price_with_gst_inr' | 'credits_per_minute' | 'approx_minutes'>;
+export type PlanInput = Omit<Plan, 'id' | 'monthly_price_with_gst_inr' | 'avg_credits_per_minute' | 'approx_minutes'>;
 
 export interface Subscription {
   plan: Plan | null;
@@ -31,7 +31,7 @@ export interface Subscription {
   monthly_credits: number;
   credits_used: number;
   credits_remaining: number;
-  credits_per_minute: number;
+  avg_credits_per_minute: number;
   cancel_at_period_end: boolean;
   renewed_ahead: boolean;
 }
@@ -49,6 +49,8 @@ export interface CallUsage {
 }
 
 export interface PaymentOrder {
+  /** Testing mode (SIMULATED_PAYMENTS): confirm in-app instead of opening Razorpay */
+  simulated?: boolean;
   order_id: string;
   razorpay_order_id: string;
   amount_paise: number;

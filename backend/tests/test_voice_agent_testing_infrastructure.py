@@ -394,7 +394,10 @@ def test_13_templates_api_and_metrics_summary(client, operator_headers, db):
     tpl_res = client.get("/api/test-scenarios/templates", headers=operator_headers)
     assert tpl_res.status_code == 200
     templates = tpl_res.json()
-    assert len(templates) == 10
+    # 10 general templates plus industry packs (e.g. real estate)
+    ids = {t["template_id"] for t in templates}
+    assert {f"tpl_{n:02d}" for n in range(1, 11)} <= {i[:6] for i in ids}
+    assert any(i.startswith("tpl_re_") for i in ids)
 
     # Instantiate template 2 (Appointment Booking)
     inst_res = client.post(

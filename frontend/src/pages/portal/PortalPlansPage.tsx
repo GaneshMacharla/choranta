@@ -6,6 +6,7 @@ import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { PlanGrid } from '../../components/billing/PlanGrid';
 import { payWithRazorpay } from '../../components/billing/razorpayCheckout';
+import { portalAgentRequestsService } from '../../services/agentRequests';
 import { portalService } from '../../services/portal';
 import { Plan, plansService } from '../../services/plans';
 
@@ -58,7 +59,11 @@ export const PortalPlansPage: React.FC = () => {
     setError(null);
     try {
       const order = await portalService.createOrder({ purpose: 'SUBSCRIPTION', plan_id: plan.id });
-      if (await payWithRazorpay(order)) navigate('/portal', { replace: true });
+      if (await payWithRazorpay(order)) {
+        // No AI employee yet: take them straight to creating one
+        const me = await portalAgentRequestsService.me().catch(() => null);
+        navigate(me && !me.has_ai_employee ? '/portal/employees?welcome=plan' : '/portal', { replace: true });
+      }
     } catch (err: any) {
       setError(err.message || 'Payment could not be completed.');
     } finally {
@@ -87,6 +92,11 @@ export const PortalPlansPage: React.FC = () => {
       {error && (
         <div className="flex items-start gap-2 rounded-lg border border-rose-800/60 bg-rose-950/40 p-3 text-xs text-rose-200">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
+        </div>
+      )}
+      {info.simulated_payments && (
+        <div className="flex items-start gap-2 rounded-lg border border-sky-700/60 bg-sky-950/30 p-3 text-xs text-sky-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> Test mode: payments are simulated. No money is charged.
         </div>
       )}
       {!info.online_payments && (

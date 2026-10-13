@@ -96,7 +96,26 @@ export async function downloadAuthed(path: string, filename: string): Promise<vo
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+export interface PortalNotification {
+  id: string;
+  kind: string;
+  level: 'info' | 'success' | 'warning';
+  title: string;
+  body: string | null;
+  link: string | null;
+  read: boolean;
+  created_at: string;
+}
+
+export interface NotificationList {
+  unread: number;
+  items: PortalNotification[];
+}
+
 export const portalService = {
+  notifications: () => request<NotificationList>('/portal/notifications'),
+  readAllNotifications: () => request<NotificationList>('/portal/notifications/read', { method: 'POST' }),
+  readNotification: (id: string) => request<NotificationList>(`/portal/notifications/${id}/read`, { method: 'POST' }),
   summary: () => request<PortalSummary>('/portal/summary'),
   calls: (limit = 100) => request<Call[]>(`/portal/calls?limit=${limit}`),
   call: (id: string) => request<CallDetail>(`/portal/calls/${id}`),
@@ -116,6 +135,7 @@ export const portalService = {
     request<{
       subscription: Subscription | null;
       online_payments: boolean;
+      simulated_payments?: boolean;
       grace_days: number;
       min_topup_inr: number;
       gst_rate_percent: number;
@@ -133,6 +153,11 @@ export const portalService = {
   agents: () => request<Array<{ id: string; name: string; role: string; published: boolean }>>('/portal/agents'),
   createOrder: (body: { purpose: 'SUBSCRIPTION' | 'WALLET_TOPUP'; plan_id?: string; amount_inr?: number }) =>
     request<PaymentOrder>('/portal/payments/orders', { method: 'POST', body: JSON.stringify(body) }),
+  simulatePayment: (orderId: string) =>
+    request<{ status: string; invoice_id: string | null; subscription: Subscription | null }>(
+      `/portal/payments/orders/${orderId}/simulate`,
+      { method: 'POST' }
+    ),
   verifyPayment: (orderId: string, razorpay_payment_id: string, razorpay_signature: string) =>
     request<{ status: string; invoice_id: string | null; subscription: Subscription | null }>(
       `/portal/payments/orders/${orderId}/verify`,

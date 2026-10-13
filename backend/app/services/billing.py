@@ -3,7 +3,7 @@ Prepaid credits.
 
 1 credit = Rs 1 (pre-GST). Clients buy credits by recharging (online, bank transfer or UPI); the payment
 issues a GST tax invoice (tax on the advance) and adds the taxable value to the wallet as bought credits,
-which never expire. Each completed call costs billed minutes x credits per minute, so tax is never
+which never expire. As soon as a call ends it costs its real cost + the admin's profit %, so tax is never
 charged twice.
 
 Clients on a monthly plan (services/subscriptions.py) use the period's plan credits first; only the rest
@@ -23,8 +23,10 @@ from app.core.exceptions import ValidationException
 from app.models.billing import ClientBillingProfile, ClientWallet, Invoice, WalletTransaction
 from app.models.call import Call
 from app.models.client import Client
+from app.models.runtime_session import RuntimeSession
 from app.models.subscription import CallUsage, Plan
-from app.services import subscriptions
+from app.services import notifications, subscriptions
+from app.services.call_costing import estimate_call_cost
 from app.services.pricing import get_pricing
 
 logger = logging.getLogger("choranta.services.billing")
@@ -194,6 +196,11 @@ def record_payment(
     db.add(txn)
     db.flush()
     invoice.transaction_id = txn.id
+    notifications.notify(
+        db, client_id, "CREDITS_ADDED", f"{notifications.credits_text(split['taxable_inr'])} credits added",
+        f"You now have {notifications.credits_text(wallet.balance_inr)} bought credits. They never expire.",
+        link="/portal/billing", level="success",
+    )
     if commit:
         db.commit()
     logger.info(f"Recorded payment of Rs {amount_received} for {client_id}: invoice {invoice.number}, wallet {wallet.balance_inr}")
@@ -224,6 +231,17 @@ def pay_for_plan(
         db, client_id, amount_received if amount_received is not None else plan_price_with_gst(plan),
         reference, admin_id, description=description,
     )
+    credits = notifications.credits_text(subscriptions.plan_credits(plan))
+    if sub.renewed_ahead:
+        notifications.notify(db, client_id, "PLAN_RENEWED", f"{plan.name} plan renewed",
+                             f"Next month is paid for: {label}.", link="/portal/billing", level="success")
+    elif notifications.has_ai_employee(db, client_id):
+        notifications.notify(db, client_id, "PLAN_ACTIVE", f"Your {plan.name} plan is active",
+                             f"{credits} credits are ready for this month.", link="/portal/billing", level="success")
+    else:
+        notifications.notify(db, client_id, "PLAN_ACTIVE", f"Your {plan.name} plan is active",
+                             f"{credits} credits are ready. Next step: create your first AI employee.",
+                             link="/portal/employees", level="success")
     if commit:
         db.commit()
     logger.info(f"Recorded {plan.name} plan payment for {client_id}: invoice {invoice.number}")
@@ -248,10 +266,18 @@ def adjust_wallet(db: Session, client_id: str, amount: float, note: str, admin_i
 
 
 def call_charge(db: Session, call: Call) -> Optional[float]:
-    """Credits (1 credit = Rs 1, pre-GST) a finished call costs, or None if it isn't billable."""
+    """
+    Credits (1 credit = Rs 1, pre-GST) a finished call costs: its real cost (carrier minutes, speech-to-text,
+    text-to-speech, LLM tokens, infra) plus the admin's profit %. None if it isn't billable.
+    """
     if (call.metadata_ or {}).get("is_test") or call.status != "COMPLETED" or not call.duration_seconds:
         return None
-    amount = _money(billed_minutes(call.duration_seconds) * get_pricing(db).credits_per_minute)
+    usage: Dict[str, Any] = {}
+    if call.runtime_session_id:
+        session_obj = db.get(RuntimeSession, call.runtime_session_id)
+        if session_obj and isinstance(session_obj.usage_json, dict):
+            usage = session_obj.usage_json
+    amount = _money(estimate_call_cost(call.duration_seconds, usage, get_pricing(db))["charge_total"])
     return amount if amount > 0 else None
 
 
@@ -279,8 +305,8 @@ def _debit(db: Session, call: Call, amount: float) -> WalletTransaction:
 
 def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     """
-    Bills a completed call once: billed minutes x credits per minute. Plan credits are used first, then
-    bought credits (the wallet). Returns the wallet debit, if there was one.
+    Bills a completed call once, right after it ends: real cost + profit %, in credits. Plan credits are
+    used first, then bought credits (the wallet). Returns the wallet debit, if there was one.
     """
     if not call.client_id:
         return None
@@ -304,10 +330,14 @@ def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     on_plan = bool(sub and plan and subscriptions.is_usable(sub))
     from_plan = _money(min(credits, subscriptions.remaining_credits(sub, plan))) if on_plan else 0.0
     from_wallet = _money(credits - from_plan)
+    plan_left_before = subscriptions.remaining_credits(sub, plan) if on_plan else 0.0
     if on_plan:
         sub.credits_used = round(float(sub.credits_used or 0.0) + from_plan, 4)
         sub.minutes_used = round(float(sub.minutes_used or 0.0) + minutes, 4)
+    wallet_before = get_wallet(db, call.client_id).balance_inr
     txn = _debit(db, call, from_wallet) if from_wallet > 0 else None
+    _notify_low_credits(db, call.client_id, plan, plan_left_before, plan_left_before - from_plan if on_plan else 0.0,
+                        wallet_before, wallet_before - from_wallet)
     plan_minutes = round(from_plan / rate, 4) if rate else 0.0
     db.add(CallUsage(
         call_id=call.id, client_id=call.client_id, plan_id=plan.id if on_plan else None, billed_minutes=minutes,
@@ -317,6 +347,34 @@ def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     db.commit()
     logger.info(f"Charged call {call.id}: {credits} credits ({from_plan} plan, {from_wallet} bought)")
     return txn
+
+
+def _notify_low_credits(db: Session, client_id: str, plan: Optional[Plan], plan_before: float, plan_after: float,
+                        wallet_before: float, wallet_after: float) -> None:
+    """Tells the client once, at the moment a balance runs low or out (not on every call after)."""
+    wallet = get_wallet(db, client_id)
+    threshold = wallet.low_balance_threshold_inr
+    left = max(0.0, plan_after) + max(0.0, wallet_after)
+    if plan and plan_before > 0 >= plan_after:
+        if wallet_after > 0:
+            notifications.notify(db, client_id, "PLAN_CREDITS_USED", "This month's plan credits are used up",
+                                 f"Calls now use your bought credits ({notifications.credits_text(wallet_after)} left).",
+                                 link="/portal/billing", level="warning")
+        else:
+            notifications.notify(db, client_id, "CREDITS_OUT", "You're out of credits",
+                                 "Your AI employee can't take calls until you buy credits or your plan renews.",
+                                 link="/portal/billing", level="warning")
+        return
+    if plan_after > 0:
+        return  # plan credits still cover calls
+    if wallet_before > 0 >= wallet_after:
+        notifications.notify(db, client_id, "CREDITS_OUT", "You're out of credits",
+                             "Your AI employee can't take calls until you buy credits.",
+                             link="/portal/billing", level="warning")
+    elif wallet_before > threshold >= wallet_after:
+        notifications.notify(db, client_id, "CREDITS_LOW", "Credits are running low",
+                             f"Only {notifications.credits_text(left)} credits left. Buy more so calls aren't interrupted.",
+                             link="/portal/billing", level="warning")
 
 
 def amount_in_words(amount: float) -> str:

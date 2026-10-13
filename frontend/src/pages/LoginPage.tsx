@@ -116,9 +116,7 @@ export const LoginPage: React.FC = () => {
     <div className="flex min-h-screen items-center justify-center bg-[#040d12] px-4 py-12 select-none">
       <div className="w-full max-w-sm space-y-6">
         <div className="text-center space-y-2">
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-[#00df8f] shadow-lg shadow-[#00df8f]/20 text-[#022016] font-bold text-sm">
-            CH
-          </div>
+          <img src="/logo.png" alt="Choranta" className="mx-auto h-14 w-14 object-contain" />
           <h1 className="text-xl font-bold tracking-tight text-slate-100">CHORANTA</h1>
           <p className="text-xs text-slate-400">AI Voice Employees &bull; Studio &amp; Client Portal</p>
         </div>

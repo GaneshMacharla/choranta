@@ -62,7 +62,9 @@ import {
   VersionComparison,
   EMPTY_CALL_LIMITS,
 } from '../types';
-import { VoicePickerModal } from '../components/voice/VoicePickerModal';
+// Cartesia voice picker is kept in components/voice/VoicePickerModal.tsx but not used: voices come from Sarvam
+// import { VoicePickerModal } from '../components/voice/VoicePickerModal';
+import { SarvamVoicePickerModal as VoicePickerModal } from '../components/voice/SarvamVoicePickerModal';
 import { AgentTestingWorkbench } from '../components/testing/AgentTestingWorkbench';
 import { CallLimitsEditor } from '../components/agents/CallLimitsEditor';
 import { Card } from '../components/common/Card';
@@ -326,7 +328,8 @@ export const AgentDetailPage: React.FC = () => {
         catalogsService.listKnowledge(),
         catalogsService.listTools(),
         catalogsService.listIntegrations(),
-        catalogsService.listVoices().catch(() => []),
+        // Cartesia: catalogsService.listVoices() — voices now come from Sarvam
+        catalogsService.listSarvamVoices().catch(() => []),
       ]);
 
       setAgent(agentData);
@@ -806,7 +809,7 @@ export const AgentDetailPage: React.FC = () => {
               <div>
                 <span className="text-slate-500 block">TTS Voice</span>
                 <span className="font-semibold text-slate-200">
-                  Cartesia &bull; {voicesList.find((v) => v.id === config.voice.voice_id)?.name || (config.voice.voice_id ? config.voice.voice_id.substring(0, 8) + '...' : 'Default (Greg)')}
+                  Sarvam &bull; {voicesList.find((v) => v.id === config.voice.voice_id)?.name || (config.voice.voice_id ? config.voice.voice_id.substring(0, 12) : 'Default (Shubh)')}
                 </span>
               </div>
               <div>
@@ -1643,7 +1646,7 @@ export const AgentDetailPage: React.FC = () => {
                     },
                   }));
                 }}
-                helperText="Primary locale for conversation prompts, Cartesia STT recognition, and TTS synthesis."
+                helperText="Primary locale for conversation prompts, speech recognition and voice synthesis."
               />
             </div>
 
@@ -2161,7 +2164,7 @@ export const AgentDetailPage: React.FC = () => {
             {/* CURRENT SELECTED VOICE SHOWCASE CARD */}
             <Card
               title="Acoustic Voice Synthesis"
-              subtitle="Configure ultra-low latency Cartesia TTS neural voices for this AI Employee (India Focused)"
+              subtitle="Choose the Sarvam voice this AI Employee speaks with (made for Indian languages)"
             >
               <div className="space-y-5">
                 {/* Active Voice Spotlight Banner */}
@@ -2211,13 +2214,13 @@ export const AgentDetailPage: React.FC = () => {
 
                         <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
                           {activeVoice?.description ||
-                            'Cartesia Sonic-2 ultra-low-latency neural vocal model streaming raw 16kHz audio.'}
+                            'Sarvam Bulbul v3 voice, made for Indian languages.'}
                         </p>
 
                         <div className="pt-1 flex items-center gap-2 text-[11px] font-mono text-slate-400">
-                          <span className="text-slate-500">VOICE UUID:</span>
+                          <span className="text-slate-500">VOICE ID:</span>
                           <span className="text-[#00df8f] bg-[#00df8f]/10 px-2 py-0.5 rounded border border-[#00df8f]/20">
-                            {config.voice.voice_id || (activeVoice?.id || '4459a9a5-69d6-4680-b970-e13dc51845b6')}
+                            {config.voice.voice_id || activeVoice?.id || 'shubh'}
                           </span>
                         </div>
                       </div>
@@ -2259,7 +2262,7 @@ export const AgentDetailPage: React.FC = () => {
                         className="font-semibold shadow-md shadow-emerald-950/40"
                       >
                         <Radio className="h-3.5 w-3.5 mr-1.5" />
-                        Browse Cartesia Voices ({voicesList.length || '100+'})
+                        Browse Sarvam Voices ({voicesList.length || 37})
                       </Button>
                     </div>
                   </div>
@@ -2307,7 +2310,7 @@ export const AgentDetailPage: React.FC = () => {
                         voice: { ...prev.voice, language: e.target.value },
                       }))
                     }
-                    helperText="Locale code sent to Cartesia TTS synthesis engine."
+                    helperText="Language code sent to Sarvam voice synthesis."
                   />
 
                   <Select
@@ -2945,7 +2948,7 @@ export const AgentDetailPage: React.FC = () => {
         </form>
       </Modal>
 
-      {/* Cartesia Voice Picker Catalog Modal */}
+      {/* Voice picker (Sarvam voices) */}
       <VoicePickerModal
         isOpen={isVoicePickerOpen}
         onClose={() => setIsVoicePickerOpen(false)}
@@ -2955,10 +2958,11 @@ export const AgentDetailPage: React.FC = () => {
             ...prev,
             voice: {
               ...prev.voice,
-              provider: 'cartesia',
+              provider: voice.provider || 'sarvam',
               voice_id: voice.id,
-              language: voice.language || prev.voice.language || 'en',
+              language: voice.language || prev.voice.language || 'en-IN',
             },
+            providers: { ...prev.providers, tts: voice.provider || 'sarvam' },
           }));
         }}
       />

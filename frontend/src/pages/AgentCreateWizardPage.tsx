@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   ArrowRight,
@@ -11,13 +11,17 @@ import {
   Sparkles,
   Volume2,
   Trash2,
+  LayoutTemplate,
+  PenLine,
 } from 'lucide-react';
 import { agentsService } from '../services/agents';
 import { clientsService } from '../services/clients';
 import { catalogsService } from '../services/catalogs';
 import { configurationService } from '../services/configuration';
+import { AgentRequest, agentRequestsService } from '../services/agentRequests';
 import {
   AgentConfigurationData,
+  AgentTemplate,
   CallDirection,
   CartesiaVoice,
   Client,
@@ -28,7 +32,9 @@ import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Input } from '../components/common/Input';
 import { Select } from '../components/common/Select';
-import { VoicePickerModal } from '../components/voice/VoicePickerModal';
+// Cartesia voice picker is kept in components/voice/VoicePickerModal.tsx but not used: voices come from Sarvam
+// import { VoicePickerModal } from '../components/voice/VoicePickerModal';
+import { SarvamVoicePickerModal as VoicePickerModal } from '../components/voice/SarvamVoicePickerModal';
 import { StringListEditor } from '../components/agents/StringListEditor';
 import { CallLimitsEditor, callLimitsValid } from '../components/agents/CallLimitsEditor';
 import {
@@ -87,8 +93,60 @@ interface BasicsForm {
   business_notes: string;
 }
 
+/** A client's request (name + Sarvam voice) applied to a generated draft. */
+const withRequestedVoice = (config: AgentConfigurationData, request: AgentRequest | null): AgentConfigurationData =>
+  request?.voice_id
+    ? {
+        ...config,
+        voice: { ...config.voice, provider: 'sarvam', voice_id: request.voice_id },
+        providers: { ...config.providers, tts: 'sarvam' },
+      }
+    : config;
+
+// Client's plain-language jobs -> wizard role and call direction
+const TASK_ROLES: Record<string, string> = {
+  answer_calls: 'Receptionist',
+  answer_questions: 'Customer Support Agent',
+  book_appointments: 'Appointment Booking Assistant',
+  call_leads: 'Lead Qualification Specialist',
+  send_reminders: 'Payment Reminder Agent',
+  collect_feedback: 'Feedback & Survey Caller',
+};
+const INBOUND_TASKS = ['answer_calls', 'answer_questions'];
+const OUTBOUND_TASKS = ['call_leads', 'send_reminders', 'collect_feedback'];
+
+const directionFor = (tasks: string[]): CallDirection => {
+  const inbound = tasks.some((t) => INBOUND_TASKS.includes(t));
+  const outbound = tasks.some((t) => OUTBOUND_TASKS.includes(t));
+  return inbound && outbound ? 'both' : outbound ? 'outbound' : 'inbound';
+};
+
+/**
+ * A template's ready-made configuration, made specific to this employee: its name, the client's company,
+ * and the template's tools. {{company_name}} in greetings is filled per call, so it stays.
+ */
+const configFromTemplate = (tpl: AgentTemplate, employeeName: string, companyName: string): AgentConfigurationData => {
+  const config = JSON.parse(JSON.stringify(tpl.default_config || {})) as AgentConfigurationData;
+  const company = companyName || config.business_context?.business_name || '';
+  config.identity = { ...config.identity, name: employeeName || config.identity?.name, organization: company };
+  config.business_context = { ...config.business_context, business_name: company };
+  config.variables = {
+    ...config.variables,
+    inputs: (config.variables?.inputs || []).map((v: any) =>
+      v.name === 'company_name' && company ? { ...v, default_value: company } : v
+    ),
+  };
+  return config;
+};
+
 export const AgentCreateWizardPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestId = searchParams.get('request');
+  const [fromRequest, setFromRequest] = useState<AgentRequest | null>(null);
+  const [templates, setTemplates] = useState<AgentTemplate[]>([]);
+  const [templateId, setTemplateId] = useState('');
+  const [appliedTemplateKey, setAppliedTemplateKey] = useState('');
   const [step, setStep] = useState(0);
   const [clients, setClients] = useState<Client[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeSource[]>([]);
@@ -120,9 +178,69 @@ export const AgentCreateWizardPage: React.FC = () => {
     clientsService.list({ limit: 100 }).then((res) => setClients(res.items)).catch(() => setClients([]));
     catalogsService.listKnowledge().then(setKnowledge).catch(() => setKnowledge([]));
     catalogsService.listTools().then(setTools).catch(() => setTools([]));
+    catalogsService.listTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, []);
 
+  // Opened from Employee Requests: start with the client, name and voice the client chose
+  useEffect(() => {
+    if (!requestId) return;
+    agentRequestsService
+      .get(requestId)
+      .then((r) => {
+        setFromRequest(r);
+        const [primary, ...others] = r.languages;
+        setForm((f) => ({
+          ...f,
+          client_id: r.client_id,
+          name: r.name,
+          role: (r.tasks[0] && TASK_ROLES[r.tasks[0]]) || f.role,
+          call_direction: r.tasks.length ? directionFor(r.tasks) : f.call_direction,
+          primary_language: primary || f.primary_language,
+          supported_languages: others.length ? others : f.supported_languages,
+          description:
+            f.description ||
+            [
+              r.company_name
+                ? `AI employee for ${r.company_name}${r.business_type_label ? `, a ${r.business_type_label.toLowerCase()} business` : ''}.`
+                : '',
+              r.task_labels.length ? `${r.name} should: ${r.task_labels.join('; ')}.` : '',
+              r.language_labels.length ? `Callers speak ${r.language_labels.join(', ')}.` : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          business_notes: f.business_notes || r.notes || '',
+        }));
+        if (r.voice_name) setVoiceName(r.voice_name);
+      })
+      .catch((err) => setError(`Could not load the request: ${err?.message || 'unknown error'}`));
+  }, [requestId]);
+
   const selectedClient = clients.find((c) => c.id === form.client_id);
+  const businessType = fromRequest?.business_type || selectedClient?.business_type || '';
+  const isRecommended = (t: AgentTemplate) => !!businessType && (t.business_types || []).includes(businessType);
+  const sortedTemplates = [...templates].sort((a, b) => Number(isRecommended(b)) - Number(isRecommended(a)));
+  const selectedTemplate = templates.find((t) => t.id === templateId) || null;
+
+  const chooseTemplate = (tpl: AgentTemplate | null) => {
+    setTemplateId(tpl?.id || '');
+    if (!tpl) return;
+    const role = tpl.role || form.role;
+    setIsCustomRole(!ROLE_OPTIONS.some((o) => o.value === role));
+    setForm((f) => ({
+      ...f,
+      role,
+      call_direction: tpl.call_direction || f.call_direction,
+      description: f.description || tpl.description,
+    }));
+  };
+
+  // Opened from a client request: pre-pick the template that fits their business
+  useEffect(() => {
+    if (!fromRequest || templateId || appliedTemplateKey || templates.length === 0) return;
+    const match = templates.find(isRecommended);
+    if (match) chooseTemplate(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromRequest, templates]);
 
   const updateConfig = (fn: (prev: AgentConfigurationData) => AgentConfigurationData) =>
     setConfig((prev) => (prev ? fn(prev) : prev));
@@ -158,7 +276,7 @@ export const AgentCreateWizardPage: React.FC = () => {
         ...form,
         supported_languages: form.supported_languages.filter((l) => l !== form.primary_language),
       });
-      setConfig(res.configuration);
+      setConfig(withRequestedVoice(res.configuration, fromRequest));
       setDraftNotice(res.draft_source === 'fallback' ? res.message || 'A starter draft was created.' : null);
       setStep(STEPS.findIndex((s) => s.id === 'review'));
     } catch (err: any) {
@@ -187,6 +305,7 @@ export const AgentCreateWizardPage: React.FC = () => {
       await configurationService.updateConfiguration(agentId, config);
       for (const id of knowledgeIds) await catalogsService.attachKnowledge(agentId, id);
       for (const id of toolIds) await catalogsService.attachTool(agentId, id);
+      if (fromRequest) await agentRequestsService.complete(fromRequest.id, agentId);
       navigate(`/agents/${agentId}?tab=tests`);
     } catch (err: any) {
       setError(
@@ -202,7 +321,37 @@ export const AgentCreateWizardPage: React.FC = () => {
   const next = () => {
     if (stepError) return;
     setError(null);
+    if (STEPS[step].id === 'basics' && selectedTemplate) {
+      // Template: its ready-made setup becomes the draft (rebuilt only if the template, name or client changed)
+      const key = `${selectedTemplate.id}|${form.name.trim()}|${form.client_id}`;
+      if (!config || key !== appliedTemplateKey) {
+        const draft = configFromTemplate(selectedTemplate, form.name.trim(), selectedClient?.name || fromRequest?.company_name || '');
+        if (fromRequest?.languages.length) {
+          // The client picked these; the first is the main language
+          draft.languages = { ...draft.languages, primary: fromRequest.languages[0], supported: fromRequest.languages };
+          draft.voice = { ...draft.voice, language: fromRequest.languages[0] };
+        }
+        setConfig(withRequestedVoice(draft, fromRequest));
+        setToolIds(draft.tools || []);
+        setKnowledgeIds((draft.knowledge_sources || []).filter((id) => knowledge.some((k) => k.id === id)));
+        if (!fromRequest?.voice_name && draft.voice?.voice_id) {
+          const v = draft.voice.voice_id;
+          setVoiceName(v.charAt(0).toUpperCase() + v.slice(1));
+        }
+        setDraftNotice(`Started from the "${selectedTemplate.name}" template. Review and adjust anything below.`);
+        setAppliedTemplateKey(key);
+      }
+      setStep(STEPS.findIndex((s) => s.id === 'review'));
+      return;
+    }
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
+  };
+
+  const back = () => {
+    if (step === 0) return navigate('/agents');
+    // Template drafts skip Describe, so Back from Review returns to Basics
+    if (STEPS[step].id === 'review' && selectedTemplate) return setStep(0);
+    setStep(step - 1);
   };
 
   const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
@@ -211,11 +360,65 @@ export const AgentCreateWizardPage: React.FC = () => {
 
   const renderBasics = () => (
     <div className="space-y-5">
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-slate-300">Start from</span>
+          <span className="text-[11px] text-slate-500">
+            {selectedTemplate ? 'Ready-made setup: you go straight to reviewing it.' : 'Describe the job and AI drafts the setup.'}
+          </span>
+        </div>
+        <div className="grid max-h-72 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3">
+          <button
+            type="button"
+            onClick={() => chooseTemplate(null)}
+            className={`flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors ${
+              !templateId ? 'border-[#00df8f] bg-[#00df8f]/10' : 'border-[#232736] hover:border-slate-500'
+            }`}
+          >
+            <PenLine className={`mt-0.5 h-4 w-4 shrink-0 ${!templateId ? 'text-[#00df8f]' : 'text-slate-400'}`} />
+            <span>
+              <span className="block text-xs font-semibold text-slate-100">Start from scratch</span>
+              <span className="block text-[11px] text-slate-400">Describe what it should do; AI drafts the instructions.</span>
+            </span>
+          </button>
+          {sortedTemplates.map((t) => {
+            const on = templateId === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => chooseTemplate(t)}
+                className={`flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors ${
+                  on ? 'border-[#00df8f] bg-[#00df8f]/10' : 'border-[#232736] hover:border-slate-500'
+                }`}
+              >
+                <LayoutTemplate className={`mt-0.5 h-4 w-4 shrink-0 ${on ? 'text-[#00df8f]' : 'text-slate-400'}`} />
+                <span className="min-w-0">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-semibold text-slate-100">{t.name}</span>
+                    {isRecommended(t) && (
+                      <span className="rounded bg-[#00df8f]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#00df8f]">
+                        Recommended
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-slate-400 line-clamp-2">{t.description}</span>
+                  <span className="mt-1 block text-[10px] text-slate-500">
+                    {t.category}
+                    {t.call_direction ? ` · ${t.call_direction === 'both' ? 'inbound & outbound' : t.call_direction}` : ''}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Select
           label="Client business"
           placeholder="Select a client"
-          options={clients.map((c) => ({ value: c.id, label: c.name }))}
+          options={clients.map((c) => ({ value: c.id, label: c.client_code ? `${c.name} · ${c.client_code}` : c.name }))}
           value={form.client_id}
           onChange={(e) => setForm({ ...form, client_id: e.target.value })}
         />
@@ -615,6 +818,16 @@ export const AgentCreateWizardPage: React.FC = () => {
         </div>
       </div>
 
+      {fromRequest && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-[#0a4d39] bg-[#052b20]/60 px-3 py-2 text-xs text-slate-200">
+          <Info className="h-3.5 w-3.5 text-[#00df8f]" />
+          Building <strong>{fromRequest.name}</strong> for {fromRequest.client_name}
+          <span className="font-mono text-[#00df8f]">{fromRequest.client_code}</span>
+          {fromRequest.voice_name ? ` · Sarvam voice ${fromRequest.voice_name}.` : ' · choose a voice in the Voice step.'}
+          The request is marked done when you create the employee.
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6">
         <ol className="flex lg:flex-col gap-1 overflow-x-auto">
           {STEPS.map((s, idx) => {
@@ -664,7 +877,7 @@ export const AgentCreateWizardPage: React.FC = () => {
               <Button
                 type="button"
                 variant="ghost"
-                onClick={() => (step === 0 ? navigate('/agents') : setStep(step - 1))}
+                onClick={back}
                 leftIcon={<ArrowLeft className="h-4 w-4" />}
               >
                 {step === 0 ? 'Cancel' : 'Back'}
@@ -700,10 +913,11 @@ export const AgentCreateWizardPage: React.FC = () => {
             ...p,
             voice: {
               ...p.voice,
-              provider: voice.provider || 'cartesia',
+              provider: voice.provider || 'sarvam',
               voice_id: voice.id,
-              language: voice.language || p.voice.language || 'en',
+              language: voice.language || p.voice.language || 'en-IN',
             },
+            providers: { ...p.providers, tts: voice.provider || 'sarvam' },
           }));
           setVoiceName(voice.name);
           setIsVoicePickerOpen(false);

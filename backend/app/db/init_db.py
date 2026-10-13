@@ -403,6 +403,10 @@ _ADDED_COLUMNS = [
     ("call_usage", "plan_credits", "FLOAT NOT NULL DEFAULT 0"),
     ("call_usage", "wallet_credits", "FLOAT NOT NULL DEFAULT 0"),
     ("pricing_settings", "credits_per_minute", "FLOAT"),
+    ("clients", "client_code", "VARCHAR(16)"),
+    ("agent_requests", "details", "TEXT"),
+    ("agent_requests", "company_name", "VARCHAR(255)"),
+    ("agent_requests", "business_type", "VARCHAR(32)"),
 ]
 
 
@@ -417,6 +421,20 @@ def _add_missing_columns() -> None:
                 added.add((table, column))
                 logger.info(f"Added column {table}.{column}")
         _migrate_to_credits(conn, added)
+        if "clients" in tables:
+            _assign_client_codes(conn)
+
+
+def _assign_client_codes(conn) -> None:
+    """Gives clients created before client codes existed one, in sign-up order."""
+    from app.models.client import next_client_code
+    rows = conn.execute(text("SELECT id FROM clients WHERE client_code IS NULL ORDER BY created_at, id")).fetchall()
+    for (client_id,) in rows:
+        conn.execute(text("UPDATE clients SET client_code = :code WHERE id = :id"),
+                     {"code": next_client_code(conn), "id": client_id})
+    if rows:
+        logger.info(f"Assigned client codes to {len(rows)} client(s)")
+    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_clients_client_code ON clients (client_code)"))
 
 
 def _migrate_to_credits(conn, added: set) -> None:

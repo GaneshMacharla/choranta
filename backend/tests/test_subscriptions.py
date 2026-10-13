@@ -54,25 +54,34 @@ def _subscribe(db: Session, client_id: str, plan: Plan):
 
 # ---------------------------------------------------------------- call charging
 
-def test_plan_credits_used_first_then_bought_credits(db: Session, telephony_setup, plan, company):
+def test_call_costs_real_cost_plus_profit_from_plan_then_bought_credits(db: Session, telephony_setup, plan, company):
+    from app.services.call_costing import estimate_call_cost
+    from app.services.pricing import get_pricing
     cid = telephony_setup["client"].id
     _subscribe(db, cid, plan)
     billing.record_payment(db, cid, 1180, None, None)  # 1000 bought credits
 
-    first = _completed_call(db, telephony_setup, duration=6 * 60)  # 6 min x 7 = 42 plan credits
-    assert billing.charge_call(db, first) is None
+    first = _completed_call(db, telephony_setup, duration=2 * 60)
+    credits = billing.call_charge(db, first)
+    from app.models.runtime_session import RuntimeSession
+    usage = db.get(RuntimeSession, first.runtime_session_id).usage_json if first.runtime_session_id else {}
+    assert credits == round(estimate_call_cost(first.duration_seconds, usage, get_pricing(db))["charge_total"], 2)
+    assert billing.charge_call(db, first) is None  # all from plan credits
     sub = subscriptions.get_subscription(db, cid)
-    assert (sub.credits_used, sub.minutes_used) == (42, 6)
+    assert sub.credits_used == pytest.approx(credits)
     assert billing.get_wallet(db, cid).balance_inr == 1000.0
 
-    second = _completed_call(db, telephony_setup, duration=5 * 60 + 10)  # 6 billed min = 42: 28 plan + 14 bought
+    # Leave 1 plan credit: the next call takes it, and the rest from bought credits
+    sub.credits_used = plan.monthly_credits - 1
+    db.commit()
+    second = _completed_call(db, telephony_setup, duration=5 * 60 + 10)
+    cost = billing.call_charge(db, second)
     txn = billing.charge_call(db, second)
-    assert txn.amount_inr == -14.0
+    assert txn.amount_inr == pytest.approx(-(cost - 1), abs=0.01)
     usage = db.query(CallUsage).filter(CallUsage.call_id == second.id).one()
-    assert (usage.plan_credits, usage.wallet_credits) == (28, 14)
-    assert (usage.included_minutes, usage.overage_minutes) == (4, 2)
-    assert subscriptions.get_subscription(db, cid).credits_used == 70
-    assert billing.get_wallet(db, cid).balance_inr == 986.0
+    assert usage.plan_credits == 1 and usage.wallet_credits == pytest.approx(cost - 1, abs=0.01)
+    assert subscriptions.get_subscription(db, cid).credits_used == plan.monthly_credits
+    assert billing.get_wallet(db, cid).balance_inr == pytest.approx(1000 - (cost - 1), abs=0.01)
 
     assert billing.charge_call(db, second) is None  # billed once
     assert db.query(CallUsage).filter(CallUsage.call_id == second.id).count() == 1
@@ -270,3 +279,50 @@ def test_minute_plans_migrate_to_credits(db: Session):
     db.refresh(rich)
     assert cheap.monthly_credits == 2999.0           # never fewer credits than the price paid
     assert rich.monthly_credits == 2500 * rate      # never fewer minutes than before
+
+
+# ---------------------------------------------------------------- simulated payments (testing)
+
+@pytest.fixture
+def simulated(monkeypatch):
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_ID", "", raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_SECRET", "", raising=False)
+    monkeypatch.setattr(settings, "SIMULATED_PAYMENTS", True, raising=False)
+    monkeypatch.setattr(razorpay_gateway, "_create_razorpay_order",
+                        lambda *a, **k: pytest.fail("Razorpay must not be called in simulated mode"))
+
+
+def test_simulated_plan_and_topup_payments(client: TestClient, auth_headers: dict, telephony_setup, plan, company, db: Session, simulated):
+    cid = telephony_setup["client"].id
+    headers = _client_headers(client, auth_headers, cid, f"sim-{cid}@clinic.example.com")
+    info = client.get("/api/portal/subscription", headers=headers).json()
+    assert info["online_payments"] is True and info["simulated_payments"] is True
+
+    order = client.post("/api/portal/payments/orders", headers=headers, json={"purpose": "SUBSCRIPTION", "plan_id": plan.id}).json()
+    assert order["simulated"] is True and order["razorpay_order_id"].startswith("sim_")
+    paid = client.post(f"/api/portal/payments/orders/{order['order_id']}/simulate", headers=headers).json()
+    assert paid["status"] == "PAID" and paid["subscription"]["plan"]["id"] == plan.id
+    invoice = db.get(Invoice, paid["invoice_id"])
+    assert invoice.payment_reference.startswith("TEST - simulated payment")
+
+    topup = client.post("/api/portal/payments/orders", headers=headers, json={"purpose": "WALLET_TOPUP", "amount_inr": 1180}).json()
+    client.post(f"/api/portal/payments/orders/{topup['order_id']}/simulate", headers=headers)
+    assert billing.get_wallet(db, cid).balance_inr == 1000.0
+
+
+def test_simulated_payments_off_by_default(client: TestClient, auth_headers: dict, telephony_setup, plan, company, monkeypatch):
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_ID", "", raising=False)
+    monkeypatch.setattr(settings, "RAZORPAY_KEY_SECRET", "", raising=False)
+    monkeypatch.setattr(settings, "SIMULATED_PAYMENTS", False, raising=False)
+    cid = telephony_setup["client"].id
+    headers = _client_headers(client, auth_headers, cid, f"nosim-{cid}@clinic.example.com")
+    assert client.get("/api/portal/subscription", headers=headers).json()["online_payments"] is False
+    assert client.post("/api/portal/payments/orders", headers=headers, json={"purpose": "SUBSCRIPTION", "plan_id": plan.id}).status_code == 422
+
+
+def test_simulated_payments_refused_in_production():
+    from app.core.config import Settings
+    with pytest.raises(ValueError, match="SIMULATED_PAYMENTS"):
+        Settings(ENVIRONMENT="production", SIMULATED_PAYMENTS=True,
+                 DATABASE_URL="postgresql://u:p@localhost/db", JWT_SECRET_KEY="x" * 40, RUNTIME_MODE="mock",
+                 CORS_ORIGINS=["https://app.example.com"])

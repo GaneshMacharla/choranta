@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { portalAgentRequestsService } from '../../services/agentRequests';
 import { AlertTriangle, CheckCircle, Download, Plus, Wallet as WalletIcon } from 'lucide-react';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
@@ -40,6 +42,7 @@ export const PortalBillingPage: React.FC = () => {
     load();
   }, []);
 
+  const navigate = useNavigate();
   const pay = async (key: string, body: Parameters<typeof portalService.createOrder>[0], successMessage: string) => {
     setBusy(key);
     setError(null);
@@ -47,6 +50,13 @@ export const PortalBillingPage: React.FC = () => {
     try {
       const order = await portalService.createOrder(body);
       const paid = await payWithRazorpay(order);
+      if (paid && body.purpose === 'SUBSCRIPTION') {
+        const me = await portalAgentRequestsService.me().catch(() => null);
+        if (me && !me.has_ai_employee) {
+          navigate('/portal/employees?welcome=plan');
+          return;
+        }
+      }
       if (paid) {
         setTopupOpen(false);
         setNotice(successMessage);
@@ -93,6 +103,11 @@ export const PortalBillingPage: React.FC = () => {
       {error && (
         <div className="flex items-start gap-2 rounded-lg border border-rose-800/60 bg-rose-950/40 p-3 text-xs text-rose-200">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
+        </div>
+      )}
+      {info.simulated_payments && (
+        <div className="flex items-start gap-2 rounded-lg border border-sky-700/60 bg-sky-950/30 p-3 text-xs text-sky-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> Test mode: payments are simulated. No money is charged.
         </div>
       )}
       {sub?.status === 'PAST_DUE' && (

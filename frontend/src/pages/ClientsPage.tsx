@@ -166,7 +166,11 @@ export const ClientsPage: React.FC = () => {
           <div className="font-semibold text-slate-100 hover:text-[#00df8f] transition-colors">
             {c.name}
           </div>
-          <div className="text-[11px] text-slate-500 font-mono">{c.id}</div>
+          <div className="text-[11px] font-mono">
+            {c.client_code && <span className="text-[#00df8f]">{c.client_code}</span>}
+            {c.client_code && <span className="text-slate-600"> · </span>}
+            <span className="text-slate-500">{c.id}</span>
+          </div>
         </div>
       ),
     },
@@ -256,7 +260,7 @@ export const ClientsPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row gap-3">
         <form onSubmit={handleSearchSubmit} className="flex-1 flex gap-2">
           <Input
-            placeholder="Search clients by name..."
+            placeholder="Search by name or client ID (CL-10001)..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             leftIcon={<Search className="h-4 w-4" />}

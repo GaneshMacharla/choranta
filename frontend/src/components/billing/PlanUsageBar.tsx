@@ -13,7 +13,7 @@ export const SubscriptionStatusBadge: React.FC<{ subscription: Subscription }> =
 /** Plan name, period and a credits-used bar. */
 export const PlanUsageBar: React.FC<{ subscription: Subscription }> = ({ subscription: s }) => {
   const pct = s.monthly_credits > 0 ? Math.min(100, (s.credits_used / s.monthly_credits) * 100) : 100;
-  const minutesLeft = s.credits_per_minute > 0 ? Math.floor(s.credits_remaining / s.credits_per_minute) : 0;
+  const minutesLeft = s.avg_credits_per_minute > 0 ? Math.floor(s.credits_remaining / s.avg_credits_per_minute) : 0;
   const barColor = pct >= 100 ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-400' : 'bg-[#00df8f]';
   return (
     <div className="space-y-3">
@@ -41,7 +41,7 @@ export const PlanUsageBar: React.FC<{ subscription: Subscription }> = ({ subscri
       </div>
       {s.plan && (
         <p className="text-[11px] text-slate-500">
-          {s.credits_per_minute} credits per call minute · after plan credits run out, bought credits are used
+          Each call uses credits for what it actually costs (~{Math.round(s.avg_credits_per_minute)} per minute) · after plan credits run out, bought credits are used
           {s.plan.max_concurrent_calls ? ` · up to ${s.plan.max_concurrent_calls} call${s.plan.max_concurrent_calls === 1 ? '' : 's'} at a time` : ''}
         </p>
       )}

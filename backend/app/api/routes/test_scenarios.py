@@ -126,7 +126,7 @@ def _run_response(run: TestRun) -> Dict[str, Any]:
 
 @router.get("/templates")
 def list_scenario_templates(current_user=Depends(require_operator)) -> List[Dict[str, Any]]:
-    """Returns the 10 pre-configured enterprise Voice Agent Testing templates."""
+    """Returns the pre-configured Voice Agent Testing templates (general plus industry packs)."""
     return get_all_templates()
 
 

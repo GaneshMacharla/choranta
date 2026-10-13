@@ -22,7 +22,7 @@ from app.models.phone_number import PhoneNumber
 from app.models.property import Property
 from app.models.subscription import PaymentOrder
 from app.models.user import User
-from app.services import exotel_numbers, phone_numbers, razorpay_gateway, subscriptions
+from app.services import exotel_numbers, notifications, phone_numbers, razorpay_gateway, subscriptions
 from app.services.pricing import get_pricing
 
 router = APIRouter(prefix="/portal", tags=["Client Portal"])
@@ -51,6 +51,37 @@ def _past_due_numbers(db: Session, client_id: str) -> List[Dict[str, Any]]:
         out.append({"phone_number": phone_numbers.display_number(pn) if pn else "", "monthly_rent_inr": r.monthly_rent_inr,
                     "grace_ends_at": details["grace_ends_at"]})
     return out
+
+
+@router.get("/notifications")
+def list_notifications(account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    _, client_id = account
+    return notifications.list_for_client(db, client_id)
+
+
+@router.post("/notifications/read")
+def read_all_notifications(account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    _, client_id = account
+    notifications.mark_read(db, client_id)
+    return notifications.list_for_client(db, client_id)
+
+
+@router.post("/notifications/{notification_id}/read")
+def read_notification(notification_id: str, account: ClientAccount = Depends(require_client_user),
+                      db: Session = Depends(get_db)):
+    _, client_id = account
+    notifications.mark_read(db, client_id, notification_id)
+    return notifications.list_for_client(db, client_id)
+
+
+@router.get("/me")
+def me(account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """The signed-in client's business name and Choranta client code."""
+    _, client_id = account
+    client = db.get(Client, client_id)
+    return {"client_id": client_id, "client_name": client.name if client else "",
+            "client_code": client.client_code if client else None,
+            "has_ai_employee": notifications.has_ai_employee(db, client_id)}
 
 
 @router.get("/summary")
@@ -98,6 +129,7 @@ def summary(account: ClientAccount = Depends(require_client_user), db: Session =
     wallet = wallet_out(db, client_id, limit=0)
     return {
         "client_name": client.name if client else "",
+        "client_code": client.client_code if client else None,
         "user_name": user.name,
         "wallet": {k: wallet[k] for k in ("balance_inr", "low_balance_threshold_inr", "low_balance", "calls_blocked",
                                           "calls_blocked_reason")},
@@ -210,7 +242,8 @@ def subscription(account: ClientAccount = Depends(require_client_user), db: Sess
     db.commit()
     return {
         "subscription": out,
-        "online_payments": razorpay_gateway.is_configured(),
+        "online_payments": razorpay_gateway.online_enabled(),
+        "simulated_payments": razorpay_gateway.is_simulated(),
         "grace_days": settings.SUBSCRIPTION_GRACE_DAYS,
         "min_topup_inr": settings.MIN_WALLET_TOPUP_INR,
         "gst_rate_percent": settings.GST_RATE_PERCENT,
@@ -245,6 +278,17 @@ def verify_payment(order_id: str, req: VerifyRequest, account: ClientAccount = D
     if not razorpay_gateway.verify_payment_signature(order.razorpay_order_id, req.razorpay_payment_id, req.razorpay_signature):
         raise HTTPException(status_code=400, detail="Payment could not be verified.")
     order = razorpay_gateway.fulfil_order(db, order, req.razorpay_payment_id)
+    return {"status": order.status, "invoice_id": order.invoice_id, "subscription": subscriptions.subscription_out(db, client_id)}
+
+
+@router.post("/payments/orders/{order_id}/simulate")
+def simulate_payment(order_id: str, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    """Testing only (SIMULATED_PAYMENTS): confirms a payment without Razorpay."""
+    _, client_id = account
+    order = db.get(PaymentOrder, order_id)
+    if not order or order.client_id != client_id:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+    order = razorpay_gateway.simulate_payment(db, order)
     return {"status": order.status, "invoice_id": order.invoice_id, "subscription": subscriptions.subscription_out(db, client_id)}
 
 

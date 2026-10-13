@@ -19,6 +19,8 @@ from app.models.billing import ClientUser, ClientWallet, WalletTransaction, Clie
 from app.models.subscription import Plan, ClientSubscription, CallUsage, PaymentOrder, NumberPricing, NumberRental
 from app.models.campaign import Campaign, CampaignRecipient, CampaignAttempt, DoNotCallEntry, WebhookDelivery
 from app.models.api_key import ApiKey
+from app.models.agent_request import AgentRequest
+from app.models.notification import ClientNotification
 
 __all__ = [
     "User",
@@ -60,4 +62,6 @@ __all__ = [
     "DoNotCallEntry",
     "WebhookDelivery",
     "ApiKey",
+    "AgentRequest",
+    "ClientNotification",
 ]

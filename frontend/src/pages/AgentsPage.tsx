@@ -262,6 +262,9 @@ export const AgentsPage: React.FC = () => {
           }}
         >
           {a.client_name || 'Client'}
+          {clients.find((c) => c.id === a.client_id)?.client_code && (
+            <span className="ml-1.5 font-mono text-[10px] text-[#00df8f]">{clients.find((c) => c.id === a.client_id)?.client_code}</span>
+          )}
         </span>
       ),
     },
@@ -376,7 +379,7 @@ export const AgentsPage: React.FC = () => {
         <Select
           options={[
             { value: '', label: 'All Clients' },
-            ...clients.map((c) => ({ value: c.id, label: c.name })),
+            ...clients.map((c) => ({ value: c.id, label: c.client_code ? `${c.name} · ${c.client_code}` : c.name })),
           ]}
           value={clientFilter}
           onChange={(e) => setClientFilter(e.target.value)}
@@ -485,7 +488,7 @@ export const AgentsPage: React.FC = () => {
                         Site Visit Calendar
                       </span>
                       <span className="rounded bg-[#0c242c] border border-[#164352] px-2 py-0.5 text-[10px] text-slate-200">
-                        Cartesia Voice (Siya / en-IN, hi, te)
+                        Sarvam voice (en-IN, hi, te)
                       </span>
                     </div>
                   </div>
@@ -629,7 +632,7 @@ export const AgentsPage: React.FC = () => {
               label="Client Business Workspace"
               required
               placeholder="Select a client..."
-              options={clients.map((c) => ({ value: c.id, label: `${c.name} (${c.business_type})` }))}
+              options={clients.map((c) => ({ value: c.id, label: `${c.name}${c.client_code ? ` · ${c.client_code}` : ''} (${c.business_type})` }))}
               value={createForm.client_id}
               onChange={(e) => setCreateForm({ ...createForm, client_id: e.target.value })}
               helperText="The created agent draft will be stored independently in this workspace."

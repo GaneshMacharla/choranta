@@ -215,6 +215,11 @@ export const ClientDetailPage: React.FC = () => {
         <div className="space-y-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-slate-100">{client.name}</h1>
+            {client.client_code && (
+              <span className="rounded border border-[#00df8f]/30 bg-[#081e26] px-2 py-0.5 font-mono text-xs font-semibold text-[#00df8f]">
+                {client.client_code}
+              </span>
+            )}
             <StatusBadge status={client.status} />
             <Badge variant="blue">{client.business_type}</Badge>
           </div>

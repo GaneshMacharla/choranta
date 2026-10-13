@@ -90,7 +90,8 @@ class Settings(BaseSettings):
     # Pricing defaults until an admin sets them in Settings (stored in pricing_settings)
     DEFAULT_PROFIT_PERCENT: float = 40.0
     DEFAULT_INFRA_COST_PER_MINUTE_INR: float = 0.30
-    # Credits: 1 credit = Rs 1 (pre-GST). Every billed call minute costs this many credits until an admin sets it
+    # Credits: 1 credit = Rs 1 (pre-GST). Calls cost real cost + profit %; this is only the "about N minutes"
+    # estimate on plans until there are recent calls to average
     DEFAULT_CREDITS_PER_MINUTE: float = 7.0
 
     # --------------------------------------------------------
@@ -117,6 +118,9 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
+    # Testing only: plan purchases and credit top-ups succeed without Razorpay (no money moves).
+    # Refused when ENVIRONMENT=production.
+    SIMULATED_PAYMENTS: bool = False
 
     # --------------------------------------------------------
     # Google Sign-In
@@ -205,7 +209,11 @@ class Settings(BaseSettings):
                     "with a minimum length of 32 characters."
                 )
 
-            # 3. Enforce secure CORS origins (no wildcard with credentials)
+            # 3. Simulated payments would hand out plans and credits for free
+            if self.SIMULATED_PAYMENTS:
+                raise ValueError("CRITICAL: SIMULATED_PAYMENTS must be false in production.")
+
+            # 4. Enforce secure CORS origins (no wildcard with credentials)
             if "*" in self.CORS_ORIGINS:
                 raise ValueError(
                     "CRITICAL: Production CORS_ORIGINS cannot contain wildcard '*' when credentials are enabled."

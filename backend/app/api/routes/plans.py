@@ -12,7 +12,7 @@ from app.models.client import Client
 from app.models.subscription import CallUsage, NumberPricing, Plan
 from app.models.user import User
 from app.services import billing, exotel_numbers, phone_numbers, razorpay_gateway, subscriptions
-from app.services.pricing import credits_per_minute
+from app.services.pricing import estimated_credits_per_minute
 
 logger = logging.getLogger("choranta.api.plans")
 
@@ -74,7 +74,7 @@ def list_plans(include_archived: bool = False, db: Session = Depends(get_db), us
     query = db.query(Plan)
     if not (include_archived and user.role in ("ADMIN", "OPERATOR")):
         query = query.filter(Plan.is_active.is_(True))
-    rate = credits_per_minute(db)
+    rate = estimated_credits_per_minute(db)
     return [subscriptions.plan_out(p, rate) for p in query.order_by(Plan.sort_order, Plan.monthly_price_inr).all()]
 
 
@@ -91,7 +91,7 @@ def _apply_plan(plan: Plan, req: PlanRequest, rate: float) -> None:
 
 @router.post("/plans", status_code=201)
 def create_plan(req: PlanRequest, db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    rate = credits_per_minute(db)
+    rate = estimated_credits_per_minute(db)
     plan = Plan()
     _apply_plan(plan, req, rate)
     db.add(plan)
@@ -102,7 +102,7 @@ def create_plan(req: PlanRequest, db: Session = Depends(get_db), user: User = De
 @router.put("/plans/{plan_id}")
 def update_plan(plan_id: str, req: PlanRequest, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     """Changes apply to current subscribers immediately (credits, call limit)."""
-    rate = credits_per_minute(db)
+    rate = estimated_credits_per_minute(db)
     plan = _plan_or_404(db, plan_id)
     _apply_plan(plan, req, rate)
     db.commit()

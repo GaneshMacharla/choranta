@@ -131,6 +131,7 @@ class ClientUpdate(BaseModel):
 
 class ClientResponse(ClientBase):
     id: str
+    client_code: Optional[str] = None
     status: ClientStatusEnum
     agent_count: int = 0
     created_at: datetime

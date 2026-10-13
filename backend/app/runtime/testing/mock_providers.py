@@ -442,6 +442,7 @@ class TestingTTSAdapter(TTSProvider):
         speed: float = 1.0,
         pitch: float = 0.0,
         emotion: Optional[str] = None,
+        language: Optional[str] = None,
     ) -> AudioResult:
         self.request_logs.append({"type": "tts_request", "text_length": len(text)})
         if self.simulate_timeout:

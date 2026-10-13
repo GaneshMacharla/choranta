@@ -1,5 +1,5 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Building2,
@@ -18,7 +18,9 @@ import {
   LogOut,
   ShieldCheck,
   Zap,
+  Inbox,
 } from 'lucide-react';
+import { agentRequestsService } from '../../services/agentRequests';
 import { useAuth } from '../../context/AuthContext';
 import { Badge } from '../common/Badge';
 
@@ -26,15 +28,27 @@ interface NavItem {
   name: string;
   path: string;
   icon: React.ComponentType<{ className?: string }>;
+  count?: number;
 }
 
 export const Sidebar: React.FC = () => {
   const { user, logout } = useAuth();
+  const location = useLocation();
+  const [pendingRequests, setPendingRequests] = useState(0);
+
+  // New AI employee requests waiting to be built; refreshed as the admin moves between pages
+  useEffect(() => {
+    agentRequestsService
+      .pendingCount()
+      .then((r) => setPendingRequests(r.pending))
+      .catch(() => setPendingRequests(0));
+  }, [location.pathname]);
 
   const navItems: NavItem[] = [
     { name: 'Overview', path: '/', icon: LayoutDashboard },
     { name: 'Clients', path: '/clients', icon: Building2 },
     { name: 'AI Employees', path: '/agents', icon: Bot },
+    { name: 'Employee Requests', path: '/agent-requests', icon: Inbox, count: pendingRequests },
     
     { name: 'Calls', path: '/calls', icon: PhoneCall },
     { name: 'Campaigns', path: '/campaigns', icon: Megaphone },
@@ -57,9 +71,7 @@ export const Sidebar: React.FC = () => {
       {/* Brand Header */}
       <div className="p-4 border-b border-[#102731] flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <div className="h-7 w-7 rounded bg-[#00df8f] flex items-center justify-center font-bold text-[#022016] tracking-wider text-xs shadow-md shadow-[#00df8f]/20">
-            CH
-          </div>
+          <img src="/logo.png" alt="Choranta" className="h-8 w-8 shrink-0 object-contain" />
           <div>
             <div className="font-semibold text-sm tracking-wide text-slate-100 flex items-center gap-1.5">
               CHORANTA
@@ -99,6 +111,9 @@ export const Sidebar: React.FC = () => {
                 <Icon className="h-4 w-4" />
                 <span>{item.name}</span>
               </div>
+              {!!item.count && (
+                <span className="rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-[#1a1200]">{item.count}</span>
+              )}
             </NavLink>
           );
         })}

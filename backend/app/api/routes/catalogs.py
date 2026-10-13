@@ -192,6 +192,30 @@ def detach_integration_from_agent(
 
 
 # ==========================================
+# SARVAM VOICES CATALOG (voices in use; Cartesia below is kept but not shown in the Studio)
+# ==========================================
+
+@router.get("/catalogs/sarvam-voices")
+def list_sarvam_voices(current_user: User = Depends(get_current_user)):
+    """Sarvam Bulbul voices for the Studio voice picker."""
+    from app.services import sarvam_voices
+    return sarvam_voices.list_voices()
+
+
+@router.get("/catalogs/sarvam-voices/{voice_id}/preview")
+def preview_sarvam_voice(voice_id: str, current_user: User = Depends(get_current_user)):
+    """Short WAV sample of a Sarvam voice (generated once, then cached)."""
+    from app.services import sarvam_voices
+    try:
+        audio = sarvam_voices.preview_wav(voice_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except sarvam_voices.VoicePreviewUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return Response(content=audio, media_type="audio/wav", headers={"Cache-Control": "private, max-age=86400"})
+
+
+# ==========================================
 # CARTESIA VOICES CATALOG
 # ==========================================
 

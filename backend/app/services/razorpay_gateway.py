@@ -27,8 +27,20 @@ class RazorpayError(Exception):
     pass
 
 
+SIMULATED_PREFIX = "sim_"
+
+
 def is_configured() -> bool:
     return bool(settings.RAZORPAY_KEY_ID and settings.RAZORPAY_KEY_SECRET)
+
+
+def is_simulated() -> bool:
+    """Testing mode: no Razorpay keys, and payments are confirmed in-app (never in production)."""
+    return bool(settings.SIMULATED_PAYMENTS) and not is_configured() and settings.ENVIRONMENT != "production"
+
+
+def online_enabled() -> bool:
+    return is_configured() or is_simulated()
 
 
 def _create_razorpay_order(amount_paise: int, receipt: str, notes: Dict[str, str]) -> Dict[str, Any]:
@@ -67,7 +79,8 @@ def create_order(
     plan_id: Optional[str] = None, amount_inr: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Creates a Razorpay order for a plan period (price + GST) or a wallet top-up (GST-inclusive amount)."""
-    if not is_configured():
+    simulated = is_simulated()
+    if not (is_configured() or simulated):
         raise ValidationException("Online payments aren't set up yet. Please contact Choranta.")
     if purpose == "SUBSCRIPTION":
         plan = db.get(Plan, plan_id) if plan_id else None
@@ -92,10 +105,14 @@ def create_order(
     db.add(order)
     db.flush()
     amount_paise = int(round(amount * 100))
-    rp = _create_razorpay_order(amount_paise, order.id, {"client_id": client_id, "purpose": purpose})
+    if simulated:
+        rp = {"id": f"{SIMULATED_PREFIX}{order.id}"}
+    else:
+        rp = _create_razorpay_order(amount_paise, order.id, {"client_id": client_id, "purpose": purpose})
     order.razorpay_order_id = rp["id"]
     db.commit()
     return {
+        "simulated": simulated,
         "order_id": order.id,
         "razorpay_order_id": rp["id"],
         "amount_paise": amount_paise,
@@ -111,7 +128,8 @@ def fulfil_order(db: Session, order: PaymentOrder, razorpay_payment_id: str) -> 
     order = db.query(PaymentOrder).filter(PaymentOrder.id == order.id).with_for_update().first()
     if order.status == "PAID":
         return order
-    reference = f"Razorpay {razorpay_payment_id}"
+    simulated = razorpay_payment_id.startswith(SIMULATED_PREFIX)
+    reference = f"TEST - simulated payment {razorpay_payment_id}" if simulated else f"Razorpay {razorpay_payment_id}"
     plan = db.get(Plan, order.plan_id) if order.purpose == "SUBSCRIPTION" else None
     blocker = subscriptions.renewal_blocker(subscriptions.get_subscription(db, order.client_id), plan) if plan else None
     if plan and not blocker:
@@ -127,6 +145,13 @@ def fulfil_order(db: Session, order: PaymentOrder, razorpay_payment_id: str) -> 
     db.commit()
     logger.info(f"Fulfilled payment order {order.id} ({order.purpose}) for {order.client_id}")
     return order
+
+
+def simulate_payment(db: Session, order: PaymentOrder) -> PaymentOrder:
+    """Testing mode: marks a simulated order paid, exactly as a verified Razorpay payment would."""
+    if not is_simulated() or not (order.razorpay_order_id or "").startswith(SIMULATED_PREFIX):
+        raise ValidationException("Simulated payments are turned off.")
+    return fulfil_order(db, order, f"{SIMULATED_PREFIX}pay_{order.id}")
 
 
 def handle_webhook(db: Session, event: Dict[str, Any]) -> Optional[PaymentOrder]:

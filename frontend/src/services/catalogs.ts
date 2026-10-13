@@ -80,6 +80,12 @@ export const catalogsService = {
     return `/api/catalogs/voices/${encodeURIComponent(voiceId)}/preview${tokenParam}`;
   },
 
+  // Sarvam voices (the voices in use; the Cartesia catalog above is kept but not shown)
+  listSarvamVoices: async (): Promise<CartesiaVoice[]> => {
+    const voices = await request<Array<{ id: string; name: string; is_default: boolean }>>('/catalogs/sarvam-voices');
+    return voices.map((v) => ({ ...v, provider: 'sarvam', language: null, description: 'Sarvam Bulbul v3 voice, made for Indian languages.' }));
+  },
+
   // Agent Templates
   listTemplates: async (): Promise<any[]> => {
     return request<any[]>('/catalogs/agent-templates');

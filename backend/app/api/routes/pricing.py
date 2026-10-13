@@ -1,64 +1,29 @@
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin
-from app.models.call import Call
-from app.models.runtime_session import RuntimeSession
 from app.models.user import User
-from app.services.call_costing import estimate_call_cost
-from app.services.pricing import PricingSnapshot, get_pricing, update_pricing
+from app.services.pricing import PricingSnapshot, get_pricing, recent_charge_per_minute, update_pricing
 
 router = APIRouter(prefix="/pricing", tags=["Pricing"])
 
-PREVIEW_WINDOW_DAYS = 30
 
 
 class UpdatePricingRequest(BaseModel):
-    credits_per_minute: Optional[float] = Field(None, gt=0, description="Credits (1 credit = Rs 1) a client pays per billed call minute")
-    infra_cost_per_minute_inr: float = Field(..., description="Infrastructure overhead per conversation minute (INR), for profit reporting")
-    profit_percent: Optional[float] = Field(None, description="Legacy: no longer used to price calls")
+    profit_percent: float = Field(..., description="Profit added on top of each call's real cost, in percent")
+    infra_cost_per_minute_inr: float = Field(..., description="Infrastructure overhead per conversation minute (INR), counted as cost")
 
 
 def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
     """Average cost and resulting client charge per minute over recent completed calls."""
-    since = datetime.now(timezone.utc) - timedelta(days=PREVIEW_WINDOW_DAYS)
-    calls = (
-        db.query(Call)
-        .filter(Call.status == "COMPLETED", Call.duration_seconds > 0, Call.created_at >= since)
-        .all()
-    )
-    total_seconds = 0.0
-    total_cost = 0.0
-    total_charge = 0.0
-    for call in calls:
-        usage: Dict[str, Any] = {}
-        if call.runtime_session_id:
-            session_obj = db.get(RuntimeSession, call.runtime_session_id)
-            if session_obj and isinstance(session_obj.usage_json, dict):
-                usage = session_obj.usage_json
-        cost = estimate_call_cost(call.duration_seconds, usage, pricing)
-        total_seconds += call.duration_seconds
-        total_cost += cost["total"]
-        total_charge += cost["charge_total"]
-
-    minutes = total_seconds / 60.0
-    return {
-        "window_days": PREVIEW_WINDOW_DAYS,
-        "calls": len(calls),
-        "minutes": round(minutes, 2),
-        "avg_cost_per_minute": round(total_cost / minutes, 4) if minutes else None,
-        "avg_charge_per_minute": round(total_charge / minutes, 4) if minutes else None,
-        "avg_profit_per_minute": round((total_charge - total_cost) / minutes, 4) if minutes else None,
-    }
+    return recent_charge_per_minute(db, pricing)
 
 
 def _response(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
     return {
-        "credits_per_minute": pricing.credits_per_minute,
         "profit_percent": pricing.profit_percent,
         "infra_cost_per_minute_inr": pricing.infra_cost_per_minute_inr,
         "updated_at": pricing.updated_at.isoformat() if pricing.updated_at else None,
@@ -69,7 +34,7 @@ def _response(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
 
 @router.get("")
 def get_pricing_settings(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    """Credits per minute and infrastructure overhead, with a cost/profit preview from recent calls (admin only)."""
+    """Profit % and infrastructure overhead, with a cost/charge preview from recent calls (admin only)."""
     return _response(db, get_pricing(db))
 
 
@@ -79,8 +44,6 @@ def update_pricing_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    """Sets the credits charged per call minute and the infrastructure overhead (admin only)."""
-    current = get_pricing(db)
-    profit = req.profit_percent if req.profit_percent is not None else current.profit_percent
-    pricing = update_pricing(db, profit, req.infra_cost_per_minute_inr, current_user.id, credits_per_minute=req.credits_per_minute)
+    """Sets the profit % added to every call's real cost, and the infrastructure overhead (admin only)."""
+    pricing = update_pricing(db, req.profit_percent, req.infra_cost_per_minute_inr, current_user.id)
     return _response(db, pricing)

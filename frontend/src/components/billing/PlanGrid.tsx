@@ -14,12 +14,12 @@ const planAction = (plan: Plan, sub: Subscription | null): { label: string; disa
 };
 
 /**
- * Per-minute price range (excl. GST): minutes paid with plan credits cost the plan fee per credit,
- * minutes paid with bought credits cost ₹1 per credit.
+ * Typical per-minute price range (excl. GST), from the recent average credits per call minute: minutes paid
+ * with plan credits cost the plan fee per credit, minutes paid with bought credits cost ₹1 per credit.
  */
 export const perMinuteRange = (plan: Plan): string => {
-  const rates = [plan.credits_per_minute];
-  if (plan.monthly_credits > 0) rates.push((plan.monthly_price_inr / plan.monthly_credits) * plan.credits_per_minute);
+  const rates = [plan.avg_credits_per_minute];
+  if (plan.monthly_credits > 0) rates.push((plan.monthly_price_inr / plan.monthly_credits) * plan.avg_credits_per_minute);
   const low = Math.round(Math.min(...rates));
   const high = Math.round(Math.max(...rates));
   return low === high ? `₹${low}` : `₹${low}–${high}`;
@@ -53,12 +53,12 @@ export const PlanGrid: React.FC<PlanGridProps> = ({ plans, subscription: sub, on
           <div className="mt-4">
             <span className="font-mono text-2xl font-bold text-slate-100">{inr(plan.monthly_price_inr, 0)}</span>
             <span className="text-xs text-slate-500"> / month + {gstRate}% GST</span>
-            <div className="mt-1 text-xs font-medium text-[#00df8f]">{perMinuteRange(plan)} per minute</div>
+            <div className="mt-1 text-xs font-medium text-[#00df8f]">≈ {perMinuteRange(plan)} per minute</div>
           </div>
           <ul className="mt-4 flex-1 space-y-1.5 text-xs text-slate-300">
             {[
               `${creditsLabel(plan.monthly_credits)} every month`,
-              `About ${plan.approx_minutes.toLocaleString('en-IN')} call minutes (${plan.credits_per_minute} credits per minute)`,
+              `About ${plan.approx_minutes.toLocaleString('en-IN')} call minutes (a minute uses ~${Math.round(plan.avg_credits_per_minute)} credits)`,
               'Unused plan credits expire at the end of the month',
               plan.max_concurrent_calls
                 ? `Up to ${plan.max_concurrent_calls} call${plan.max_concurrent_calls === 1 ? '' : 's'} at a time`
