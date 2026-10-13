@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -12,6 +12,7 @@ from app.models.agent import Agent
 from app.models.agent_configuration import AgentConfiguration
 from app.models.agent_version import AgentVersion
 from app.models.call import Call
+from app.models.campaign import CampaignRecipient
 from app.models.client import Client
 from app.models.phone_number import PhoneNumber
 from app.models.runtime_event import RuntimeEvent
@@ -20,6 +21,7 @@ from app.services.agent_spec_builder import AgentSpecBuilder
 from app.schemas.agent_spec import AgentConfigurationData
 from app.runtime.runtime import AgentRuntime
 from app.runtime.providers.registry import default_registry
+from app.services.call_status import apply_call_status
 
 router = APIRouter(prefix="/mock", tags=["Mock Environment"])
 
@@ -29,6 +31,18 @@ class MockCallRequest(BaseModel):
     agent_version_id: str
     utterances: List[str] = Field(min_length=1, max_length=20)
     caller_number: str = "+15550209999"
+
+
+class CompletePendingCallsRequest(BaseModel):
+    status: Literal["completed", "no-answer", "busy", "failed"] = "completed"
+    duration_seconds: float = Field(30.0, ge=0, le=3600)
+    campaign_id: Optional[str] = None
+    call_ids: Optional[List[str]] = None
+    # What post-call extraction would have found (answered calls only); fills the client's insights
+    interest: Optional[Literal["interested", "callback", "not_interested", "do_not_call", "unclear"]] = None
+    summary: Optional[str] = Field(None, max_length=300)
+    callback_time: Optional[str] = Field(None, max_length=120)
+    outputs: Optional[Dict[str, Any]] = None
 
 MOCK_CLIENTS = (
     {
@@ -344,3 +358,46 @@ def simulate_mock_call(
             except Exception:
                 pass
         raise
+
+
+@router.post("/calls/complete-pending")
+def complete_pending_mock_calls(
+    payload: CompletePendingCallsRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_operator),
+) -> Dict[str, Any]:
+    """
+    Ends outbound calls placed through the mock carrier, as Exotel's status callback would.
+    The mock carrier never reports back, so without this campaign recipients stay DIALING.
+    Narrow it with campaign_id or call_ids; the dialer picks up the outcomes on its next tick.
+    """
+    _require_mock_mode()
+    query = db.query(Call).filter(
+        Call.direction == "OUTBOUND",
+        Call.status == "INITIATED",
+        Call.provider_call_id.like(r"mock\_call\_%", escape="\\"),
+    )
+    if payload.call_ids:
+        query = query.filter(Call.id.in_(payload.call_ids))
+    if payload.campaign_id:
+        recipient_calls = db.query(CampaignRecipient.last_call_id).filter(
+            CampaignRecipient.campaign_id == payload.campaign_id
+        )
+        query = query.filter(Call.id.in_(recipient_calls))
+
+    calls = query.all()
+    duration = payload.duration_seconds if payload.status == "completed" else 0.0
+    extracted = {
+        k: v for k, v in (("interest", payload.interest), ("summary", payload.summary),
+                          ("callback_time", payload.callback_time), ("outputs", payload.outputs)) if v is not None
+    }
+    for call in calls:
+        if extracted and payload.status == "completed":
+            call.metadata_ = {**(call.metadata_ or {}), **extracted, "outputs_status": "done"}
+        apply_call_status(db, call, payload.status, duration)
+    return {
+        "label": "SIMULATED CALL STATUS",
+        "status": payload.status,
+        "updated": len(calls),
+        "call_ids": [call.id for call in calls],
+    }

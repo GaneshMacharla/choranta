@@ -23,6 +23,7 @@ import {
   AgentConfigurationData,
   AgentTemplate,
   CallDirection,
+  EMPTY_CALL_LIMITS,
   CartesiaVoice,
   Client,
   KnowledgeSource,
@@ -130,6 +131,7 @@ const configFromTemplate = (tpl: AgentTemplate, employeeName: string, companyNam
   const company = companyName || config.business_context?.business_name || '';
   config.identity = { ...config.identity, name: employeeName || config.identity?.name, organization: company };
   config.business_context = { ...config.business_context, business_name: company };
+  config.conversation = { ...config.conversation, limits: { ...EMPTY_CALL_LIMITS, ...(config.conversation?.limits || {}) } };
   config.variables = {
     ...config.variables,
     inputs: (config.variables?.inputs || []).map((v: any) =>

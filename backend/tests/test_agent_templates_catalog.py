@@ -31,3 +31,10 @@ def test_templates_api_lists_business_types(client: TestClient, auth_headers: di
     templates = client.get("/api/catalogs/agent-templates", headers=auth_headers).json()
     clinic = next(t for t in templates if t["id"] == "clinic_receptionist")
     assert clinic["business_types"] == ["CLINIC"] and clinic["call_direction"] == "inbound"
+
+
+def test_templates_api_returns_complete_configs(client: TestClient, auth_headers: dict):
+    """The wizard uses default_config directly, so every section (e.g. call limits) must be present."""
+    for tpl in client.get("/api/catalogs/agent-templates", headers=auth_headers).json():
+        limits = tpl["default_config"]["conversation"]["limits"]
+        assert "max_call_duration_s" in limits and limits["end_call_phrases"] is not None, tpl["id"]

@@ -89,7 +89,6 @@ class Settings(BaseSettings):
     USD_TO_INR: float = 88.0
     # Pricing defaults until an admin sets them in Settings (stored in pricing_settings)
     DEFAULT_PROFIT_PERCENT: float = 40.0
-    DEFAULT_INFRA_COST_PER_MINUTE_INR: float = 0.30
     # Credits: 1 credit = Rs 1 (pre-GST). Calls cost real cost + profit %; this is only the "about N minutes"
     # estimate on plans until there are recent calls to average
     DEFAULT_CREDITS_PER_MINUTE: float = 7.0
@@ -166,6 +165,8 @@ class Settings(BaseSettings):
     EXOTEL_NUMBERS_MOCK: bool = False         # fake number search/purchase (no Exotel calls) for local testing
     # Where phone call recordings (stereo WAV: caller left, agent right) are stored
     RECORDINGS_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "recordings")
+    # Business verification (KYC) documents clients upload before buying numbers; private, admin download only
+    KYC_UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "kyc")
     RUN_REAL_TELEPHONY_TESTS: bool = False
 
 

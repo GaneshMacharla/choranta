@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Phone, Plus } from 'lucide-react';
+import { AlertTriangle, BadgeCheck, Clock, Phone, PhoneOutgoing, Plus, ShieldCheck } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { NumberActivationModal } from '../../components/billing/NumberActivationModal';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { Badge } from '../../components/common/Badge';
@@ -7,7 +9,7 @@ import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { BuyNumberModal } from '../../components/billing/BuyNumberModal';
 import { fmtDate } from '../../components/billing/PlanUsageBar';
-import { inr, PortalNumber, portalService } from '../../services/portal';
+import { inr, PortalNumber, portalService, VerificationStatus } from '../../services/portal';
 import { NUMBER_TYPE_LABELS, NumberPrice } from '../../services/plans';
 
 type Agent = Awaited<ReturnType<typeof portalService.agents>>[number];
@@ -16,6 +18,7 @@ const NumberStatus: React.FC<{ n: PortalNumber }> = ({ n }) => {
   if (n.rental_status === 'RELEASED' || n.status === 'RELEASED') return <Badge variant="gray">RELEASED</Badge>;
   if (n.rental_status === 'PAST_DUE') return <Badge variant="red">RENT DUE</Badge>;
   if (n.cancel_at_period_end) return <Badge variant="yellow">ENDS {n.current_period_end ? fmtDate(n.current_period_end).toUpperCase() : ''}</Badge>;
+  if (n.status === 'READY_TO_TEST') return <Badge variant="yellow">TEST NEEDED</Badge>;
   if (n.status !== 'ACTIVE') return <Badge variant="gray">{n.status}</Badge>;
   return <Badge variant="green">ACTIVE</Badge>;
 };
@@ -29,12 +32,17 @@ export const PortalNumbersPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [buyOpen, setBuyOpen] = useState(false);
+  const [verification, setVerification] = useState<{ status: VerificationStatus; note: string | null }>({ status: 'NOT_STARTED', note: null });
+  const [contactPhone, setContactPhone] = useState<string | null>(null);
+  const [activating, setActivating] = useState<PortalNumber | null>(null);
 
   const load = () =>
     Promise.all([portalService.numbers(), portalService.agents(), portalService.wallet()])
       .then(([n, a, w]) => {
         setNumbers(n.numbers);
         setPricing(n.pricing);
+        setVerification({ status: n.verification_status, note: n.verification_note });
+        setContactPhone(n.contact_phone);
         setAgents(a);
         setBalance(w.balance_inr);
       })
@@ -71,10 +79,48 @@ export const PortalNumbersPage: React.FC = () => {
           <h1 className="text-xl font-bold">Phone numbers</h1>
           <p className="text-xs text-slate-400">Numbers your AI employees answer and call from. Rent is charged monthly from your wallet.</p>
         </div>
-        <Button variant="primary" onClick={() => setBuyOpen(true)} disabled={pricing.length === 0}>
-          <Plus className="mr-1.5 h-4 w-4" /> Get a number
-        </Button>
+        {verification.status === 'APPROVED' ? (
+          <Button variant="primary" onClick={() => setBuyOpen(true)} disabled={pricing.length === 0}>
+            <Plus className="mr-1.5 h-4 w-4" /> Get a number
+          </Button>
+        ) : (
+          <Link to="/portal/verification">
+            <Button variant="primary" leftIcon={<ShieldCheck className="h-4 w-4" />}>
+              {verification.status === 'NOT_STARTED' ? 'Verify your business' : 'View verification'}
+            </Button>
+          </Link>
+        )}
       </div>
+
+      {verification.status !== 'APPROVED' && (
+        <div className={`flex items-start gap-3 rounded-lg border p-4 text-sm ${
+          verification.status === 'REJECTED' ? 'border-rose-800/60 bg-rose-950/30 text-rose-200'
+            : verification.status === 'PENDING' ? 'border-sky-800/60 bg-sky-950/30 text-sky-100'
+            : 'border-[#143c49] bg-[#071c22] text-slate-200'}`}>
+          {verification.status === 'PENDING' ? <Clock className="mt-0.5 h-5 w-5 shrink-0" /> : <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-[#00df8f]" />}
+          <div className="space-y-1">
+            {verification.status === 'NOT_STARTED' && (
+              <>
+                <p className="font-semibold">Step 1: verify your business (one time)</p>
+                <p className="text-xs text-slate-400">Indian telecom rules require business details and documents before a phone number is issued. It takes about 5 minutes; our team usually reviews it within 1–3 business days.</p>
+              </>
+            )}
+            {verification.status === 'PENDING' && (
+              <>
+                <p className="font-semibold">Your business verification is under review</p>
+                <p className="text-xs opacity-80">We'll notify you when it's approved, usually within 1–3 business days. Then you can get numbers right away.</p>
+              </>
+            )}
+            {verification.status === 'REJECTED' && (
+              <>
+                <p className="font-semibold">Your verification needs a change</p>
+                {verification.note && <p className="text-xs">{verification.note}</p>}
+                <Link to="/portal/verification" className="text-xs font-semibold underline">Fix and resubmit</Link>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="flex items-start gap-2 rounded-lg border border-rose-800/60 bg-rose-950/40 p-3 text-xs text-rose-200">
@@ -94,9 +140,13 @@ export const PortalNumbersPage: React.FC = () => {
           <div className="flex flex-col items-center gap-3 px-6 py-12 text-center text-xs text-slate-400">
             <Phone className="h-8 w-8 text-slate-600" />
             <p>You don't have a phone number yet. Get one so customers can call your AI employee, and so it can call them.</p>
-            <Button variant="primary" size="sm" onClick={() => setBuyOpen(true)} disabled={pricing.length === 0}>
-              <Plus className="mr-1 h-3.5 w-3.5" /> Get a number
-            </Button>
+            {verification.status === 'APPROVED' ? (
+              <Button variant="primary" size="sm" onClick={() => setBuyOpen(true)} disabled={pricing.length === 0}>
+                <Plus className="mr-1 h-3.5 w-3.5" /> Get a number
+              </Button>
+            ) : (
+              <span className="flex items-center gap-1 text-slate-500"><BadgeCheck className="h-3.5 w-3.5" /> Available once your business is verified</span>
+            )}
           </div>
         ) : (
           <div className="divide-y divide-[#151a26]">
@@ -114,7 +164,7 @@ export const PortalNumbersPage: React.FC = () => {
                   <select
                     className="w-full rounded border border-[#232736] bg-[#10121a] p-2 text-xs text-slate-100"
                     value={n.agent_id || ''}
-                    disabled={busy === 'assign-' + n.id || n.status !== 'ACTIVE'}
+                    disabled={busy === 'assign-' + n.id || (n.status !== 'ACTIVE' && n.status !== 'READY_TO_TEST')}
                     onChange={(e) => run('assign-' + n.id, () => portalService.assignNumber(n.id, e.target.value || null))}
                   >
                     <option value="">No AI employee (calls rejected)</option>
@@ -140,7 +190,12 @@ export const PortalNumbersPage: React.FC = () => {
                     <span className="text-slate-500">Included</span>
                   )}
                 </div>
-                <div className="flex justify-end">
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  {n.status === 'READY_TO_TEST' && (
+                    <Button size="sm" variant="primary" leftIcon={<PhoneOutgoing className="h-3.5 w-3.5" />} onClick={() => setActivating(n)}>
+                      Test &amp; activate
+                    </Button>
+                  )}
                   {n.monthly_rent_inr != null &&
                     (n.cancel_at_period_end ? (
                       <Button size="sm" variant="secondary" isLoading={busy === 'keep-' + n.id} onClick={() => run('keep-' + n.id, () => portalService.keepNumber(n.id))}>
@@ -188,7 +243,21 @@ export const PortalNumbersPage: React.FC = () => {
         topUpLink="/portal/billing"
         search={(type, region) => portalService.availableNumbers(type, region)}
         buy={(number, type) => portalService.buyNumber(number, type)}
-        onBought={load}
+        onBought={(bought) => {
+          load();
+          if (bought?.id) setActivating(bought as PortalNumber);
+        }}
+      />
+      <NumberActivationModal
+        isOpen={activating !== null}
+        onClose={() => {
+          setActivating(null);
+          load();
+        }}
+        number={activating}
+        agents={agents}
+        contactPhone={contactPhone}
+        onChanged={load}
       />
     </div>
   );

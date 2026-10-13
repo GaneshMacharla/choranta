@@ -19,7 +19,9 @@ import {
   ShieldCheck,
   Zap,
   Inbox,
+  BadgeCheck,
 } from 'lucide-react';
+import { verificationsApi } from '../../pages/VerificationsPage';
 import { agentRequestsService } from '../../services/agentRequests';
 import { useAuth } from '../../context/AuthContext';
 import { Badge } from '../common/Badge';
@@ -35,6 +37,7 @@ export const Sidebar: React.FC = () => {
   const { user, logout } = useAuth();
   const location = useLocation();
   const [pendingRequests, setPendingRequests] = useState(0);
+  const [pendingVerifications, setPendingVerifications] = useState(0);
 
   // New AI employee requests waiting to be built; refreshed as the admin moves between pages
   useEffect(() => {
@@ -42,6 +45,10 @@ export const Sidebar: React.FC = () => {
       .pendingCount()
       .then((r) => setPendingRequests(r.pending))
       .catch(() => setPendingRequests(0));
+    verificationsApi
+      .pendingCount()
+      .then((r) => setPendingVerifications(r.pending))
+      .catch(() => setPendingVerifications(0));
   }, [location.pathname]);
 
   const navItems: NavItem[] = [
@@ -49,6 +56,7 @@ export const Sidebar: React.FC = () => {
     { name: 'Clients', path: '/clients', icon: Building2 },
     { name: 'AI Employees', path: '/agents', icon: Bot },
     { name: 'Employee Requests', path: '/agent-requests', icon: Inbox, count: pendingRequests },
+    { name: 'Verifications', path: '/verifications', icon: BadgeCheck, count: pendingVerifications },
     
     { name: 'Calls', path: '/calls', icon: PhoneCall },
     { name: 'Campaigns', path: '/campaigns', icon: Megaphone },

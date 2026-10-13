@@ -268,7 +268,7 @@ def adjust_wallet(db: Session, client_id: str, amount: float, note: str, admin_i
 def call_charge(db: Session, call: Call) -> Optional[float]:
     """
     Credits (1 credit = Rs 1, pre-GST) a finished call costs: its real cost (carrier minutes, speech-to-text,
-    text-to-speech, LLM tokens, infra) plus the admin's profit %. None if it isn't billable.
+    text-to-speech, LLM tokens) plus the admin's profit %. None if it isn't billable.
     """
     if (call.metadata_ or {}).get("is_test") or call.status != "COMPLETED" or not call.duration_seconds:
         return None

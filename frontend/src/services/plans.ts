@@ -67,6 +67,10 @@ export interface NumberPrice {
   number_type: NumberType;
   monthly_rent_inr: number;
   monthly_rent_with_gst_inr: number;
+  /** One-time, charged with the first month */
+  setup_fee_inr: number;
+  /** Setup fee + first month's rent (credits, excl. GST) */
+  due_now_inr: number;
   is_available: boolean;
 }
 
@@ -76,6 +80,8 @@ export interface AvailableNumber {
   number_type: NumberType;
   monthly_rent_inr: number;
   monthly_rent_with_gst_inr: number;
+  setup_fee_inr: number;
+  due_now_inr: number;
 }
 
 export const NUMBER_TYPE_LABELS: Record<NumberType, string> = { Landline: 'Landline', Mobile: 'Mobile', TollFree: 'Toll-free' };
@@ -99,8 +105,11 @@ export const plansService = {
     }),
   usage: (clientId: string) => request<CallUsage[]>(`${c(clientId)}/usage`),
   numberPricing: () => request<NumberPrice[]>('/number-pricing'),
-  updateNumberPricing: (numberType: NumberType, monthly_rent_inr: number, is_available: boolean) =>
-    request<NumberPrice>(`/number-pricing/${numberType}`, { method: 'PUT', body: JSON.stringify({ monthly_rent_inr, is_available }) }),
+  updateNumberPricing: (numberType: NumberType, monthly_rent_inr: number, is_available: boolean, setup_fee_inr = 0) =>
+    request<NumberPrice>(`/number-pricing/${numberType}`, {
+      method: 'PUT',
+      body: JSON.stringify({ monthly_rent_inr, is_available, setup_fee_inr }),
+    }),
   searchNumbersForClient: (clientId: string, numberType: NumberType, region?: string) =>
     request<AvailableNumber[]>(`${c(clientId)}/numbers/available?number_type=${numberType}${region ? `&region=${encodeURIComponent(region)}` : ''}`),
   buyNumberForClient: (clientId: string, phone_number: string, number_type: NumberType) =>

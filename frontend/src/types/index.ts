@@ -304,6 +304,10 @@ export interface KnowledgeSource {
   type: string;
   status: string;
   description?: string | null;
+  /** What the AI employee reads on calls (notes, or FAQ as Q:/A: pairs) */
+  content?: string | null;
+  /** Set when written inside one AI employee's Knowledge tab; null = shared library */
+  owner_agent_id?: string | null;
   metadata?: Record<string, any>;
   created_at: string;
   updated_at: string;
@@ -406,6 +410,8 @@ export type StreamTurnEvent =
       assistant_response: string;
       display_text: string;
       tool_calls_executed: number;
+      /** The AI employee hung up (finished, or the caller went off-topic); the session is over */
+      call_ended?: boolean;
       usage: Record<string, any>;
       events: RuntimeEvent[];
     }

@@ -388,16 +388,23 @@ AVAILABLE_AGENT_TEMPLATES = [
 ]
 
 
+def _complete(tpl: Dict[str, Any]) -> Dict[str, Any]:
+    """The template with its configuration filled out to the full agent configuration (e.g. call limits),
+    so clients of the API can use it as-is."""
+    full = AgentConfigurationData(**tpl["default_config"]).model_dump(mode="json")
+    return {**tpl, "default_config": full}
+
+
 def get_all_agent_templates() -> List[Dict[str, Any]]:
     """Return all available preconfigured agent templates."""
-    return AVAILABLE_AGENT_TEMPLATES
+    return [_complete(tpl) for tpl in AVAILABLE_AGENT_TEMPLATES]
 
 
 def get_agent_template_by_id(template_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve a single agent template by identifier."""
     for tpl in AVAILABLE_AGENT_TEMPLATES:
         if tpl["id"] == template_id:
-            return tpl
+            return _complete(tpl)
     return None
 
 

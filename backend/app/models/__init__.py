@@ -21,6 +21,7 @@ from app.models.campaign import Campaign, CampaignRecipient, CampaignAttempt, Do
 from app.models.api_key import ApiKey
 from app.models.agent_request import AgentRequest
 from app.models.notification import ClientNotification
+from app.models.verification import ClientVerification
 
 __all__ = [
     "User",
@@ -64,4 +65,5 @@ __all__ = [
     "ApiKey",
     "AgentRequest",
     "ClientNotification",
+    "ClientVerification",
 ]

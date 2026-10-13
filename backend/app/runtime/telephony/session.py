@@ -28,6 +28,7 @@ from app.runtime.telephony.speech_text import SentenceChunker, clean_for_speech,
 from app.runtime.tools.catalog import describe_tools
 from app.runtime.telephony.recorder import CallRecorder
 from app.runtime.telephony import tts_cache
+from app.runtime import call_rules
 
 logger = logging.getLogger("choranta.runtime.telephony.session")
 
@@ -54,12 +55,7 @@ PHONE_STYLE_INSTRUCTIONS = (
     "- Say numbers and amounts the way people speak them, e.g. 'seventy-five lakh rupees'.\n"
     "- When the conversation is complete or the caller wants to stop, say a brief goodbye and call the end_call tool."
 )
-END_CALL_TOOL = {
-    "name": "end_call",
-    "id": "end_call",
-    "description": "Hang up the phone call. Use after saying goodbye, when the conversation is complete or the caller asks to end the call.",
-    "input_schema": {"type": "object", "properties": {"reason": {"type": "string", "description": "Why the call is ending"}}},
-}
+END_CALL_TOOL = call_rules.END_CALL_TOOL
 DEFAULT_FAREWELL = "Thank you for your time. Have a great day!"
 SILENCE_REPROMPT_TEXT = "Are you still there?"
 SILENCE_GOODBYE_TEXT = "I'll let you go for now. Thank you, goodbye!"
@@ -792,6 +788,8 @@ class TelephonyMediaSession:
         conversation.system_instruction += PHONE_STYLE_INSTRUCTIONS
         if conversation.messages and conversation.messages[0].role == ConversationRole.SYSTEM:
             conversation.messages[0].content = conversation.system_instruction.strip()
+        # Stay on the business's topic; hang up straight away on unrelated talk
+        call_rules.apply_rules(conversation, self.context.agent_spec)
 
     @property
     def limits(self) -> CallLimits:

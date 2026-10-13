@@ -11,7 +11,6 @@ export interface PricingPreview {
 
 export interface PricingSettings {
   profit_percent: number;
-  infra_cost_per_minute_inr: number;
   updated_at: string | null;
   updated_by: string | null;
   preview: PricingPreview;
@@ -19,9 +18,9 @@ export interface PricingSettings {
 
 export const pricingService = {
   get: () => request<PricingSettings>('/pricing'),
-  update: (profit_percent: number, infra_cost_per_minute_inr: number) =>
+  update: (profit_percent: number) =>
     request<PricingSettings>('/pricing', {
       method: 'PUT',
-      body: JSON.stringify({ profit_percent, infra_cost_per_minute_inr }),
+      body: JSON.stringify({ profit_percent }),
     }),
 };

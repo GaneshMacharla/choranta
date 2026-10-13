@@ -165,6 +165,7 @@ async def razorpay_webhook(request: Request, db: Session = Depends(get_db)):
 
 class NumberPriceRequest(BaseModel):
     monthly_rent_inr: float = Field(..., gt=0, description="Per month, excluding GST")
+    setup_fee_inr: float = Field(0.0, ge=0, description="One-time, charged with the first month")
     is_available: bool = True
 
 
@@ -186,6 +187,7 @@ def update_number_pricing(number_type: str, req: NumberPriceRequest, db: Session
     if not price:
         raise HTTPException(status_code=404, detail="Unknown number type.")
     price.monthly_rent_inr = req.monthly_rent_inr
+    price.setup_fee_inr = req.setup_fee_inr
     price.is_available = req.is_available
     db.commit()
     return phone_numbers.pricing_out(price)
@@ -205,5 +207,5 @@ def admin_search_numbers(client_id: str, number_type: str = "Landline", region: 
 def admin_buy_number(client_id: str, req: BuyNumberRequest, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     """Buys a number for the client; the first month's rent is still debited from their wallet."""
     _client_or_404(db, client_id)
-    pn = phone_numbers.buy_number(db, client_id, req.phone_number, req.number_type, user.id)
+    pn = phone_numbers.buy_number(db, client_id, req.phone_number, req.number_type, user.id, require_verification=False)
     return {"id": pn.id, "phone_number": pn.phone_number, **phone_numbers.rental_out(phone_numbers.rental_for(db, pn.id))}

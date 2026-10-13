@@ -14,7 +14,6 @@ router = APIRouter(prefix="/pricing", tags=["Pricing"])
 
 class UpdatePricingRequest(BaseModel):
     profit_percent: float = Field(..., description="Profit added on top of each call's real cost, in percent")
-    infra_cost_per_minute_inr: float = Field(..., description="Infrastructure overhead per conversation minute (INR), counted as cost")
 
 
 def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
@@ -25,7 +24,6 @@ def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
 def _response(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
     return {
         "profit_percent": pricing.profit_percent,
-        "infra_cost_per_minute_inr": pricing.infra_cost_per_minute_inr,
         "updated_at": pricing.updated_at.isoformat() if pricing.updated_at else None,
         "updated_by": pricing.updated_by,
         "preview": _preview(db, pricing),
@@ -34,7 +32,7 @@ def _response(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
 
 @router.get("")
 def get_pricing_settings(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    """Profit % and infrastructure overhead, with a cost/charge preview from recent calls (admin only)."""
+    """Profit %, with a cost/charge preview from recent calls (admin only)."""
     return _response(db, get_pricing(db))
 
 
@@ -44,6 +42,6 @@ def update_pricing_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    """Sets the profit % added to every call's real cost, and the infrastructure overhead (admin only)."""
-    pricing = update_pricing(db, req.profit_percent, req.infra_cost_per_minute_inr, current_user.id)
+    """Sets the profit % added to every call's real cost (admin only)."""
+    pricing = update_pricing(db, req.profit_percent, current_user.id)
     return _response(db, pricing)

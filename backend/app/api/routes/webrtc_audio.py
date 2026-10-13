@@ -3,6 +3,8 @@ import fractions
 import json
 import logging
 from app.runtime.tools.catalog import describe_tools
+from app.runtime import call_rules
+from app.runtime.knowledge import apply_knowledge
 import struct
 import time
 from datetime import datetime, timezone
@@ -273,6 +275,7 @@ async def handle_webrtc_offer(
             agent_spec=spec,
             metadata=session_record.metadata_
         )
+        apply_knowledge(db, context)
         runtime._contexts[session_id] = context
 
     stt_provider = default_registry.get_stt(context.agent_spec.providers.stt)
@@ -496,7 +499,8 @@ async def handle_webrtc_offer(
                 client_id=context.client_id
             )
 
-            available_tools_list = describe_tools(db, context.active_tools)
+            call_rules.apply_rules(context.conversation, context.agent_spec)
+            available_tools_list = call_rules.with_end_call(describe_tools(db, context.active_tools))
             llm_result = await llm_provider.generate_async(
                 system_instruction=context.conversation.system_instruction,
                 messages=context.conversation.to_llm_messages(),
@@ -520,7 +524,9 @@ async def handle_webrtc_offer(
                 payload={"latency_ms": llm_latency_ms, "finish_reason": llm_result.finish_reason}
             )
 
-            assistant_text = llm_result.text or context.agent_spec.conversation.fallback_response
+            hang_up = call_rules.wants_to_end(llm_result.tool_calls)
+            assistant_text = (call_rules.goodbye_text(context.agent_spec, llm_result.text) if hang_up
+                              else llm_result.text or context.agent_spec.conversation.fallback_response)
             context.conversation.add_assistant_message(content=assistant_text)
 
             emitter.emit(
@@ -550,6 +556,8 @@ async def handle_webrtc_offer(
                 )
             )
             await current_tts_task
+            if hang_up:
+                send_dc_event({"type": "call_ended", "reason": "agent_hung_up"})
 
         except Exception as e:
             logger.error(f"WebRTC turn execution error: {e}")

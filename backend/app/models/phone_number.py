@@ -17,7 +17,7 @@ class PhoneNumber(Base):
     provider_number_id = Column(String(128), nullable=True)  # ExoPhone sid from exotel
     phone_number = Column(String(32), nullable=False, unique=True, index=True)  # E.164 e.g. +14155552671
     country_code = Column(String(8), nullable=False, default="US")  # US, IN, GB, etc.
-    status = Column(String(32), nullable=False, default="ACTIVE", index=True)  # ACTIVE, INACTIVE, PROVISIONING
+    status = Column(String(32), nullable=False, default="ACTIVE", index=True)  # ACTIVE, READY_TO_TEST (bought, waiting for a test call), INACTIVE, PROVISIONING
 
     metadata_ = Column("metadata", JSON, default=dict)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)

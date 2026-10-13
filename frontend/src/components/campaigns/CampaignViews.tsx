@@ -28,6 +28,8 @@ import { Select } from '../common/Select';
 import { LoadingState } from '../common/LoadingState';
 import { ErrorState } from '../common/ErrorState';
 import { CampaignWizardModal } from './CampaignWizardModal';
+import { MockCallOutcomes } from './MockCallOutcomes';
+import { CollectedAnswers } from './CollectedAnswers';
 import { formatOutputValue } from '../calls/CallOutputsCard';
 import {
   Campaign,
@@ -487,6 +489,8 @@ export const CampaignDetail: React.FC<{ scope: CampaignScope; basePath: string }
         </div>
       </div>
 
+      {scope === 'admin' && <MockCallOutcomes campaignId={campaign.id} onDone={load} />}
+
       {campaign.kind === 'TRIGGER' && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-purple-800/40 bg-purple-950/20 p-3 text-xs text-slate-300">
           <span className="flex items-center gap-2">
@@ -573,27 +577,7 @@ export const CampaignDetail: React.FC<{ scope: CampaignScope; basePath: string }
       {Object.keys(s.collected || {}).length > 0 && (
         <div className="rounded-lg border border-[#143c49] bg-[#091b22] p-4">
           <div className="mb-3 text-xs font-semibold text-slate-300">Collected from answered calls</div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {Object.entries(s.collected).map(([name, counts]) => {
-              const max = Math.max(...Object.values(counts));
-              return (
-                <div key={name} className="space-y-1.5">
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500">{name.replace(/_/g, ' ')}</div>
-                  {Object.entries(counts).map(([value, count]) => (
-                    <div key={value} className="flex items-center gap-2 text-xs">
-                      <span className="w-28 shrink-0 truncate text-slate-300" title={value}>
-                        {value}
-                      </span>
-                      <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#143c49]">
-                        <span className="block h-full bg-[#00df8f]" style={{ width: `${(count / max) * 100}%` }} />
-                      </span>
-                      <span className="w-8 text-right text-slate-400">{count}</span>
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
-          </div>
+          <CollectedAnswers collected={s.collected} />
         </div>
       )}
 

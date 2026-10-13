@@ -10,7 +10,6 @@ const ROWS: Array<{ key: keyof NonNullable<CallCost['breakdown']>; label: string
   { key: 'text_to_speech', label: 'Agent voice (TTS)' },
   { key: 'speech_to_text', label: 'Speech-to-text' },
   { key: 'llm', label: 'AI model (LLM)' },
-  { key: 'infra', label: 'Infrastructure' },
 ];
 
 const LLM_LABELS: Record<string, string> = { sarvam: 'AI model (Sarvam)', gemini: 'AI model (Gemini)' };
@@ -88,8 +87,7 @@ export const CallCostCard: React.FC<{ cost: CallCost }> = ({ cost }) => {
           {cost.rates && (
             <p className="text-[10px] leading-relaxed text-slate-500">
               Estimated from backend rates (Exotel ₹{cost.rates.telephony_per_minute_inr}/min billed per{' '}
-              {cost.rates.billing_pulse_seconds}s, TTS ${cost.rates.tts_usd_per_minute}/min, infra ₹
-              {cost.rates.infra_per_minute_inr}/min). The client is charged cost + profit % in credits (₹1 = 1 credit); profit % and infra are set in Settings.
+              {cost.rates.billing_pulse_seconds}s, TTS ${cost.rates.tts_usd_per_minute}/min). The client is charged cost + profit % in credits (₹1 = 1 credit); profit % is set in Settings.
             </p>
           )}
         </>

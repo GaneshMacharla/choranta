@@ -7,6 +7,8 @@ import {
   StreamTurnEvent,
 } from '../types';
 
+export type MockCallOutcome = 'completed' | 'no-answer' | 'busy' | 'failed';
+
 export const runtimeService = {
   simulateMockCall: async (
     agentId: string,
@@ -20,6 +22,18 @@ export const runtimeService = {
         agent_version_id: agentVersionId,
         utterances,
       }),
+    });
+  },
+
+  completePendingMockCalls: async (body: {
+    status: MockCallOutcome;
+    duration_seconds?: number;
+    campaign_id?: string;
+    call_ids?: string[];
+  }): Promise<{ label: string; status: string; updated: number; call_ids: string[] }> => {
+    return request(`/mock/calls/complete-pending`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     });
   },
 

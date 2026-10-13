@@ -36,3 +36,6 @@ dist-ssr/
 
 # Phone call recordings (personal voice data)
 recordings/
+
+# Business verification (KYC) documents uploaded by clients
+uploads/

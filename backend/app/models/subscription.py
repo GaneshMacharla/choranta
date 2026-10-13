@@ -84,6 +84,7 @@ class NumberPricing(Base):
 
     number_type = Column(String(16), primary_key=True)  # Landline / Mobile / TollFree
     monthly_rent_inr = Column(Float, nullable=False)
+    setup_fee_inr = Column(Float, nullable=False, default=0.0)  # one-time, charged with the first month
     is_available = Column(Boolean, nullable=False, default=True)
     updated_at = Column(DateTime, default=_now, onupdate=_now, nullable=False)
 

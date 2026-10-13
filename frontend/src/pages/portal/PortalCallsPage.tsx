@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { CallOutputsCard } from '../../components/calls/CallOutputsCard';
 import { PhoneIncoming, PhoneOutgoing } from 'lucide-react';
 import { Card } from '../../components/common/Card';
@@ -21,6 +22,14 @@ export const PortalCallsPage: React.FC = () => {
   useEffect(() => {
     portalService.calls().then(setCalls).catch((err) => setError(err.message || 'Could not load calls.'));
   }, []);
+
+  // Opened from a link such as the dashboard's hot leads (/portal/calls?call=<id>)
+  const [searchParams] = useSearchParams();
+  const linkedCall = searchParams.get('call');
+  useEffect(() => {
+    if (linkedCall) open(linkedCall);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedCall]);
 
   const open = async (id: string) => {
     setOpenId(id);

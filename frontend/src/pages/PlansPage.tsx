@@ -234,6 +234,7 @@ export const PlansPage: React.FC = () => {
 const NumberPricingCard: React.FC<{ isAdmin: boolean }> = ({ isAdmin }) => {
   const [prices, setPrices] = useState<NumberPrice[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [setupDrafts, setSetupDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -243,6 +244,7 @@ const NumberPricingCard: React.FC<{ isAdmin: boolean }> = ({ isAdmin }) => {
       .then((p) => {
         setPrices(p);
         setDrafts(Object.fromEntries(p.map((x) => [x.number_type, String(x.monthly_rent_inr)])));
+        setSetupDrafts(Object.fromEntries(p.map((x) => [x.number_type, String(x.setup_fee_inr ?? 0)])));
       })
       .catch((err) => setError(err.message || 'Could not load number pricing.'));
 
@@ -254,7 +256,7 @@ const NumberPricingCard: React.FC<{ isAdmin: boolean }> = ({ isAdmin }) => {
     setBusy(price.number_type);
     setError(null);
     try {
-      await plansService.updateNumberPricing(price.number_type, Number(drafts[price.number_type]), isAvailable);
+      await plansService.updateNumberPricing(price.number_type, Number(drafts[price.number_type]), isAvailable, Number(setupDrafts[price.number_type] || 0));
       await load();
     } catch (err: any) {
       setError(err.message || 'Could not save.');
@@ -270,12 +272,12 @@ const NumberPricingCard: React.FC<{ isAdmin: boolean }> = ({ isAdmin }) => {
           <Phone className="h-4 w-4 text-[#00df8f]" /> Phone number rent
         </span>
       }
-      subtitle="What clients pay per number each month (excl. GST), charged from their wallet. New prices apply to numbers bought from now on."
+      subtitle="What clients pay per number: a one-time setup fee plus monthly rent (excl. GST), taken from bought credits. New prices apply to numbers bought from now on."
     >
       {error && <p className="mb-3 text-xs text-rose-300">{error}</p>}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         {prices.map((p) => {
-          const changed = Number(drafts[p.number_type]) !== p.monthly_rent_inr;
+          const changed = Number(drafts[p.number_type]) !== p.monthly_rent_inr || Number(setupDrafts[p.number_type] || 0) !== (p.setup_fee_inr ?? 0);
           return (
             <div key={p.number_type} className={`rounded-lg border border-[#143c49] bg-[#06141a] p-4 text-xs ${p.is_available ? '' : 'opacity-60'}`}>
               <div className="flex items-center justify-between">
@@ -294,6 +296,17 @@ const NumberPricingCard: React.FC<{ isAdmin: boolean }> = ({ isAdmin }) => {
                 />
               </label>
               <p className="mt-1 text-[11px] text-slate-500">{inr(p.monthly_rent_with_gst_inr)} incl. GST</p>
+              <label className="mt-3 block space-y-1">
+                <span className="text-slate-400">One-time setup fee (₹, excl. GST)</span>
+                <input
+                  type="number"
+                  min={0}
+                  className={inputClass}
+                  value={setupDrafts[p.number_type] ?? '0'}
+                  disabled={!isAdmin}
+                  onChange={(e) => setSetupDrafts({ ...setupDrafts, [p.number_type]: e.target.value })}
+                />
+              </label>
               {isAdmin && (
                 <div className="mt-3 flex justify-between gap-2">
                   <Button size="sm" variant="ghost" isLoading={busy === p.number_type && !changed} onClick={() => save(p, !p.is_available)}>

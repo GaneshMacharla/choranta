@@ -65,7 +65,7 @@ def test_record_payment_issues_sequential_invoices_and_credits_taxable_value(db:
 
 def test_call_is_charged_once_and_test_calls_are_free(db: Session, telephony_setup, company):
     client_id = telephony_setup["client"].id
-    update_pricing(db, 40.0, 0.30, None)
+    update_pricing(db, 40.0, None)
     billing.record_payment(db, client_id, 1180, None, None)  # Rs 1000 wallet
     call = _completed_call(db, telephony_setup)
 

@@ -17,10 +17,11 @@ interface BuyNumberModalProps {
   topUpLink?: string;
   search: (numberType: NumberType, region?: string) => Promise<AvailableNumber[]>;
   buy: (phoneNumber: string, numberType: NumberType) => Promise<unknown>;
-  onBought: () => void;
+  /** Receives what `buy` returned (the new number) */
+  onBought: (bought?: any) => void;
 }
 
-/** Search Exotel's available numbers and buy one; the first month's rent comes from the wallet. */
+/** Search available numbers and buy one; the setup fee and first month's rent come from bought credits. */
 export const BuyNumberModal: React.FC<BuyNumberModalProps> = ({
   isOpen, onClose, pricing, walletBalance, topUpLink, search, buy, onBought,
 }) => {
@@ -41,7 +42,8 @@ export const BuyNumberModal: React.FC<BuyNumberModalProps> = ({
   }, [isOpen]);
 
   const price = pricing.find((p) => p.number_type === numberType);
-  const short = walletBalance !== undefined && price ? walletBalance < price.monthly_rent_inr : false;
+  const dueNow = price ? price.due_now_inr ?? price.monthly_rent_inr : 0;
+  const short = walletBalance !== undefined && price ? walletBalance < dueNow : false;
 
   const runSearch = async () => {
     setBusy('search');
@@ -61,9 +63,9 @@ export const BuyNumberModal: React.FC<BuyNumberModalProps> = ({
     setBusy('buy');
     setError(null);
     try {
-      await buy(selected.phone_number, selected.number_type);
-      onBought();
+      const bought = await buy(selected.phone_number, selected.number_type);
       onClose();
+      onBought(bought);
     } catch (err: any) {
       setError(err.message || 'Could not buy this number.');
     } finally {
@@ -76,7 +78,7 @@ export const BuyNumberModal: React.FC<BuyNumberModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       title="Get a phone number"
-      description="Numbers are provided by Choranta. Rent is charged monthly from the wallet; the first month is charged now."
+      description="Numbers are provided by Choranta. Pick one, confirm the charges, and it's set up in seconds."
       maxWidth="xl"
     >
       <div className="space-y-4 text-xs">
@@ -132,18 +134,23 @@ export const BuyNumberModal: React.FC<BuyNumberModalProps> = ({
         )}
 
         {selected && price && (
-          <div className="rounded border border-[#143c49] bg-[#06141a] p-3 text-slate-300">
-            <p>
-              <span className="font-mono text-slate-100">{selected.phone_number}</span> costs{' '}
-              <strong className="text-slate-100">{inr(price.monthly_rent_inr)}/month</strong>, charged from the wallet now and every month after.
-            </p>
+          <div className="space-y-1.5 rounded border border-[#143c49] bg-[#06141a] p-3 text-slate-300">
+            <p className="font-mono text-sm text-slate-100">{selected.phone_number}</p>
+            <div className="flex justify-between"><span>Monthly rent</span><span className="font-mono">{inr(price.monthly_rent_inr)}</span></div>
+            {price.setup_fee_inr > 0 && (
+              <div className="flex justify-between"><span>One-time setup fee</span><span className="font-mono">{inr(price.setup_fee_inr)}</span></div>
+            )}
+            <div className="flex justify-between border-t border-[#143c49] pt-1.5 font-semibold text-slate-100">
+              <span>Due now (from bought credits)</span><span className="font-mono">{inr(dueNow)}</span>
+            </div>
+            <p className="text-[11px] text-slate-500">After this, {inr(price.monthly_rent_inr)} is taken each month. Prices exclude GST, which you paid when buying credits.</p>
             {walletBalance !== undefined && (
               <p className={`mt-1 ${short ? 'text-rose-300' : 'text-slate-500'}`}>
-                Wallet balance {inr(walletBalance)}
+                Bought credits: {inr(walletBalance)}
                 {short && (
                   <>
-                    {' '}— not enough for the first month.{' '}
-                    {topUpLink && <Link to={topUpLink} className="text-[#00df8f] hover:underline">Top up the wallet</Link>}
+                    {' '}— not enough.{' '}
+                    {topUpLink && <Link to={topUpLink} className="text-[#00df8f] hover:underline">Buy credits</Link>}
                   </>
                 )}
               </p>
@@ -154,7 +161,7 @@ export const BuyNumberModal: React.FC<BuyNumberModalProps> = ({
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={!selected || short} isLoading={busy === 'buy'} onClick={runBuy}>
-            Buy number
+            {price && selected ? `Buy for ${inr(dueNow)}` : 'Buy number'}
           </Button>
         </div>
       </div>

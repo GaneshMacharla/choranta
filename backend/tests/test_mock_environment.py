@@ -81,3 +81,38 @@ def test_simulated_call_uses_runtime_and_persists_call(client, operator_headers,
     assert data["event_count"] > 0
     assert data["billing_excluded"] is True
     assert db.query(Call).filter(Call.id == data["call_id"]).one().provider == "mock_telephony"
+
+
+def test_complete_pending_ends_only_mock_outbound_calls(client, operator_headers, db):
+    client.post("/api/mock/seed", headers=operator_headers)
+    agent = db.query(Agent).filter(Agent.id == "mock_agt_acme_health").one()
+
+    def outbound(call_id, provider_call_id):
+        return Call(
+            id=call_id, client_id=agent.client_id, agent_id=agent.id, agent_version_id="mock_agtv_1",
+            provider="exotel", provider_call_id=provider_call_id, direction="OUTBOUND",
+            caller_number="+910000000000", destination_number="+919876543210", status="INITIATED",
+        )
+
+    db.add_all([
+        outbound("call_sim_a", "mock_call_aaaaaaaaaaaa"),
+        outbound("call_sim_b", "mock_call_bbbbbbbbbbbb"),
+        outbound("call_real_c", "exotel_real_sid"),
+    ])
+    db.commit()
+
+    only_b = client.post(
+        "/api/mock/calls/complete-pending", headers=operator_headers,
+        json={"status": "no-answer", "call_ids": ["call_sim_b"]},
+    )
+    assert only_b.status_code == 200, only_b.text
+    assert only_b.json()["call_ids"] == ["call_sim_b"]
+
+    rest = client.post("/api/mock/calls/complete-pending", headers=operator_headers, json={"duration_seconds": 45})
+    assert rest.json()["call_ids"] == ["call_sim_a"]
+
+    db.expire_all()
+    a, b, c = (db.get(Call, i) for i in ("call_sim_a", "call_sim_b", "call_real_c"))
+    assert (a.status, a.duration_seconds) == ("COMPLETED", 45.0)
+    assert (b.status, b.termination_reason) == ("FAILED", "no-answer")
+    assert c.status == "INITIATED"

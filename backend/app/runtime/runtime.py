@@ -24,6 +24,8 @@ from app.runtime.events.types import RuntimeEventType
 from app.runtime.providers.registry import ProviderRegistry, default_registry
 from app.runtime.tools.executor import ToolExecutor
 from app.runtime.readiness.checker import RuntimeReadinessChecker
+from app.runtime import call_rules
+from app.runtime.knowledge import apply_knowledge
 from app.runtime.call_limits import resolve_call_limits
 
 logger = logging.getLogger("choranta.runtime")
@@ -208,6 +210,7 @@ class AgentRuntime:
             agent_spec=spec,
             metadata=session_metadata
         )
+        apply_knowledge(self.db, context)
         session_metadata["resolved_greeting"] = context.resolved_greeting
         saved_session.metadata_ = session_metadata
 
@@ -270,6 +273,7 @@ class AgentRuntime:
             agent_spec=spec,
             metadata=dict(session_record.metadata_ or {})
         )
+        apply_knowledge(self.db, context)
         for entry in (session_record.metadata_ or {}).get("transcript") or []:
             if entry.get("role") == "user":
                 context.conversation.add_user_message(entry.get("content") or "")
@@ -338,7 +342,9 @@ class AgentRuntime:
             )
             context.conversation.add_user_message(user_text)
 
-            available_tools_list = describe_tools(self.db, context.active_tools)
+            call_rules.apply_rules(context.conversation, spec)
+            available_tools_list = call_rules.with_end_call(describe_tools(self.db, context.active_tools))
+            call_ended = False
 
             def run_llm(tools):
                 final = None
@@ -368,6 +374,18 @@ class AgentRuntime:
             tool_rounds = 0
             max_tool_rounds = resolve_call_limits(spec).max_tool_rounds
             while llm_result.tool_calls and tool_rounds < max_tool_rounds:
+                if call_rules.wants_to_end(llm_result.tool_calls):
+                    # The AI employee is hanging up: say its goodbye and end, no further turns
+                    call_ended = True
+                    goodbye = call_rules.goodbye_text(spec, llm_result.text)
+                    if not llm_result.text:
+                        streamed_parts.append(goodbye)
+                        yield {"type": "delta", "text": goodbye}
+                    llm_result.text = goodbye
+                    llm_result.tool_calls = []
+                    self.emitter.emit(RuntimeEventType.TOOL_CALL_COMPLETED, **ids,
+                                      payload={"tool_name": call_rules.END_CALL_TOOL_NAME, "success": True})
+                    break
                 tool_rounds += 1
                 context.conversation.add_assistant_message(
                     content=llm_result.text,
@@ -421,6 +439,7 @@ class AgentRuntime:
             "assistant_response": assistant_text,
             "display_text": "".join(streamed_parts).strip(),
             "tool_calls_executed": tool_calls_executed,
+            "call_ended": call_ended,
             "usage": context.usage_tracker.get_summary(),
             "events": event_records,
             "persist": lambda: persist_turn(bind, session_id, context, event_records),
@@ -484,7 +503,9 @@ class AgentRuntime:
                 client_id=context.client_id
             )
 
-            available_tools_list = describe_tools(self.db, context.active_tools)
+            call_rules.apply_rules(context.conversation, spec)
+            available_tools_list = call_rules.with_end_call(describe_tools(self.db, context.active_tools))
+            call_ended = False
             llm_result = llm_p.generate(
                 system_instruction=context.conversation.system_instruction,
                 messages=context.conversation.to_llm_messages(),
@@ -515,6 +536,12 @@ class AgentRuntime:
             tool_rounds = 0
             max_tool_rounds = resolve_call_limits(spec).max_tool_rounds
             while llm_result.tool_calls and tool_rounds < max_tool_rounds:
+                if call_rules.wants_to_end(llm_result.tool_calls):
+                    # The AI employee is hanging up: its goodbye is the last reply
+                    call_ended = True
+                    llm_result.text = call_rules.goodbye_text(spec, llm_result.text)
+                    llm_result.tool_calls = []
+                    break
                 tool_rounds += 1
                 # Append assistant message with tool calls
                 context.conversation.add_assistant_message(
@@ -622,6 +649,7 @@ class AgentRuntime:
         usage = context.usage_tracker.get_summary()
         result: Dict[str, Any] = {
             "session_id": session_id,
+            "call_ended": call_ended,
             "transcript": user_text,
             "assistant_response": assistant_text,
             "audio_duration_seconds": audio_duration_seconds,

@@ -1,7 +1,8 @@
 """
 Post-call extraction: after a call ends, an LLM reads the transcript and fills in the agent's
-output variables (e.g. target_exam, demo_class_booked) plus a one-line summary. Results are
-stored on the Call (metadata.outputs / metadata.summary) and surface in campaign results.
+output variables (e.g. target_exam, demo_class_booked), a one-line summary and the caller's interest.
+Results are stored on the Call (metadata.outputs / summary / interest / callback_time) and surface in
+campaign results and the client's outbound insights.
 """
 import json
 import logging
@@ -22,12 +23,18 @@ logger = logging.getLogger("choranta.services.call_outputs")
 # Status values kept in Call.metadata["outputs_status"]
 PENDING, DONE, FAILED, SKIPPED = "pending", "done", "failed", "skipped"
 
+INTEREST_VALUES = ("interested", "callback", "not_interested", "do_not_call", "unclear")
+
 EXTRACTION_PROMPT = """You extract structured results from a finished phone call between an AI agent and a caller.
 Read the transcript and return ONLY a JSON object with exactly these keys:
 - "outputs": an object with one key per variable listed below. Use the variable's type
   (string, number or boolean). Use null when the caller never gave or confirmed the information;
   never guess.
 - "summary": one short sentence (max 30 words) describing what happened on the call.
+- "interest": the caller's interest at the end of the call, exactly one of:
+  "interested" (wants the offer or agreed to a next step), "callback" (asked to be called back later),
+  "not_interested", "do_not_call" (asked never to be called again), "unclear".
+- "callback_time": when the caller asked to be called back, in their words (e.g. "tomorrow evening"); null otherwise.
 
 Variables:
 {variables}
@@ -95,8 +102,13 @@ def _parse_json(text: str) -> Dict[str, Any]:
     return json.loads(text)
 
 
+def _interest(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return text if text in INTEREST_VALUES else "unclear"
+
+
 def extract_outputs(definitions: List[Dict[str, Any]], transcript: List[Tuple[str, str]], llm) -> Dict[str, Any]:
-    """Runs the extraction prompt. Returns {"outputs": {...}, "summary": str}."""
+    """Runs the extraction prompt. Returns {"outputs": {...}, "summary": str, "interest": str, "callback_time": str|None}."""
     variables = "\n".join(
         f"- {d['name']} ({d.get('data_type') or 'string'}): {d.get('description') or ''}"
         + (f" Instructions: {d['extraction_instructions']}" if d.get("extraction_instructions") else "")
@@ -113,7 +125,9 @@ def extract_outputs(definitions: List[Dict[str, Any]], transcript: List[Tuple[st
     raw = data.get("outputs") if isinstance(data.get("outputs"), dict) else {}
     outputs = {d["name"]: _coerce(raw.get(d["name"]), d.get("data_type")) for d in definitions}
     summary = str(data.get("summary") or "").strip()[:300]
-    return {"outputs": outputs, "summary": summary}
+    callback_time = str(data.get("callback_time") or "").strip()[:120] or None
+    return {"outputs": outputs, "summary": summary, "interest": _interest(data.get("interest")),
+            "callback_time": callback_time}
 
 
 def _set_metadata(db: Session, call: Call, **values: Any) -> None:
@@ -124,13 +138,20 @@ def _set_metadata(db: Session, call: Call, **values: Any) -> None:
     db.commit()
 
 
+def _is_campaign_call(call: Call) -> bool:
+    """Campaign and instant-lead calls always get a summary and interest for the client's insights."""
+    return call.direction == "OUTBOUND" and bool((call.metadata_ or {}).get("campaign_id"))
+
+
 def needs_extraction(db: Session, call: Call) -> bool:
+    if _is_campaign_call(call):
+        return True
     version = db.get(AgentVersion, call.agent_version_id)
     return bool(version and output_definitions(version.configuration_json or {}))
 
 
 def mark_pending(db: Session, call: Call) -> bool:
-    """Flags an ended call for extraction; returns False when its agent defines no outputs."""
+    """Flags an ended call for extraction; returns False when there is nothing to extract."""
     if not needs_extraction(db, call):
         return False
     _set_metadata(db, call, outputs_status=PENDING)
@@ -147,7 +168,7 @@ def run_extraction(db: Session, call_id: str, llm=None) -> Optional[Dict[str, An
         config = (version.configuration_json or {}) if version else {}
         definitions = output_definitions(config)
         transcript = call_transcript(db, call)
-        if not definitions or not any(speaker == "Caller" for speaker, _ in transcript):
+        if (not definitions and not _is_campaign_call(call)) or not any(speaker == "Caller" for speaker, _ in transcript):
             # Nothing to extract, or the caller never spoke: every output is unknown
             _set_metadata(db, call, outputs={d["name"]: None for d in definitions}, outputs_status=SKIPPED)
             return call.metadata_
@@ -155,7 +176,8 @@ def run_extraction(db: Session, call_id: str, llm=None) -> Optional[Dict[str, An
             provider = (settings.LLM_PROVIDER_OVERRIDE or "").strip().lower() or (config.get("providers") or {}).get("llm") or "gemini"
             llm = default_registry.get_llm(provider)
         extracted = extract_outputs(definitions, transcript, llm)
-        _set_metadata(db, call, outputs=extracted["outputs"], summary=extracted["summary"], outputs_status=DONE)
+        _set_metadata(db, call, outputs=extracted["outputs"], summary=extracted["summary"],
+                      interest=extracted["interest"], callback_time=extracted["callback_time"], outputs_status=DONE)
         return call.metadata_
     except Exception as e:
         logger.warning(f"Output extraction failed for call {call_id}: {type(e).__name__}: {e}")

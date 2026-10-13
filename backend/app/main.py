@@ -12,7 +12,7 @@ from app.api.routes import (
     auth, clients, agents, dashboard,
     agent_configuration, catalogs, runtime,
     websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing, inventory, billing, portal, plans,
-    campaigns, api_keys, public_leads, agent_requests
+    campaigns, api_keys, public_leads, agent_requests, verifications
 )
 
 logging.basicConfig(
@@ -166,6 +166,7 @@ app.include_router(api_keys.admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(public_leads.router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_requests.portal_router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_requests.admin_router, prefix=settings.API_V1_PREFIX)
+app.include_router(verifications.router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)

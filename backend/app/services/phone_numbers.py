@@ -1,8 +1,10 @@
 """
 Phone numbers clients buy from Choranta.
 
-Buying provisions an ExoPhone on Choranta's Exotel account (services/exotel_numbers.py) and debits the
-first month's rent from the client's wallet. A background cycle renews the rent from the wallet each
+Clients verify their business once (services/verifications.py). Buying then provisions an ExoPhone on
+Choranta's Exotel account (services/exotel_numbers.py) and debits the one-time setup fee and the first
+month's rent from the client's wallet. The number starts READY_TO_TEST: once an AI employee is assigned,
+a test call to the client's phone that connects (or the client skipping the test) makes it ACTIVE. A background cycle renews the rent from the wallet each
 month; if the balance can't cover it the number is PAST_DUE, and after NUMBER_GRACE_DAYS it is released
 back to Exotel. Numbers registered without a rental (before numbers were sold) are free.
 """
@@ -20,7 +22,7 @@ from app.models.agent_version import AgentVersion
 from app.models.billing import WalletTransaction
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import NumberPricing, NumberRental
-from app.services import exotel_numbers
+from app.services import exotel_numbers, notifications, verifications
 from app.services.billing import _money, get_wallet
 from app.services.subscriptions import add_month, utcnow
 
@@ -30,7 +32,7 @@ logger = logging.getLogger("choranta.services.phone_numbers")
 class InsufficientBalance(ValidationException):
     def __init__(self, needed: float, balance: float):
         super().__init__(
-            f"Your wallet needs Rs {needed:,.2f} for the first month's rent (balance Rs {balance:,.2f}). Top up and try again.",
+            f"You need {needed:,.2f} credits for the setup fee and first month's rent (you have {balance:,.2f}). Buy credits and try again.",
             details={"needed_inr": needed, "balance_inr": balance},
         )
         self.status_code = 402
@@ -50,8 +52,10 @@ def get_pricing(db: Session) -> List[NumberPricing]:
 
 def pricing_out(p: NumberPricing) -> Dict[str, Any]:
     gst = settings.GST_RATE_PERCENT / 100.0
+    setup = float(getattr(p, "setup_fee_inr", 0) or 0)
     return {"number_type": p.number_type, "monthly_rent_inr": p.monthly_rent_inr,
-            "monthly_rent_with_gst_inr": _money(p.monthly_rent_inr * (1 + gst)), "is_available": p.is_available}
+            "monthly_rent_with_gst_inr": _money(p.monthly_rent_inr * (1 + gst)), "setup_fee_inr": setup,
+            "due_now_inr": _money(p.monthly_rent_inr + setup), "is_available": p.is_available}
 
 
 def rental_for(db: Session, phone_number_id: str) -> Optional[NumberRental]:
@@ -90,14 +94,18 @@ def search(db: Session, number_type: str, region: Optional[str] = None) -> List[
     taken = {n for (n,) in db.query(PhoneNumber.phone_number).all()}
     out = pricing_out(price)
     return [
-        {**item, "monthly_rent_inr": out["monthly_rent_inr"], "monthly_rent_with_gst_inr": out["monthly_rent_with_gst_inr"]}
+        {**item, "monthly_rent_inr": out["monthly_rent_inr"], "monthly_rent_with_gst_inr": out["monthly_rent_with_gst_inr"],
+         "setup_fee_inr": out["setup_fee_inr"], "due_now_inr": out["due_now_inr"]}
         for item in exotel_numbers.search_available("IN", number_type, region)
         if item["phone_number"] not in taken
     ]
 
 
-def buy_number(db: Session, client_id: str, phone_number: str, number_type: str, user_id: Optional[str]) -> PhoneNumber:
-    """Provisions the number on Exotel and charges the first month's rent from the wallet."""
+def buy_number(db: Session, client_id: str, phone_number: str, number_type: str, user_id: Optional[str],
+               require_verification: bool = True) -> PhoneNumber:
+    """Provisions the number on Exotel and charges the setup fee + first month's rent from the wallet."""
+    if require_verification:
+        verifications.require_approved(db, client_id)
     price = db.get(NumberPricing, number_type)
     if not price or not price.is_available:
         raise ValidationException(f"{number_type} numbers aren't available right now.")
@@ -105,9 +113,11 @@ def buy_number(db: Session, client_id: str, phone_number: str, number_type: str,
     if db.query(PhoneNumber.id).filter(PhoneNumber.phone_number == number).first():
         raise ValidationException("That number is already taken. Pick another one.")
     # Checked without a lock: the Exotel purchase below can take seconds, and call charges must not wait on it
+    setup_fee = float(price.setup_fee_inr or 0)
+    due_now = _money(price.monthly_rent_inr + setup_fee)
     balance = get_wallet(db, client_id).balance_inr
-    if balance < price.monthly_rent_inr:
-        raise InsufficientBalance(price.monthly_rent_inr, balance)
+    if balance < due_now:
+        raise InsufficientBalance(due_now, balance)
 
     try:
         bought = exotel_numbers.purchase(number, f"Choranta {client_id}")
@@ -120,7 +130,7 @@ def buy_number(db: Session, client_id: str, phone_number: str, number_type: str,
         pn = PhoneNumber(
             id=generate_unique_id("phn", 10), client_id=client_id, provider="exotel",
             provider_number_id=bought["sid"], phone_number=bought["phone_number"], country_code="IN",
-            status="ACTIVE", metadata_={"number_type": number_type, "bought_from_choranta": True},
+            status="READY_TO_TEST", metadata_={"number_type": number_type, "bought_from_choranta": True},
         )
         db.add(pn)
         db.flush()
@@ -130,6 +140,14 @@ def buy_number(db: Session, client_id: str, phone_number: str, number_type: str,
         )
         db.add(rental)
         _debit_rent(db, rental, pn.phone_number, start, end, user_id)
+        if setup_fee > 0:
+            wallet = get_wallet(db, client_id, lock=True)
+            wallet.balance_inr = _money(wallet.balance_inr - setup_fee)
+            db.add(WalletTransaction(client_id=client_id, type="DEBIT", amount_inr=-setup_fee,
+                                     balance_after_inr=wallet.balance_inr, note=f"Number setup fee, {pn.phone_number}",
+                                     created_by=user_id))
+        notifications.notify(db, client_id, "NUMBER_READY", f"{pn.phone_number} is ready to test",
+                             "Assign an AI employee and place a test call to start using it.", link="/portal/numbers")
         db.commit()
     except Exception:
         db.rollback()
@@ -273,3 +291,71 @@ def assign_agent(db: Session, pn: PhoneNumber, agent_id: Optional[str]) -> Phone
     pn.agent_version_id = version.id
     db.commit()
     return pn
+
+
+# ---------------------------------------------------------------- test & activate
+
+TESTABLE_STATUSES = ("READY_TO_TEST", "ACTIVE")
+
+
+def _activate(db: Session, pn: PhoneNumber, how: str) -> PhoneNumber:
+    if pn.status == "ACTIVE":
+        return pn
+    pn.status = "ACTIVE"
+    meta = dict(pn.metadata_ or {})
+    meta["activated_by"] = how
+    meta["activated_at"] = utcnow().isoformat()
+    pn.metadata_ = meta
+    notifications.notify(db, pn.client_id, "NUMBER_ACTIVE", f"{pn.phone_number} is active",
+                         "Your AI employee now answers this number and can call from it.", link="/portal/numbers",
+                         level="success")
+    db.commit()
+    return pn
+
+
+def activate_without_test(db: Session, pn: PhoneNumber) -> PhoneNumber:
+    """The client chose to skip the test call."""
+    if pn.status not in TESTABLE_STATUSES:
+        raise ValidationException("This number can't be activated.")
+    return _activate(db, pn, "skipped_test")
+
+
+def start_test_call(db: Session, pn: PhoneNumber, to_number: str):
+    """Calls the client's phone from the new number with its AI employee; a connected call activates it."""
+    from app.services.outbound_calls import place_outbound_call
+    if pn.status not in TESTABLE_STATUSES:
+        raise ValidationException("This number can't be tested.")
+    if not pn.agent_id or not pn.agent_version_id:
+        raise ValidationException("Assign an AI employee to this number first.")
+    to = (to_number or "").strip()
+    if len("".join(ch for ch in to if ch.isdigit())) < 10:
+        raise ValidationException("Enter the phone number to call for the test.")
+    call = place_outbound_call(db, destination_number=to, phone_number_id=pn.id, is_test=True,
+                               extra_metadata={"number_test": pn.id})
+    meta = dict(pn.metadata_ or {})
+    meta.update(test_call_id=call.id, test_started_at=utcnow().isoformat(), test_result=None)
+    pn.metadata_ = meta
+    db.commit()
+    return call
+
+
+def record_test_result(db: Session, call: Any, connected: bool, reason: Optional[str] = None) -> None:
+    """Called from the carrier status callback for a test call."""
+    number_id = (call.metadata_ or {}).get("number_test")
+    pn = db.get(PhoneNumber, number_id) if number_id else None
+    if not pn:
+        return
+    meta = dict(pn.metadata_ or {})
+    meta["test_result"] = "CONNECTED" if connected else (reason or "NOT_CONNECTED")
+    pn.metadata_ = meta
+    db.commit()
+    if connected:
+        _activate(db, pn, "test_call")
+
+
+def test_state(db: Session, pn: PhoneNumber) -> Dict[str, Any]:
+    from app.models.call import Call
+    meta = pn.metadata_ or {}
+    call = db.get(Call, meta["test_call_id"]) if meta.get("test_call_id") else None
+    return {"test_call_id": meta.get("test_call_id"), "test_call_status": call.status if call else None,
+            "test_result": meta.get("test_result"), "activated_by": meta.get("activated_by")}

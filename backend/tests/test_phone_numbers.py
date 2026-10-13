@@ -38,6 +38,19 @@ def exotel(monkeypatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def verified_business(request, db: Session):
+    """These tests are about renting; the client has already passed business verification."""
+    if "telephony_setup" not in request.fixturenames:
+        return
+    from app.models.verification import ClientVerification
+    cid = request.getfixturevalue("telephony_setup")["client"].id
+    if not db.get(ClientVerification, cid):
+        db.add(ClientVerification(client_id=cid, status="APPROVED", legal_name="Test Clinic", pan="ABCDE1234F",
+                                  registered_address="Hyderabad", signatory_name="Owner", documents=[]))
+        db.commit()
+
+
 def _number() -> str:
     return "+9140" + str(generate_unique_id("", 8)).replace("_", "")[-8:].translate(str.maketrans("abcdef", "123456"))
 
@@ -61,7 +74,7 @@ def test_buy_needs_balance_and_charges_first_month(db: Session, telephony_setup,
     _fund(db, cid, 1180)  # Rs 1000 wallet
     pn = phone_numbers.buy_number(db, cid, number, "Landline", None)
     rental = phone_numbers.rental_for(db, pn.id)
-    assert pn.status == "ACTIVE" and pn.provider_number_id == f"sid_{number.lstrip('+')}"
+    assert pn.status == "READY_TO_TEST" and pn.provider_number_id == f"sid_{number.lstrip('+')}"
     assert rental.monthly_rent_inr == 499.0 and rental.status == "ACTIVE"
     assert billing.get_wallet(db, cid).balance_inr == 501.0
     assert len(_rent_debits(db, cid)) == 1
@@ -161,7 +174,7 @@ def test_portal_numbers_flow(client: TestClient, auth_headers: dict, db: Session
     assert assigned["agent_name"] == telephony_setup["agent"].name
 
     later = client.delete(f"/api/portal/numbers/{nid}", headers=headers).json()
-    assert later["cancel_at_period_end"] is True and later["status"] == "ACTIVE"
+    assert later["cancel_at_period_end"] is True and later["status"] == "READY_TO_TEST"
     assert client.post(f"/api/portal/numbers/{nid}/keep", headers=headers).json()["cancel_at_period_end"] is False
 
     listed = client.get("/api/portal/numbers", headers=headers).json()

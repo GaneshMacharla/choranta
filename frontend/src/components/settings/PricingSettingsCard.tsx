@@ -7,18 +7,16 @@ import { pricingService, PricingSettings } from '../../services/pricing';
 const inr = (value: number | null | undefined) =>
   value == null ? '—' : `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-/** Admin-only: profit % added to each call's real cost (charged in credits), and infra overhead. */
+/** Admin-only: profit % added to each call's real cost (charged in credits). */
 export const PricingSettingsCard: React.FC = () => {
   const [pricing, setPricing] = useState<PricingSettings | null>(null);
   const [profit, setProfit] = useState('');
-  const [infra, setInfra] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   const apply = (data: PricingSettings) => {
     setPricing(data);
     setProfit(String(data.profit_percent));
-    setInfra(String(data.infra_cost_per_minute_inr));
   };
 
   useEffect(() => {
@@ -26,21 +24,18 @@ export const PricingSettingsCard: React.FC = () => {
   }, []);
 
   const profitValue = Number(profit);
-  const infraValue = Number(infra);
-  const valid = profit !== '' && infra !== '' && profitValue >= 0 && profitValue <= 1000 && infraValue >= 0;
+  const valid = profit !== '' && profitValue >= 0 && profitValue <= 1000;
 
-  // Live estimate while typing: recent average provider cost + new infra, then the new profit %
+  // Live estimate while typing: recent average real cost per minute, then the new profit %
   const preview = pricing?.preview;
-  const providerCostPerMin =
-    preview?.avg_cost_per_minute != null ? preview.avg_cost_per_minute - pricing!.infra_cost_per_minute_inr : null;
-  const draftCost = providerCostPerMin != null && valid ? providerCostPerMin + infraValue : null;
+  const draftCost = preview?.avg_cost_per_minute != null && valid ? preview.avg_cost_per_minute : null;
   const draftCharge = draftCost != null ? draftCost * (1 + profitValue / 100) : null;
 
   const save = async () => {
     setSaving(true);
     setMessage(null);
     try {
-      apply(await pricingService.update(profitValue, infraValue));
+      apply(await pricingService.update(profitValue));
       setMessage({ ok: true, text: 'Pricing saved. Calls ending from now on use these values.' });
     } catch (err: any) {
       setMessage({ ok: false, text: err.message || 'Could not save pricing.' });
@@ -65,22 +60,11 @@ export const PricingSettingsCard: React.FC = () => {
               className="w-full rounded border border-[#232736] bg-[#10121a] p-2 text-slate-100"
             />
           </label>
-          <label className="space-y-1">
-            <span className="block font-medium text-slate-300">Infra cost ₹/min</span>
-            <input
-              type="number"
-              min={0}
-              step="0.05"
-              value={infra}
-              onChange={(e) => setInfra(e.target.value)}
-              className="w-full rounded border border-[#232736] bg-[#10121a] p-2 text-slate-100"
-            />
-          </label>
+
         </div>
         <p className="leading-relaxed text-slate-500">
-          When a call ends, Choranta works out its real cost (Exotel minutes, speech-to-text, text-to-speech, LLM, plus
-          infra ₹/min), adds the profit %, and takes that many credits (₹1 = 1 credit): plan credits first, then bought
-          credits. Set infra to 0 to leave it out.
+          When a call ends, Choranta works out its real cost (Exotel minutes, speech-to-text, text-to-speech and LLM),
+          adds the profit %, and takes that many credits (₹1 = 1 credit): plan credits first, then bought credits.
         </p>
 
         <div className="rounded border border-[#1b2030] bg-black/30 p-3">

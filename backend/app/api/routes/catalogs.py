@@ -1,4 +1,5 @@
 from typing import List, Optional
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 from app.api.deps import get_db, get_current_user, get_current_user_from_header_or_query
@@ -29,9 +30,9 @@ def list_knowledge_catalog(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """List available reference knowledge sources."""
+    """The shared knowledge library (entries written inside one AI employee aren't listed here)."""
     repo = KnowledgeRepository(db)
-    return repo.list_all()
+    return [k for k in repo.list_all() if not getattr(k, "owner_agent_id", None)]
 
 
 @router.get("/agents/{agent_id}/knowledge", response_model=List[KnowledgeSourceResponse])
@@ -45,6 +46,47 @@ def get_agent_knowledge(
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     return KnowledgeRepository(db).get_for_agent(agent_id)
+
+
+class AgentKnowledgeRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    type: str = Field("NOTES", pattern="^(NOTES|FAQ)$")
+    content: str = Field(..., min_length=1, max_length=20000)
+
+
+def _own_entry(db: Session, agent_id: str, knowledge_id: str):
+    from app.models.knowledge_source import KnowledgeSource
+    entry = db.get(KnowledgeSource, knowledge_id)
+    if not entry or entry.owner_agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Knowledge entry not found for this AI Employee.")
+    return entry
+
+
+@router.post("/agents/{agent_id}/knowledge", response_model=KnowledgeSourceResponse, status_code=201)
+def create_agent_knowledge(agent_id: str, req: AgentKnowledgeRequest, db: Session = Depends(get_db),
+                           current_user: User = Depends(get_current_user)):
+    """Writes knowledge for one AI Employee (notes or FAQ) and attaches it. Used on its next conversation."""
+    from app.core.security import generate_unique_id
+    from app.models.knowledge_source import KnowledgeSource
+    if not AgentRepository(db).get_by_id(agent_id):
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    entry = KnowledgeSource(id=generate_unique_id("knw", 12), name=req.name.strip(), type=req.type, status="READY",
+                            content=req.content.strip(), owner_agent_id=agent_id, meta={})
+    db.add(entry)
+    db.commit()
+    KnowledgeRepository(db).attach_to_agent(agent_id, entry.id)
+    db.refresh(entry)
+    return entry
+
+
+@router.put("/agents/{agent_id}/knowledge/{knowledge_id}", response_model=KnowledgeSourceResponse)
+def update_agent_knowledge(agent_id: str, knowledge_id: str, req: AgentKnowledgeRequest, db: Session = Depends(get_db),
+                           current_user: User = Depends(get_current_user)):
+    entry = _own_entry(db, agent_id, knowledge_id)
+    entry.name, entry.type, entry.content = req.name.strip(), req.type, req.content.strip()
+    db.commit()
+    db.refresh(entry)
+    return entry
 
 
 @router.post("/agents/{agent_id}/knowledge/{knowledge_id}")
@@ -71,9 +113,14 @@ def detach_knowledge_from_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Detach a knowledge source from an AI Employee."""
+    """Detach a library entry from an AI Employee; an entry written inside it is deleted."""
+    from app.models.knowledge_source import KnowledgeSource
     repo = KnowledgeRepository(db)
     repo.detach_from_agent(agent_id, knowledge_id)
+    entry = db.get(KnowledgeSource, knowledge_id)
+    if entry and entry.owner_agent_id == agent_id:
+        db.delete(entry)
+        db.commit()
     return {"message": "Knowledge source detached successfully."}
 
 

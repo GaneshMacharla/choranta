@@ -160,3 +160,78 @@ def test_campaign_stops_waiting_for_stuck_extraction(db: Session, telephony_setu
     svc.run_campaign_tick(db, IN_WINDOW + timedelta(minutes=3), dial=dialer)
     db.refresh(recipient)
     assert recipient.status == "COMPLETED" and recipient.outcome == "answered"
+
+
+def _campaign_call(db: Session, setup, campaign) -> Call:
+    """A dialled, ended call of the campaign's only recipient, with a transcript."""
+    dialer = FakeDialer(db, setup)
+    svc.run_campaign_tick(db, IN_WINDOW, dial=dialer)
+    recipient = db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign.id).one()
+    call = db.get(Call, recipient.last_call_id)
+    call.status = "COMPLETED"
+    call.ended_at = IN_WINDOW
+    return _call_with_transcript(db, setup, TURNS, call=call)
+
+
+def _extraction_prompt(db: Session, setup) -> str:
+    llm = FakeLLM('{"outputs": {}, "summary": ""}')
+    call_outputs.run_extraction(db, _call_with_transcript(db, setup, TURNS).id, llm=llm)
+    return llm.prompts[0][0]
+
+
+def test_interest_and_callback_time_are_extracted(db: Session, telephony_setup):
+    _with_outputs(db, telephony_setup)
+    call = _call_with_transcript(db, telephony_setup, TURNS)
+    call_outputs.run_extraction(db, call.id, llm=FakeLLM(
+        '{"outputs": {}, "summary": "Wants a call back.", "interest": "Callback", "callback_time": "tomorrow 6pm"}'
+    ))
+    db.refresh(call)
+    assert call.metadata_["interest"] == "callback"
+    assert call.metadata_["callback_time"] == "tomorrow 6pm"
+    assert "do_not_call" in _extraction_prompt(db, telephony_setup)
+
+    other = _call_with_transcript(db, telephony_setup, TURNS)
+    call_outputs.run_extraction(db, other.id, llm=FakeLLM('{"outputs": {}, "summary": "x", "interest": "maybe"}'))
+    db.refresh(other)
+    assert other.metadata_["interest"] == "unclear"
+    assert other.metadata_["callback_time"] is None
+
+
+def test_campaign_calls_are_extracted_even_without_agent_outputs(db: Session, telephony_setup):
+    campaign = _running(db, telephony_setup, csv_text="phone\n9876500111\n")
+    call = _campaign_call(db, telephony_setup, campaign)
+    assert call_outputs.mark_pending(db, call) is True
+
+    call_outputs.run_extraction(db, call.id, llm=FakeLLM('{"outputs": {}, "summary": "Keen on NEET.", "interest": "interested"}'))
+    svc.run_campaign_tick(db, IN_WINDOW + timedelta(seconds=5), dial=FakeDialer(db, telephony_setup))
+    recipient = db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign.id).one()
+    assert recipient.result["interest"] == "interested"
+    assert recipient.result["summary"] == "Keen on NEET."
+
+
+def test_lead_disposition_overrides_extracted_interest(db: Session, telephony_setup):
+    from app.models.lead import Lead
+    campaign = _running(db, telephony_setup, csv_text="phone\n9876500121\n")
+    call = _campaign_call(db, telephony_setup, campaign)
+    recipient = db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign.id).one()
+    lead = Lead(client_id=telephony_setup["client"].id, name="Priya", phone=recipient.phone, call_disposition="CALLBACK_REQUESTED")
+    db.add(lead)
+    db.flush()
+    recipient.lead_id = lead.id
+    call.metadata_ = {**call.metadata_, "interest": "not_interested"}
+    db.commit()
+
+    svc.run_campaign_tick(db, IN_WINDOW + timedelta(seconds=5), dial=FakeDialer(db, telephony_setup))
+    db.refresh(recipient)
+    assert recipient.result["interest"] == "callback"
+
+
+def test_do_not_call_interest_adds_number_to_do_not_call_list(db: Session, telephony_setup):
+    from app.models.campaign import DoNotCallEntry
+    campaign = _running(db, telephony_setup, csv_text="phone\n9876500131\n")
+    call = _campaign_call(db, telephony_setup, campaign)
+    call.metadata_ = {**call.metadata_, "interest": "do_not_call"}
+    db.commit()
+
+    svc.run_campaign_tick(db, IN_WINDOW + timedelta(seconds=5), dial=FakeDialer(db, telephony_setup))
+    assert db.query(DoNotCallEntry).filter(DoNotCallEntry.phone == "+919876500131").count() == 1

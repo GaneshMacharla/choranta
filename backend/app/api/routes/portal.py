@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -22,7 +22,9 @@ from app.models.phone_number import PhoneNumber
 from app.models.property import Property
 from app.models.subscription import PaymentOrder
 from app.models.user import User
-from app.services import exotel_numbers, notifications, phone_numbers, razorpay_gateway, subscriptions
+from app.services import (
+    exotel_numbers, notifications, outbound_insights, phone_numbers, razorpay_gateway, subscriptions, verifications,
+)
 from app.services.pricing import get_pricing
 
 router = APIRouter(prefix="/portal", tags=["Client Portal"])
@@ -256,6 +258,25 @@ def usage(account: ClientAccount = Depends(require_client_user), db: Session = D
     return usage_out(db, client_id)
 
 
+@router.get("/insights")
+def insights(days: int = Query(30), account: ClientAccount = Depends(require_client_user),
+             db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Outbound insights for the dashboard: campaign and instant-lead results over the last `days` days."""
+    if days not in outbound_insights.PERIODS:
+        raise HTTPException(status_code=400, detail="days must be 7, 30 or 90.")
+    _, client_id = account
+    return outbound_insights.insights(db, client_id, days)
+
+
+@router.post("/insights/hot-leads/{recipient_id}/followed-up", status_code=204)
+def mark_hot_lead_followed_up(recipient_id: str, account: ClientAccount = Depends(require_client_user),
+                              db: Session = Depends(get_db)):
+    _, client_id = account
+    if not outbound_insights.mark_followed_up(db, client_id, recipient_id):
+        raise HTTPException(status_code=404, detail="Lead not found.")
+    return Response(status_code=204)
+
+
 @router.post("/payments/orders", status_code=201)
 def create_payment_order(req: OrderRequest, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
     user, client_id = account
@@ -328,11 +349,42 @@ def _number_out(db: Session, pn: PhoneNumber) -> Dict[str, Any]:
 def my_numbers(account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
     _, client_id = account
     rows = db.query(PhoneNumber).filter(PhoneNumber.client_id == client_id).order_by(PhoneNumber.created_at.desc()).all()
+    verification = verifications.get(db, client_id)
+    client = db.get(Client, client_id)
     return {
         "numbers": [_number_out(db, pn) for pn in rows],
         "pricing": [phone_numbers.pricing_out(p) for p in phone_numbers.get_pricing(db) if p.is_available],
         "grace_days": settings.NUMBER_GRACE_DAYS,
+        "verification_status": verification.status if verification else "NOT_STARTED",
+        "verification_note": verification.admin_note if verification else None,
+        "contact_phone": client.contact_phone if client else None,
     }
+
+
+@router.get("/verification")
+def my_verification(account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    """The client's business verification (details and document names; files are never sent back)."""
+    _, client_id = account
+    return verifications.out(db, verifications.get(db, client_id))
+
+
+@router.post("/verification")
+async def submit_verification(
+    request: Request, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db),
+):
+    """Multipart form: the business details plus files named after the document kinds (pan_card, ...)."""
+    _, client_id = account
+    form = await request.form()
+    details = {k: form.get(k) for k in ("legal_name", "pan", "gstin", "cin", "registered_address", "signatory_name",
+                                        "signatory_designation", "signatory_phone")}
+    files = {}
+    for kind in verifications.DOCUMENT_KINDS:
+        upload = form.get(kind)
+        if upload is not None and hasattr(upload, "read"):
+            data = await upload.read(verifications.MAX_FILE_BYTES + 1)
+            if data:
+                files[kind] = (upload.filename or kind, data)
+    return verifications.out(db, verifications.submit(db, client_id, details, files))
 
 
 @router.get("/numbers/available")
@@ -357,9 +409,43 @@ def update_number(number_id: str, req: NumberUpdateRequest, account: ClientAccou
     """Chooses which of the client's AI employees answers this number."""
     _, client_id = account
     pn = _own_number(db, client_id, number_id)
-    if pn.status != "ACTIVE":
+    if pn.status not in phone_numbers.TESTABLE_STATUSES:
         raise HTTPException(status_code=400, detail="This number isn't active.")
     return _number_out(db, phone_numbers.assign_agent(db, pn, req.agent_id))
+
+
+class NumberTestRequest(BaseModel):
+    phone: str = Field(..., min_length=6, max_length=20)
+
+
+@router.get("/numbers/{number_id}")
+def number_detail(number_id: str, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    """One number, with its test call's progress (polled while a test runs)."""
+    _, client_id = account
+    pn = _own_number(db, client_id, number_id)
+    return {**_number_out(db, pn), **phone_numbers.test_state(db, pn)}
+
+
+@router.post("/numbers/{number_id}/test")
+def test_number(number_id: str, req: NumberTestRequest, account: ClientAccount = Depends(require_client_user),
+                db: Session = Depends(get_db)):
+    """Calls the client's phone from this number with its AI employee; when it connects the number turns Active."""
+    from app.services.outbound_calls import OutboundCallError
+    _, client_id = account
+    pn = _own_number(db, client_id, number_id)
+    try:
+        phone_numbers.start_test_call(db, pn, req.phone)
+    except OutboundCallError as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 400) or 400, detail=str(exc))
+    return {**_number_out(db, pn), **phone_numbers.test_state(db, pn)}
+
+
+@router.post("/numbers/{number_id}/activate")
+def activate_number(number_id: str, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    """Skips the test call and turns the number Active."""
+    _, client_id = account
+    pn = phone_numbers.activate_without_test(db, _own_number(db, client_id, number_id))
+    return {**_number_out(db, pn), **phone_numbers.test_state(db, pn)}
 
 
 @router.delete("/numbers/{number_id}")

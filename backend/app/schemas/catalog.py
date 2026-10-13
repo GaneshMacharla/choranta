@@ -9,6 +9,8 @@ class KnowledgeSourceResponse(BaseModel):
     type: str
     status: str
     description: Optional[str] = None
+    content: Optional[str] = None
+    owner_agent_id: Optional[str] = None
     metadata: Dict[str, Any] = {}
     created_at: datetime
     updated_at: datetime
@@ -25,6 +27,8 @@ class KnowledgeSourceResponse(BaseModel):
                 "type": data.type,
                 "status": data.status,
                 "description": data.description,
+                "content": getattr(data, "content", None),
+                "owner_agent_id": getattr(data, "owner_agent_id", None),
                 "metadata": data.meta if data.meta is not None else {},
                 "created_at": data.created_at,
                 "updated_at": data.updated_at,

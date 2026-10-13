@@ -57,6 +57,7 @@ class SimulateTurnResponse(BaseModel):
     assistant_response: str
     audio_duration_seconds: float
     tool_calls_executed: int
+    call_ended: bool = False  # the AI employee hung up; the session is ended after this turn
     usage: Dict[str, Any] = Field(default_factory=dict)
     events: List["RuntimeEventResponse"] = Field(default_factory=list)
 

@@ -35,6 +35,7 @@ from app.services.call_costing import estimate_call_cost
 from app.services.pricing import PricingSnapshot, get_pricing
 from app.services import phone_numbers
 from app.services.billing import check_call_allowed
+from app.services.call_status import apply_call_status
 from app.services.outbound_calls import OutboundCallError, place_outbound_call, with_webhook_token
 from app.schemas.telephony import (
     CreatePhoneNumberRequest,
@@ -484,8 +485,7 @@ async def exotel_call_status_callback(
     if not call_sid:
         return {"status": "ignored"}
 
-    call_repo = CallRepository(db)
-    call_record = call_repo.get_by_provider_call_id(call_sid)
+    call_record = CallRepository(db).get_by_provider_call_id(call_sid)
     if not call_record:
         return {"status": "not_found"}
 
@@ -498,42 +498,7 @@ async def exotel_call_status_callback(
         call_duration = 0.0
     recording_url = params.get("RecordingUrl")
 
-    if call_duration > 0:
-        call_record.duration_seconds = call_duration
-
-    if recording_url:
-        call_record.recording_url = recording_url
-
-    now = datetime.now(timezone.utc)
-    emitter = EventEmitter(db)
-
-    if call_status in ("completed", "answered"):
-        call_record.status = "COMPLETED"
-        call_record.ended_at = now
-        call_repo.update(call_record)
-        emitter.emit(
-            RuntimeEventType.CALL_COMPLETED,
-            session_id=call_record.runtime_session_id or "",
-            agent_id=call_record.agent_id,
-            agent_version_id=call_record.agent_version_id,
-            client_id=call_record.client_id,
-            payload={"call_id": call_record.id, "duration": call_duration}
-        )
-    elif call_status in ("busy", "failed", "no-answer", "canceled", "cancelled"):
-        call_record.status = "FAILED"
-        call_record.ended_at = now
-        call_record.termination_reason = call_status
-        call_repo.update(call_record)
-        emitter.emit(
-            RuntimeEventType.CALL_FAILED,
-            session_id=call_record.runtime_session_id or "",
-            agent_id=call_record.agent_id,
-            agent_version_id=call_record.agent_version_id,
-            client_id=call_record.client_id,
-            payload={"call_id": call_record.id, "reason": call_status}
-        )
-    else:
-        call_repo.update(call_record)
+    apply_call_status(db, call_record, call_status, call_duration, recording_url)
 
     return {"status": "processed", "call_id": call_record.id}
 

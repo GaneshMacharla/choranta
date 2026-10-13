@@ -19,6 +19,7 @@ import {
   Trash2,
   Layers,
   Wrench,
+  BookOpen,
   Link2,
   Volume2,
   VolumeX,
@@ -65,6 +66,7 @@ import {
 // Cartesia voice picker is kept in components/voice/VoicePickerModal.tsx but not used: voices come from Sarvam
 // import { VoicePickerModal } from '../components/voice/VoicePickerModal';
 import { SarvamVoicePickerModal as VoicePickerModal } from '../components/voice/SarvamVoicePickerModal';
+import { AgentKnowledgePanel } from '../components/agents/AgentKnowledgePanel';
 import { AgentTestingWorkbench } from '../components/testing/AgentTestingWorkbench';
 import { CallLimitsEditor } from '../components/agents/CallLimitsEditor';
 import { Card } from '../components/common/Card';
@@ -714,8 +716,9 @@ export const AgentDetailPage: React.FC = () => {
           { id: 'instructions', label: '1. Instructions', icon: FileCode },
           { id: 'variables', label: `2. Variables (${config.variables.inputs.length + config.variables.outputs.length})`, icon: Sliders },
           { id: 'tools', label: `3. Tools (${config.tools.length})`, icon: Wrench },
-          { id: 'settings', label: '4. Settings', icon: Volume2 },
-          { id: 'tests', label: '5. Tests', icon: FlaskConical },
+          { id: 'knowledge', label: `4. Knowledge (${config.knowledge_sources.length})`, icon: BookOpen },
+          { id: 'settings', label: '5. Settings', icon: Volume2 },
+          { id: 'tests', label: '6. Tests', icon: FlaskConical },
           { id: 'versions', label: `Versions (${versions.length})`, icon: History },
         ].map((tab) => {
           const Icon = tab.icon;
@@ -1622,6 +1625,61 @@ export const AgentDetailPage: React.FC = () => {
       {/* ========================================================= */}
       {/* TAB 6: LANGUAGES */}
       {/* ========================================================= */}
+      {activeTab === 'knowledge' && id && (
+        <div className="space-y-6">
+          <AgentKnowledgePanel
+            agentId={id}
+            onChange={() =>
+              catalogsService
+                .getAgentKnowledge(id)
+                .then((attached) => updateDraft((prev) => ({ ...prev, knowledge_sources: attached.map((k) => k.id) })))
+                .catch(() => {})
+            }
+          />
+          {/* SHARED KNOWLEDGE LIBRARY */}
+          <Card
+            title="Shared knowledge library"
+            subtitle="Optional: reusable entries from the Knowledge page. Most AI employees only need their own knowledge above."
+          >
+            <div className="divide-y divide-[#1b1f2d]">
+              {knowledgeList.length === 0 ? (
+                <div className="py-6 text-center text-xs text-slate-500">The shared library is empty.</div>
+              ) : (
+                knowledgeList.map((knw) => {
+                  const isAttached = config.knowledge_sources.includes(knw.id);
+                  return (
+                    <div key={knw.id} className="py-3.5 flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-200">{knw.name}</span>
+                          <span className="rounded bg-[#1b1f2d] px-1.5 py-0.5 text-[10px] font-mono text-slate-400">
+                            {knw.type}
+                          </span>
+                          <StatusBadge status={knw.status} />
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1 max-w-xl">{knw.description}</p>
+                        <span className="text-[10px] font-mono text-slate-500">{knw.id}</span>
+                      </div>
+
+                      <div>
+                        <Button
+                          size="sm"
+                          variant={isAttached ? 'danger' : 'secondary'}
+                          onClick={() => handleToggleKnowledge(knw.id)}
+                        >
+                          {isAttached ? 'Detach' : 'Attach to Agent'}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </Card>
+
+        </div>
+      )}
+
       {activeTab === 'settings' && (
         <Card title="Language &amp; Locale Configuration" subtitle="Primary spoken locale and supported languages">
           <div className="space-y-6 text-xs">
@@ -2053,47 +2111,6 @@ export const AgentDetailPage: React.FC = () => {
                           onClick={() => handleToggleTool(tool.id)}
                         >
                           {isAttached ? 'Disable' : 'Enable Tool'}
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </Card>
-
-          {/* ATTACHED REAL ESTATE KNOWLEDGE CATALOG */}
-          <Card
-            title={`Knowledge Catalogs (${config.knowledge_sources.length} Attached)`}
-            subtitle="Reference documents, property catalogs, and developer FAQs attached to ground agent answers"
-          >
-            <div className="divide-y divide-[#1b1f2d]">
-              {knowledgeList.length === 0 ? (
-                <div className="py-6 text-center text-xs text-slate-500">No knowledge sources available in catalog.</div>
-              ) : (
-                knowledgeList.map((knw) => {
-                  const isAttached = config.knowledge_sources.includes(knw.id);
-                  return (
-                    <div key={knw.id} className="py-3.5 flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-slate-200">{knw.name}</span>
-                          <span className="rounded bg-[#1b1f2d] px-1.5 py-0.5 text-[10px] font-mono text-slate-400">
-                            {knw.type}
-                          </span>
-                          <StatusBadge status={knw.status} />
-                        </div>
-                        <p className="text-xs text-slate-400 mt-1 max-w-xl">{knw.description}</p>
-                        <span className="text-[10px] font-mono text-slate-500">{knw.id}</span>
-                      </div>
-
-                      <div>
-                        <Button
-                          size="sm"
-                          variant={isAttached ? 'danger' : 'secondary'}
-                          onClick={() => handleToggleKnowledge(knw.id)}
-                        >
-                          {isAttached ? 'Detach' : 'Attach to Agent'}
                         </Button>
                       </div>
                     </div>

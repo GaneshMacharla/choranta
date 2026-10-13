@@ -62,7 +62,7 @@ export interface CallCost {
   billed_minutes: number;
   charge_total: number;
   charge_per_minute: number | null;
-  breakdown?: { telephony: number; speech_to_text: number; text_to_speech: number; llm: number; infra: number };
+  breakdown?: { telephony: number; speech_to_text: number; text_to_speech: number; llm: number };
   total?: number;
   per_minute?: number | null;
   profit_percent?: number;
@@ -76,7 +76,6 @@ export interface CallCost {
     llm_input_usd_per_million_tokens: number;
     llm_output_usd_per_million_tokens: number;
     usd_to_inr: number;
-    infra_per_minute_inr: number;
   };
 }
 

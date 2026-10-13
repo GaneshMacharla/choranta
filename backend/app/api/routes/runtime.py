@@ -144,6 +144,17 @@ def end_runtime_session(
     return format_session_response(completed)
 
 
+def _end_after_hang_up(bind: Any, session_id: str) -> None:
+    """The AI employee hung up: end the session (in its own database session, after the turn is saved)."""
+    db = Session(bind=bind)
+    try:
+        AgentRuntime(db).end_session(session_id)
+    except Exception as e:
+        logger.warning(f"Could not end session {session_id} after hang-up: {type(e).__name__}: {e}")
+    finally:
+        db.close()
+
+
 @router.post("/sessions/{session_id}/simulate_turn", response_model=SimulateTurnResponse)
 def simulate_session_turn(
     session_id: str,
@@ -166,12 +177,15 @@ def simulate_session_turn(
         defer_persistence=True
     )
     background_tasks.add_task(result["persist"])
+    if result.get("call_ended"):
+        background_tasks.add_task(_end_after_hang_up, db.get_bind(), session_id)
     return SimulateTurnResponse(
         session_id=session_id,
         transcript=result["transcript"],
         assistant_response=result["assistant_response"],
         audio_duration_seconds=result["audio_duration_seconds"],
         tool_calls_executed=result["tool_calls_executed"],
+        call_ended=result.get("call_ended", False),
         usage=result["usage"],
         events=[_event_response(e) for e in result["events"]]
     )
@@ -193,12 +207,14 @@ def stream_session_turn(
     runtime = AgentRuntime(db)
     events_iter = runtime.stream_turn(session_id, turn_req.input_text or "")
     pending: Dict[str, Any] = {}
+    bind = db.get_bind()
 
     def sse() -> Iterator[str]:
         try:
             for event in events_iter:
                 if event["type"] == "done":
                     pending["persist"] = event.pop("persist")
+                    pending["call_ended"] = event.get("call_ended", False)
                     event["events"] = [_event_response(e).model_dump(mode="json") for e in event["events"]]
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as e:
@@ -208,6 +224,8 @@ def stream_session_turn(
     def persist() -> None:
         if "persist" in pending:
             pending["persist"]()
+        if pending.get("call_ended"):
+            _end_after_hang_up(bind, session_id)
 
     return StreamingResponse(
         sse(),

@@ -3,23 +3,14 @@ import { Link, Navigate } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, Bot, PhoneCall, Clock, IndianRupee, Wallet } from 'lucide-react';
 import { portalAgentRequestsService } from '../../services/agentRequests';
 import { Card } from '../../components/common/Card';
+import { Stat } from '../../components/portal/Stat';
+import { OutboundInsights } from '../../components/portal/OutboundInsights';
 import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { inr, PaymentInstructions, PortalSummary, portalService } from '../../services/portal';
 import { creditsLabel, plansService } from '../../services/plans';
 import { useAuth } from '../../context/AuthContext';
 import { hasSkippedPlanChoice } from './PortalPlansPage';
-
-const Stat: React.FC<{ icon: React.ReactNode; label: string; value: string; hint?: string }> = ({ icon, label, value, hint }) => (
-  <div className="rounded-xl border border-[#1b2030] bg-[#0c0e14] p-4">
-    <div className="flex items-center justify-between text-xs text-slate-400">
-      <span>{label}</span>
-      {icon}
-    </div>
-    <p className="mt-2 font-mono text-2xl font-bold text-slate-100">{value}</p>
-    {hint && <p className="mt-1 text-[11px] text-slate-500">{hint}</p>}
-  </div>
-);
 
 /** 30-day bars for one metric (no chart library needed). */
 const DailyBars: React.FC<{ data: PortalSummary['daily']; metric: 'minutes' | 'spend_inr'; color: string; format: (v: number) => string }> = ({
@@ -152,6 +143,8 @@ export const PortalDashboardPage: React.FC = () => {
           <DailyBars data={summary.daily} metric="spend_inr" color="bg-amber-500/70" format={(v) => creditsLabel(v)} />
         </Card>
       </div>
+
+      <OutboundInsights />
 
       {payment && (payment.upi_id || payment.bank_details) && (
         <Card title="How to recharge" subtitle={`Pay by UPI or bank transfer; GST @ ${payment.gst_rate_percent}% applies`}>

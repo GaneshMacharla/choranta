@@ -17,6 +17,12 @@ export const catalogsService = {
     });
   },
 
+  createAgentKnowledge: (agentId: string, body: { name: string; type: 'NOTES' | 'FAQ'; content: string }) =>
+    request<KnowledgeSource>(`/agents/${agentId}/knowledge`, { method: 'POST', body: JSON.stringify(body) }),
+
+  updateAgentKnowledge: (agentId: string, knowledgeId: string, body: { name: string; type: 'NOTES' | 'FAQ'; content: string }) =>
+    request<KnowledgeSource>(`/agents/${agentId}/knowledge/${knowledgeId}`, { method: 'PUT', body: JSON.stringify(body) }),
+
   detachKnowledge: async (agentId: string, knowledgeId: string): Promise<void> => {
     return request<void>(`/agents/${agentId}/knowledge/${knowledgeId}`, {
       method: 'DELETE',

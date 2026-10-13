@@ -526,6 +526,15 @@ def in_calling_window(campaign: Campaign, now: datetime) -> bool:
     return any(int(w["start_min"]) <= minute < int(w["end_min"]) for w in campaign.windows or [])
 
 
+# Lead dispositions (set by lead tools during the call) mapped to the extracted interest values
+LEAD_DISPOSITION_INTEREST = {
+    "INTERESTED": "interested",
+    "CALLBACK_REQUESTED": "callback",
+    "NOT_INTERESTED": "not_interested",
+    "DO_NOT_CALL": "do_not_call",
+}
+
+
 def _call_result(db: Session, call: Call, recipient: CampaignRecipient) -> Dict[str, Any]:
     """What the agent did on the call: tool actions with their arguments, and the lead's outcome."""
     result: Dict[str, Any] = {}
@@ -534,6 +543,10 @@ def _call_result(db: Session, call: Call, recipient: CampaignRecipient) -> Dict[
         result["outputs"] = metadata["outputs"]
     if metadata.get("summary"):
         result["summary"] = metadata["summary"]
+    if metadata.get("interest"):
+        result["interest"] = metadata["interest"]
+    if metadata.get("callback_time"):
+        result["callback_time"] = metadata["callback_time"]
     if call.runtime_session_id:
         actions = []
         events = (
@@ -554,10 +567,16 @@ def _call_result(db: Session, call: Call, recipient: CampaignRecipient) -> Dict[
             "call_disposition": lead.call_disposition,
             "next_action": lead.next_action,
         }
+        # What the agent recorded on the lead is more reliable than reading the transcript
+        disposition_interest = LEAD_DISPOSITION_INTEREST.get((lead.call_disposition or "").upper())
+        if disposition_interest:
+            result["interest"] = disposition_interest
     return result
 
 
 def _caller_opted_out(result: Dict[str, Any]) -> bool:
+    if result.get("interest") == "do_not_call":
+        return True
     if (result.get("lead") or {}).get("call_disposition") == "DO_NOT_CALL":
         return True
     for action in result.get("actions") or []:
@@ -870,16 +889,9 @@ def stats(db: Session, campaign: Campaign) -> Dict[str, Any]:
     ).one()
     total = sum(by_status.values())
     answered = by_outcome.get("answered", 0)
-    collected: Dict[str, Dict[str, int]] = {}
-    for (result,) in db.query(CampaignRecipient.result).filter(
+    collected = count_outputs(result for (result,) in db.query(CampaignRecipient.result).filter(
         CampaignRecipient.campaign_id == campaign.id, CampaignRecipient.status == "COMPLETED"
-    ):
-        for name, value in ((result or {}).get("outputs") or {}).items():
-            if value is None or value == "":
-                continue
-            label = ("Yes" if value else "No") if isinstance(value, bool) else str(value)[:60]
-            counts = collected.setdefault(name, {})
-            counts[label] = counts.get(label, 0) + 1
+    ))
     finished = by_status.get("COMPLETED", 0) + by_status.get("FAILED", 0)
     return {
         "total": total,
@@ -895,11 +907,21 @@ def stats(db: Session, campaign: Campaign) -> Dict[str, Any]:
         "attempts": attempts or 0,
         "minutes": round(float(seconds or 0.0) / 60.0, 1),
         "done": by_status.get("COMPLETED", 0) + by_status.get("FAILED", 0) + by_status.get("SKIPPED", 0),
-        # {variable: {value: count}}, most common values first
-        "collected": {
-            name: dict(sorted(counts.items(), key=lambda kv: -kv[1])[:8]) for name, counts in collected.items()
-        },
+        "collected": collected,
     }
+
+
+def count_outputs(results: Iterable[Optional[Dict[str, Any]]], top: int = 8) -> Dict[str, Dict[str, int]]:
+    """{variable: {value: count}} over recipients' collected outputs, most common values first."""
+    collected: Dict[str, Dict[str, int]] = {}
+    for result in results:
+        for name, value in ((result or {}).get("outputs") or {}).items():
+            if value is None or value == "":
+                continue
+            label = ("Yes" if value else "No") if isinstance(value, bool) else str(value)[:60]
+            counts = collected.setdefault(name, {})
+            counts[label] = counts.get(label, 0) + 1
+    return {name: dict(sorted(counts.items(), key=lambda kv: -kv[1])[:top]) for name, counts in collected.items()}
 
 
 def _cell(value: Any) -> str:

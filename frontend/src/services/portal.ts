@@ -48,6 +48,61 @@ export interface PortalSummary {
   daily: Array<{ date: string; calls: number; minutes: number; spend_inr: number }>;
 }
 
+export type CallInterest = 'interested' | 'callback' | 'not_interested' | 'do_not_call' | 'unclear';
+
+export interface HotLead {
+  recipient_id: string;
+  name: string | null;
+  phone: string;
+  campaign_id: string;
+  campaign_name: string;
+  campaign_kind: 'BULK' | 'TRIGGER';
+  interest: CallInterest;
+  summary: string | null;
+  callback_time: string | null;
+  call_id: string | null;
+  called_at: string;
+}
+
+export interface OutboundInsights {
+  days: number;
+  has_outbound: boolean;
+  funnel: {
+    called: number;
+    answered: number;
+    interested: number;
+    callbacks: number;
+    not_interested: number;
+    do_not_call: number;
+    answer_rate: number | null;
+    avg_talk_seconds: number | null;
+    minutes: number;
+  };
+  hot_leads: HotLead[];
+  hot_leads_total: number;
+  instant: {
+    leads: number;
+    reached: number;
+    interested: number;
+    median_seconds_to_call: number | null;
+    called_within_60s_pct: number | null;
+    queued_for_hours: number;
+  } | null;
+  top_answers: Record<string, Record<string, number>>;
+  best_hours: Array<{ hour: number; attempts: number; answered: number; answer_rate: number | null }>;
+  campaigns: Array<{
+    id: string;
+    name: string;
+    kind: 'BULK' | 'TRIGGER';
+    status: string;
+    called: number;
+    answered: number;
+    answer_rate: number | null;
+    interested: number;
+    minutes: number;
+  }>;
+}
+
 export interface PortalNumber {
   id: string;
   phone_number: string;
@@ -61,6 +116,42 @@ export interface PortalNumber {
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   grace_ends_at: string | null;
+  /** Present on the single-number endpoint: the activation test call's progress */
+  test_call_id?: string | null;
+  test_call_status?: string | null;
+  test_result?: string | null;
+  activated_by?: string | null;
+}
+
+export type VerificationStatus = 'NOT_STARTED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export interface BusinessVerification {
+  status: VerificationStatus;
+  client_id?: string;
+  client_name?: string | null;
+  client_code?: string | null;
+  legal_name?: string;
+  pan?: string;
+  gstin?: string | null;
+  cin?: string | null;
+  registered_address?: string;
+  signatory_name?: string;
+  signatory_designation?: string | null;
+  signatory_phone?: string | null;
+  documents?: Array<{ index: number; kind: string; label: string; filename: string; size: number; content_type: string }>;
+  admin_note?: string | null;
+  submitted_at?: string;
+  reviewed_at?: string | null;
+  document_kinds: Record<string, string>;
+}
+
+/** Multipart upload with the user's token (request() always sends JSON). */
+async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const token = localStorage.getItem('choranta_token');
+  const response = await fetch(`/api${path}`, { method: 'POST', body: form, headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error || data?.detail || response.statusText || 'Upload failed.');
+  return data as T;
 }
 
 export interface PaymentInstructions {
@@ -117,6 +208,9 @@ export const portalService = {
   readAllNotifications: () => request<NotificationList>('/portal/notifications/read', { method: 'POST' }),
   readNotification: (id: string) => request<NotificationList>(`/portal/notifications/${id}/read`, { method: 'POST' }),
   summary: () => request<PortalSummary>('/portal/summary'),
+  insights: (days: number) => request<OutboundInsights>(`/portal/insights?days=${days}`),
+  markFollowedUp: (recipientId: string) =>
+    request<void>(`/portal/insights/hot-leads/${recipientId}/followed-up`, { method: 'POST' }),
   calls: (limit = 100) => request<Call[]>(`/portal/calls?limit=${limit}`),
   call: (id: string) => request<CallDetail>(`/portal/calls/${id}`),
   recording: (id: string) => fetchAuthedBlob(`/portal/calls/${id}/recording`),
@@ -141,7 +235,21 @@ export const portalService = {
       gst_rate_percent: number;
     }>('/portal/subscription'),
   usage: () => request<CallUsage[]>('/portal/usage'),
-  numbers: () => request<{ numbers: PortalNumber[]; pricing: NumberPrice[]; grace_days: number }>('/portal/numbers'),
+  numbers: () =>
+    request<{
+      numbers: PortalNumber[];
+      pricing: NumberPrice[];
+      grace_days: number;
+      verification_status: VerificationStatus;
+      verification_note: string | null;
+      contact_phone: string | null;
+    }>('/portal/numbers'),
+  numberDetail: (id: string) => request<PortalNumber>(`/portal/numbers/${id}`),
+  testNumber: (id: string, phone: string) =>
+    request<PortalNumber>(`/portal/numbers/${id}/test`, { method: 'POST', body: JSON.stringify({ phone }) }),
+  activateNumber: (id: string) => request<PortalNumber>(`/portal/numbers/${id}/activate`, { method: 'POST' }),
+  verification: () => request<BusinessVerification>('/portal/verification'),
+  submitVerification: (form: FormData) => postForm<BusinessVerification>('/portal/verification', form),
   availableNumbers: (numberType: NumberType, region?: string) =>
     request<AvailableNumber[]>(`/portal/numbers/available?number_type=${numberType}${region ? `&region=${encodeURIComponent(region)}` : ''}`),
   buyNumber: (phone_number: string, number_type: NumberType) =>

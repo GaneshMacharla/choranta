@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 from app.runtime.tools.catalog import describe_tools
+from app.runtime import call_rules
+from app.runtime.knowledge import apply_knowledge
 import struct
 import time
 from datetime import datetime, timezone
@@ -154,6 +156,7 @@ async def runtime_audio_websocket(
             agent_spec=spec,
             metadata=session_record.metadata_
         )
+        apply_knowledge(db, context)
         runtime._contexts[session_id] = context
 
     stt_provider = default_registry.get_stt(context.agent_spec.providers.stt)
@@ -373,7 +376,8 @@ async def runtime_audio_websocket(
                 client_id=context.client_id
             )
 
-            available_tools_list = describe_tools(db, context.active_tools)
+            call_rules.apply_rules(context.conversation, context.agent_spec)
+            available_tools_list = call_rules.with_end_call(describe_tools(db, context.active_tools))
             llm_result = await llm_provider.generate_async(
                 system_instruction=context.conversation.system_instruction,
                 messages=context.conversation.to_llm_messages(),
@@ -396,6 +400,12 @@ async def runtime_audio_websocket(
                 client_id=context.client_id,
                 payload={"latency_ms": llm_latency_ms, "finish_reason": llm_result.finish_reason}
             )
+
+            hang_up = call_rules.wants_to_end(llm_result.tool_calls)
+            if hang_up:
+                # Say goodbye, then close the call after the audio (no tools, no further turns)
+                llm_result.text = call_rules.goodbye_text(context.agent_spec, llm_result.text)
+                llm_result.tool_calls = []
 
             # Tool Execution Loop
             if llm_result.tool_calls:
@@ -483,6 +493,12 @@ async def runtime_audio_websocket(
                 )
             )
             await current_tts_task
+            if hang_up:
+                emitter.emit(RuntimeEventType.TOOL_CALL_COMPLETED, session_id=session_id, agent_id=context.agent_id,
+                             agent_version_id=context.agent_version_id, client_id=context.client_id,
+                             payload={"tool_name": call_rules.END_CALL_TOOL_NAME, "success": True})
+                await websocket.send_json({"type": "call_ended", "reason": "agent_hung_up"})
+                await websocket.close()
 
         except Exception as e:
             logger.error(f"Error during audio conversational turn: {e}")

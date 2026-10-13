@@ -407,6 +407,9 @@ _ADDED_COLUMNS = [
     ("agent_requests", "details", "TEXT"),
     ("agent_requests", "company_name", "VARCHAR(255)"),
     ("agent_requests", "business_type", "VARCHAR(32)"),
+    ("knowledge_sources", "content", "TEXT"),
+    ("number_pricing", "setup_fee_inr", "FLOAT NOT NULL DEFAULT 0"),
+    ("knowledge_sources", "owner_agent_id", "VARCHAR(64) REFERENCES agents(id) ON DELETE CASCADE"),
 ]
 
 

@@ -331,6 +331,21 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
     }
   };
 
+  /** The AI employee hung up (end_call): close the call and stop taking input. */
+  const handleAgentHungUp = (endRecord: boolean) => {
+    const sessionId = activeSession?.id;
+    disconnectWebSocket();
+    disconnectWebRTC();
+    setIsAssistantSpeaking(false);
+    // Text chat sessions are ended by the backend; voice sessions are ended here
+    if (endRecord && sessionId) runtimeService.endSession(sessionId).catch(() => {});
+    setActiveSession(null);
+    const note = { sender: 'assistant' as const, text: 'The AI employee ended the call.', time: new Date().toLocaleTimeString() };
+    setChatMessages((prev) => [...prev, { ...note, id: `${Date.now()}-agent-hung-up` }]);
+    setLiveChat((prev) => [...prev, { ...note, id: `${Date.now()}-agent-hung-up` }]);
+    if (sessionId) runtimeService.getEvents(sessionId).then(setEvents).catch(() => {});
+  };
+
   const handleEndSession = async () => {
     if (!activeSession) return;
     const sessionIdToEnd = activeSession.id;
@@ -546,6 +561,8 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               }
               return prev;
             });
+          } else if (msg.type === 'call_ended') {
+            handleAgentHungUp(true);
           } else if (msg.type === 'turn_complete') {
             setIsAssistantSpeaking(false);
             if (msg.usage) {
@@ -799,6 +816,8 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               }
               return prev;
             });
+          } else if (msg.type === 'call_ended') {
+            handleAgentHungUp(true);
           } else if (msg.type === 'turn_complete') {
             setIsAssistantSpeaking(false);
             if (msg.usage) {
@@ -1010,6 +1029,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
           });
           // The turn's events come back with the reply (they are persisted in the background)
           setEvents((prev) => [...prev, ...event.events]);
+          if (event.call_ended) handleAgentHungUp(false);
         } else if (event.type === 'error') {
           streamError = event.message;
         }

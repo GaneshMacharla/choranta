@@ -169,7 +169,12 @@ class TestScenarioRunner:
                         "tts_ms": tts_ms,
                     },
                     "usage": turn_result["usage"],
+                    "call_ended": bool(turn_result.get("call_ended")),
                 })
+
+                if turn_result.get("call_ended"):
+                    logger.info(f"AI employee hung up at turn {turn_idx + 1}.")
+                    break
 
                 if caller_turn.is_terminal:
                     logger.info(f"SimulatedCaller completed conversation naturally at turn {turn_idx + 1}.")
