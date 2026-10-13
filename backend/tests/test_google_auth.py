@@ -34,13 +34,32 @@ def test_invited_user_signs_in_with_google(client: TestClient, google):
 
 
 @pytest.mark.parametrize("claims,expected", [
-    ({"email": "stranger@gmail.com", "email_verified": True}, "hasn't been invited"),
     ({"email": "operator@choranta.internal", "email_verified": False}, "isn't verified"),
 ])
 def test_google_sign_in_rejections(client: TestClient, google, claims, expected):
     google["t"] = claims
     resp = client.post("/api/auth/google", json={"credential": "t"})
     assert resp.status_code == 401 and expected in resp.json()["error"]
+
+
+def test_new_google_user_signs_up_as_client(client: TestClient, google, db: Session, monkeypatch):
+    google["new"] = {"email": "Owner@NewClinic.example.com", "email_verified": True, "name": "Asha Rao"}
+    resp = client.post("/api/auth/google", json={"credential": "new"})
+    assert resp.status_code == 200, resp.text
+    user = resp.json()["user"]
+    assert user["role"] == "CLIENT" and user["email"] == "owner@newclinic.example.com"
+    headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    assert client.get("/api/portal/summary", headers=headers).json()["client_name"] == "Asha Rao"
+    assert client.get("/api/agents", headers=headers).status_code == 403  # no internal access
+
+    # Signing in again reuses the same account
+    again = client.post("/api/auth/google", json={"credential": "new"}).json()
+    assert again["user"]["id"] == user["id"]
+
+    monkeypatch.setattr(settings, "CLIENT_SELF_SIGNUP", False, raising=False)
+    google["stranger"] = {"email": "stranger@gmail.com", "email_verified": True}
+    blocked = client.post("/api/auth/google", json={"credential": "stranger"})
+    assert blocked.status_code == 401 and "hasn't been invited" in blocked.json()["error"]
 
 
 def test_invalid_google_token_and_inactive_user(client: TestClient, google, db: Session):

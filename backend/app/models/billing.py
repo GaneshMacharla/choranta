@@ -76,5 +76,6 @@ class Invoice(Base):
     payment_reference = Column(String(255), nullable=True)
     transaction_id = Column(String(64), nullable=True)
     bill_to = Column(Text, nullable=True)  # JSON snapshot of the billing profile at issue time
+    description = Column(Text, nullable=True)  # invoice line text; None = prepaid usage credit
     created_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=_now, nullable=False)

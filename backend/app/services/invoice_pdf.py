@@ -66,7 +66,7 @@ def render_invoice_pdf(invoice: Invoice) -> bytes:
     header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOTTOMPADDING", (0, 0), (-1, -1), 8)]))
 
     rows = [["#", "Description", "SAC", "Amount"],
-            ["1", "AI voice agent services - prepaid usage credit", settings.INVOICE_SAC_CODE, _inr(invoice.taxable_inr)]]
+            ["1", invoice.description or "AI voice agent services - prepaid usage credit", settings.INVOICE_SAC_CODE, _inr(invoice.taxable_inr)]]
     rate = settings.GST_RATE_PERCENT
     if invoice.igst_inr:
         rows.append(["", f"IGST @ {rate:g}%", "", _inr(invoice.igst_inr)])

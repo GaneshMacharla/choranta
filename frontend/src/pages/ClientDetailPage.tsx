@@ -18,6 +18,7 @@ import { Client, Agent, AgentCreateInput, ClientUpdateInput, BusinessType } from
 import { Card } from '../components/common/Card';
 import { PropertyInventoryCard } from '../components/inventory/PropertyInventoryCard';
 import { ClientBillingCard } from '../components/billing/ClientBillingCard';
+import { ClientPlanCard } from '../components/billing/ClientPlanCard';
 import { Button } from '../components/common/Button';
 import { StatusBadge, Badge } from '../components/common/Badge';
 import { Table, Column } from '../components/common/Table';
@@ -36,6 +37,7 @@ export const ClientDetailPage: React.FC = () => {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [billingVersion, setBillingVersion] = useState(0);
 
   // Edit Client Modal
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -327,7 +329,8 @@ export const ClientDetailPage: React.FC = () => {
       </div>
 
       {/* PROPERTY INVENTORY (synced from Google Sheet / CRM) */}
-      {id && <ClientBillingCard clientId={id} />}
+      {id && <ClientPlanCard clientId={id} onChange={() => setBillingVersion((v) => v + 1)} />}
+      {id && <ClientBillingCard key={billingVersion} clientId={id} />}
 
       {id && <PropertyInventoryCard clientId={id} />}
 

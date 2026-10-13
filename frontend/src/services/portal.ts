@@ -1,5 +1,6 @@
 import { request } from './api';
 import { Call, CallDetail } from './telephony';
+import { AvailableNumber, CallUsage, NumberPrice, NumberType, PaymentOrder, Subscription } from './plans';
 
 export interface WalletTransaction {
   id: string;
@@ -19,6 +20,8 @@ export interface Wallet {
   low_balance_threshold_inr: number;
   low_balance: boolean;
   calls_blocked: boolean;
+  calls_blocked_reason: string | null;
+  subscription: Subscription | null;
   transactions: WalletTransaction[];
 }
 
@@ -32,14 +35,32 @@ export interface InvoiceSummary {
   igst_inr: number;
   total_inr: number;
   payment_reference: string | null;
+  description: string;
 }
 
 export interface PortalSummary {
   client_name: string;
   user_name: string;
-  wallet: Pick<Wallet, 'balance_inr' | 'low_balance_threshold_inr' | 'low_balance' | 'calls_blocked'>;
+  wallet: Pick<Wallet, 'balance_inr' | 'low_balance_threshold_inr' | 'low_balance' | 'calls_blocked' | 'calls_blocked_reason'>;
+  subscription: Subscription | null;
+  numbers_past_due: Array<{ phone_number: string; monthly_rent_inr: number; grace_ends_at: string | null }>;
   month: { calls: number; minutes: number; spend_inr: number };
   daily: Array<{ date: string; calls: number; minutes: number; spend_inr: number }>;
+}
+
+export interface PortalNumber {
+  id: string;
+  phone_number: string;
+  number_type: NumberType | null;
+  status: string;
+  agent_id: string | null;
+  agent_name: string | null;
+  created_at: string;
+  monthly_rent_inr: number | null;
+  rental_status: 'ACTIVE' | 'PAST_DUE' | 'RELEASED' | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+  grace_ends_at: string | null;
 }
 
 export interface PaymentInstructions {
@@ -91,6 +112,32 @@ export const portalService = {
       properties: Array<{ id: string; project_name: string; location: string; bhk: number; price_display: string; property_type: string; status: string }>;
     }>('/portal/properties'),
   paymentInstructions: () => request<PaymentInstructions>('/portal/payment-instructions'),
+  subscription: () =>
+    request<{
+      subscription: Subscription | null;
+      online_payments: boolean;
+      grace_days: number;
+      min_topup_inr: number;
+      gst_rate_percent: number;
+    }>('/portal/subscription'),
+  usage: () => request<CallUsage[]>('/portal/usage'),
+  numbers: () => request<{ numbers: PortalNumber[]; pricing: NumberPrice[]; grace_days: number }>('/portal/numbers'),
+  availableNumbers: (numberType: NumberType, region?: string) =>
+    request<AvailableNumber[]>(`/portal/numbers/available?number_type=${numberType}${region ? `&region=${encodeURIComponent(region)}` : ''}`),
+  buyNumber: (phone_number: string, number_type: NumberType) =>
+    request<PortalNumber>('/portal/numbers', { method: 'POST', body: JSON.stringify({ phone_number, number_type }) }),
+  assignNumber: (id: string, agent_id: string | null) =>
+    request<PortalNumber>(`/portal/numbers/${id}`, { method: 'PATCH', body: JSON.stringify({ agent_id }) }),
+  releaseNumber: (id: string, now = false) => request<PortalNumber>(`/portal/numbers/${id}${now ? '?now=true' : ''}`, { method: 'DELETE' }),
+  keepNumber: (id: string) => request<PortalNumber>(`/portal/numbers/${id}/keep`, { method: 'POST' }),
+  agents: () => request<Array<{ id: string; name: string; role: string; published: boolean }>>('/portal/agents'),
+  createOrder: (body: { purpose: 'SUBSCRIPTION' | 'WALLET_TOPUP'; plan_id?: string; amount_inr?: number }) =>
+    request<PaymentOrder>('/portal/payments/orders', { method: 'POST', body: JSON.stringify(body) }),
+  verifyPayment: (orderId: string, razorpay_payment_id: string, razorpay_signature: string) =>
+    request<{ status: string; invoice_id: string | null; subscription: Subscription | null }>(
+      `/portal/payments/orders/${orderId}/verify`,
+      { method: 'POST', body: JSON.stringify({ razorpay_payment_id, razorpay_signature }) }
+    ),
 };
 
 export const inr = (value: number, digits = 2) =>

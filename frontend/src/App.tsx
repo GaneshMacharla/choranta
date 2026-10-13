@@ -17,6 +17,7 @@ import { KnowledgePage } from './pages/KnowledgePage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { ProvidersPage } from './pages/ProvidersPage';
 import { UsagePage } from './pages/UsagePage';
+import { PlansPage } from './pages/PlansPage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -25,6 +26,8 @@ import { PortalDashboardPage } from './pages/portal/PortalDashboardPage';
 import { PortalCallsPage } from './pages/portal/PortalCallsPage';
 import { PortalBillingPage } from './pages/portal/PortalBillingPage';
 import { PortalInventoryPage } from './pages/portal/PortalInventoryPage';
+import { PortalNumbersPage } from './pages/portal/PortalNumbersPage';
+import { PortalPlansPage } from './pages/portal/PortalPlansPage';
 
 /** Old Test Lab links open the agent's Tests step (or the AI Employees list). */
 function TestLabRedirect() {
@@ -46,6 +49,8 @@ export function App() {
             <Route path="/portal" element={<PortalLayout />}>
               <Route index element={<PortalDashboardPage />} />
               <Route path="calls" element={<PortalCallsPage />} />
+              <Route path="plans" element={<PortalPlansPage />} />
+              <Route path="numbers" element={<PortalNumbersPage />} />
               <Route path="billing" element={<PortalBillingPage />} />
               <Route path="inventory" element={<PortalInventoryPage />} />
             </Route>
@@ -70,6 +75,7 @@ export function App() {
               <Route path="/providers" element={<ProvidersPage />} />
               <Route path="/ai-providers" element={<Navigate to="/providers" replace />} />
               <Route path="/usage" element={<UsagePage />} />
+              <Route path="/plans" element={<PlansPage />} />
               <Route path="/logs" element={<LogsPage />} />
               <Route path="/errors" element={<Navigate to="/logs" replace />} />
 

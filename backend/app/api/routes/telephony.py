@@ -32,7 +32,8 @@ from app.runtime.providers.telephony import TelephonyProvider
 from app.runtime.telephony.session import TelephonyMediaSession, active_telephony_calls
 from app.services.call_costing import estimate_call_cost
 from app.services.pricing import PricingSnapshot, get_pricing
-from app.services.billing import can_place_call
+from app.services import phone_numbers
+from app.services.billing import check_call_allowed
 from app.schemas.telephony import (
     CreatePhoneNumberRequest,
     UpdatePhoneNumberRequest,
@@ -71,7 +72,8 @@ def _format_phone_number_response(pn: PhoneNumber, db: Session) -> PhoneNumberRe
         status=pn.status,
         metadata=pn.metadata_ if isinstance(pn.metadata_, dict) else {},
         created_at=pn.created_at,
-        updated_at=pn.updated_at
+        updated_at=pn.updated_at,
+        **phone_numbers.rental_out(phone_numbers.rental_for(db, pn.id)),
     )
 
 
@@ -230,6 +232,14 @@ async def exotel_inbound_call_webhook(
             )
             return Response(content=rejection, media_type=media_type)
 
+        rent_block = phone_numbers.blocked_reason(db, phone_record)
+        if rent_block:
+            logger.warning(f"Rejecting call to {phone_record.phone_number}: {rent_block}")
+            rejection = telephony_provider.generate_reject_response(
+                "This service is temporarily inactive. Please contact support."
+            )
+            return Response(content=rejection, media_type=media_type)
+
         if not phone_record.agent_id or not phone_record.agent_version_id:
             logger.warning(f"Phone number {phone_record.phone_number} has no assigned AgentVersion.")
             rejection = telephony_provider.generate_reject_response(
@@ -250,8 +260,9 @@ async def exotel_inbound_call_webhook(
         return Response(content=rejection, media_type=media_type)
 
     # New inbound calls need prepaid balance (calls we placed were checked when dialled)
-    if not existing_call and not can_place_call(db, route.client_id):
-        logger.warning(f"Rejecting inbound call for client {route.client_id}: wallet balance exhausted.")
+    allowed, block_reason, _ = (True, None, None) if existing_call else check_call_allowed(db, route.client_id)
+    if not allowed:
+        logger.warning(f"Rejecting inbound call for client {route.client_id}: {block_reason}")
         rejection = telephony_provider.generate_reject_response(
             "This service is temporarily unavailable. Please call back later."
         )
@@ -737,6 +748,10 @@ def delete_phone_number(
     record = repo.get_by_id(phone_number_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Phone number '{phone_number_id}' not found.")
+    # A number rented from Exotel must go back to Exotel, or Choranta keeps paying for it
+    rental = phone_numbers.rental_for(db, record.id)
+    if rental and rental.status != "RELEASED" and not phone_numbers.release(db, rental):
+        raise HTTPException(status_code=502, detail="Exotel couldn't release this number. Try again before deleting it.")
     repo.delete(record)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -789,17 +804,32 @@ def initiate_outbound_call_endpoint(
                 status_code=400,
                 detail=f"Phone number '{phone_record.phone_number}' is not assigned to an AI Employee."
             )
+        if not req.is_test and (phone_record.status != "ACTIVE" or phone_numbers.blocked_reason(db, phone_record)):
+            raise HTTPException(status_code=400, detail=f"Phone number '{phone_record.phone_number}' can't place calls right now.")
         agent_id, agent_version_id = phone_record.agent_id, phone_record.agent_version_id
         caller_id = phone_record.phone_number
         provider_name = phone_record.provider or "exotel"
     elif req.agent_id and req.agent_version_id:
         agent_id, agent_version_id = req.agent_id, req.agent_version_id
-        caller_id = req.caller_id or getattr(settings, "EXOTEL_CALLER_ID", None)
-        if not caller_id:
-            raise HTTPException(
-                status_code=400,
-                detail="No caller ID: set EXOTEL_CALLER_ID in backend/.env to your ExoPhone, or pass caller_id."
-            )
+        if req.is_test:
+            # Test calls from the Tests step may use Choranta's own ExoPhone
+            caller_id = req.caller_id or getattr(settings, "EXOTEL_CALLER_ID", None)
+            if not caller_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No caller ID: set EXOTEL_CALLER_ID in backend/.env to your ExoPhone, or pass caller_id."
+                )
+        else:
+            # Live calls show the client's own number, bought from Choranta
+            owner = db.get(Agent, agent_id)
+            own_number = phone_numbers.client_caller_number(db, owner.client_id, req.caller_id) if owner else None
+            if not own_number:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This client has no active phone number to call from. Buy a phone number to place calls."
+                    if not req.caller_id else f"'{req.caller_id}' isn't one of this client's active numbers.",
+                )
+            caller_id = own_number.phone_number
         provider_name = "exotel"
     else:
         raise HTTPException(status_code=400, detail="Provide phone_number_id, or agent_id and agent_version_id.")
@@ -809,11 +839,9 @@ def initiate_outbound_call_endpoint(
         raise HTTPException(status_code=400, detail="Agent is not ready for calls: " + "; ".join(readiness["errors"]))
     agent = db.get(Agent, agent_id)
 
-    if not req.is_test and not can_place_call(db, agent.client_id):
-        raise HTTPException(
-            status_code=402,
-            detail="Wallet balance is exhausted for this client. Record a payment to resume calls.",
-        )
+    allowed, block_reason, block_code = (True, None, None) if req.is_test else check_call_allowed(db, agent.client_id)
+    if not allowed:
+        raise HTTPException(status_code=429 if block_code == "CONCURRENCY" else 402, detail=block_reason)
 
     # Exotel must reach this server when the customer answers; fail fast instead of placing a dead call
     base_url = (settings.TELEPHONY_BASE_URL or "").rstrip("/")

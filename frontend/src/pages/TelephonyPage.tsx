@@ -427,9 +427,17 @@ export const TelephonyPage: React.FC = () => {
                   const isReady = readiness?.ready ?? false;
 
                   return (
-                    <tr key={pn.id} className="hover:bg-[#131620] transition-colors">
-                      <td className="px-5 py-3.5 font-mono text-slate-200 font-medium">
-                        {pn.phone_number}
+                    <tr key={pn.id} className={`hover:bg-[#131620] transition-colors ${pn.status === 'RELEASED' ? 'opacity-50' : ''}`}>
+                      <td className="px-5 py-3.5">
+                        <span className="font-mono text-slate-200 font-medium">{pn.metadata?.released_number || pn.phone_number}</span>
+                        {pn.monthly_rent_inr != null && (
+                          <span className={`block text-[11px] ${pn.rental_status === 'PAST_DUE' ? 'text-rose-400' : 'text-slate-500'}`}>
+                            ₹{pn.monthly_rent_inr}/mo
+                            {pn.rental_status === 'PAST_DUE' && ' · rent due'}
+                            {pn.rental_status === 'ACTIVE' && pn.current_period_end &&
+                              ` · ${pn.cancel_at_period_end ? 'ends' : 'renews'} ${new Date(pn.current_period_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`}
+                          </span>
+                        )}
                       </td>
                       <td className="px-5 py-3.5 text-slate-300">
                         {pn.client_name || <span className="text-slate-600">—</span>}

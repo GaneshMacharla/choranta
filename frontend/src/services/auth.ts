@@ -22,8 +22,8 @@ export const authService = {
     });
   },
 
-  getConfig: async (): Promise<{ google_client_id: string | null }> => {
-    return request<{ google_client_id: string | null }>('/auth/config');
+  getConfig: async (): Promise<{ google_client_id: string | null; self_signup: boolean }> => {
+    return request<{ google_client_id: string | null; self_signup: boolean }>('/auth/config');
   },
 
   getCurrentUser: async (): Promise<User> => {

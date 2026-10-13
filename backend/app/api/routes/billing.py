@@ -9,7 +9,7 @@ from app.core.security import generate_unique_id
 from app.models.billing import ClientBillingProfile, ClientUser, Invoice, WalletTransaction
 from app.models.client import Client
 from app.models.user import User
-from app.services import billing
+from app.services import billing, subscriptions
 from app.services.invoice_pdf import render_invoice_pdf
 
 router = APIRouter(tags=["Billing"])
@@ -74,6 +74,7 @@ def invoice_out(i: Invoice) -> Dict[str, Any]:
         "igst_inr": i.igst_inr,
         "total_inr": i.total_inr,
         "payment_reference": i.payment_reference,
+        "description": i.description or "Prepaid usage credit",
     }
 
 
@@ -84,14 +85,19 @@ def wallet_out(db: Session, client_id: str, limit: int = 100) -> Dict[str, Any]:
         db.query(WalletTransaction).filter(WalletTransaction.client_id == client_id)
         .order_by(WalletTransaction.created_at.desc()).limit(limit).all()
     )
-    return {
+    allowed, reason, _ = billing.check_call_allowed(db, client_id)
+    out = {
         "client_id": client_id,
         "balance_inr": wallet.balance_inr,
         "low_balance_threshold_inr": wallet.low_balance_threshold_inr,
         "low_balance": wallet.balance_inr <= wallet.low_balance_threshold_inr,
-        "calls_blocked": not billing.can_place_call(db, client_id),
+        "calls_blocked": not allowed,
+        "calls_blocked_reason": reason,
+        "subscription": subscriptions.subscription_out(db, client_id),
         "transactions": [transaction_out(t) for t in txns],
     }
+    db.commit()  # persist a subscription status change worked out on read
+    return out
 
 
 def invoice_pdf_response(invoice: Invoice) -> Response:

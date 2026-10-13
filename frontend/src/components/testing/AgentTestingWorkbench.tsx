@@ -1413,10 +1413,15 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
       )}
 
       {/* TOP CONTROLS & READINESS */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Selection Card */}
-        <Card title="Agent & Pinned Version" className="lg:col-span-1">
-          <div className="space-y-4 text-xs">
+        <Card
+          title="Agent & Pinned Version"
+          subtitle="The published version this test session runs against"
+          className="lg:col-span-5"
+          bodyClassName="flex flex-col"
+        >
+          <div className="flex flex-1 flex-col gap-4 text-xs">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">AI Employee</label>
               <p className="rounded border border-[#232736] bg-[#10121a] px-2.5 py-2 text-slate-200">
@@ -1480,42 +1485,45 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               )}
             </div>
 
-            <div className="pt-2 flex gap-2">
+            <div className="mt-auto pt-2 grid grid-cols-2 gap-2">
               <Button
                 variant="secondary"
-                size="sm"
-                className="flex-1"
+                size="md"
                 onClick={handleCheckReadiness}
                 isLoading={isCheckingReadiness}
                 disabled={!selectedVersionId || activeSession?.status === 'ACTIVE'}
               >
-                <RefreshCw className="h-3 w-3 mr-1" /> Re-check Readiness
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Re-check Readiness
               </Button>
 
               <Button
                 variant="primary"
-                size="sm"
-                className="flex-1"
+                size="md"
                 onClick={handleStartSession}
                 isLoading={isStartingSession}
                 disabled={!readiness?.ready || activeSession?.status === 'ACTIVE'}
               >
-                <Play className="h-3 w-3 mr-1" /> Start Session
+                <Play className="h-3.5 w-3.5 mr-1.5" /> Start Session
               </Button>
             </div>
           </div>
         </Card>
 
         {/* Readiness Checklist Card */}
-        <Card title="Runtime Readiness Verification" className="lg:col-span-2">
+        <Card
+          title="Runtime Readiness Verification"
+          subtitle="Prerequisites checked before a session can start"
+          className="lg:col-span-7"
+          bodyClassName="flex flex-col"
+        >
           {!readiness ? (
-            <div className="py-6 text-center text-xs text-slate-500">
+            <div className="flex flex-1 items-center justify-center py-6 text-center text-xs text-slate-500">
               Select an agent and published version to run readiness checks.
             </div>
           ) : (
-            <div className="space-y-3 text-xs">
+            <div className="flex flex-1 flex-col gap-4 text-xs">
               <div
-                className={`rounded-lg p-3 border flex items-center justify-between ${
+                className={`rounded-lg px-4 py-3 border flex flex-wrap items-center justify-between gap-2 ${
                   readiness.ready
                     ? 'border-emerald-900/60 bg-emerald-950/30 text-emerald-300'
                     : 'border-rose-900/60 bg-rose-950/30 text-rose-300'
@@ -1537,34 +1545,45 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               </div>
 
               {/* Checklist breakdown */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-                <div className="rounded border border-[#1b1f2d] bg-[#0c0e14] p-2.5">
-                  <span className="text-[10px] text-slate-500 block">VERSION STATUS</span>
-                  <span className="font-semibold text-emerald-400">PUBLISHED</span>
-                </div>
-                <div className="rounded border border-[#143c49] bg-[#06141a] p-2.5">
-                  <span className="text-[10px] text-slate-500 block">SCHEMA CONTRACT</span>
-                  <span className="font-semibold text-[#00df8f]">v1.0 CANONICAL</span>
-                </div>
-                <div className="rounded border border-[#1b1f2d] bg-[#0c0e14] p-2.5">
-                  <span className="text-[10px] text-slate-500 block">PROVIDER STACK</span>
-                  <span className="font-semibold text-purple-400">CARTESIA + GEMINI</span>
-                </div>
-                <div className="rounded border border-[#1b1f2d] bg-[#0c0e14] p-2.5">
-                  <span className="text-[10px] text-slate-500 block">VERSION NUMBER</span>
-                  <span className="font-mono text-slate-200 font-bold">
-                    v{readiness.version_number ?? '1'}
-                  </span>
-                </div>
+              <div className="grid flex-1 grid-cols-1 sm:grid-cols-2 auto-rows-fr gap-3">
+                {[
+                  { icon: CheckCircle, label: 'Version Status', value: 'PUBLISHED', tone: 'text-emerald-400', iconTone: 'text-emerald-400 bg-emerald-950/50 border-emerald-900/60' },
+                  { icon: Layers, label: 'Schema Contract', value: 'v1.0 CANONICAL', tone: 'text-[#00df8f]', iconTone: 'text-[#00df8f] bg-[#06221c] border-[#0f3d33]' },
+                  { icon: Cpu, label: 'Provider Stack', value: 'CARTESIA + GEMINI', tone: 'text-purple-400', iconTone: 'text-purple-400 bg-purple-950/40 border-purple-900/50' },
+                  { icon: History, label: 'Version Number', value: `v${readiness.version_number ?? '1'}`, tone: 'text-slate-100 font-mono', iconTone: 'text-slate-300 bg-[#10232b] border-[#143c49]' },
+                ].map(({ icon: Icon, label, value, tone, iconTone }) => (
+                  <div
+                    key={label}
+                    className="flex items-center gap-3 rounded-lg border border-[#143c49] bg-[#06141a] px-4 py-3"
+                  >
+                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border ${iconTone}`}>
+                      <Icon className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">{label}</span>
+                      <span className={`block truncate text-sm font-semibold ${tone}`}>{value}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
 
               {/* Errors & Warnings */}
               {readiness.errors.length > 0 && (
-                <div className="space-y-1 pt-1">
-                  <span className="text-[10px] font-bold text-rose-400 uppercase">Errors:</span>
+                <div className="space-y-1 rounded-lg border border-rose-900/50 bg-rose-950/20 px-4 py-3">
+                  <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider">Errors</span>
                   {readiness.errors.map((e, idx) => (
                     <div key={idx} className="text-rose-300 font-mono text-[11px]">
                       &bull; {e}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {readiness.warnings.length > 0 && (
+                <div className="space-y-1 rounded-lg border border-amber-900/50 bg-amber-950/20 px-4 py-3">
+                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Warnings</span>
+                  {readiness.warnings.map((w, idx) => (
+                    <div key={idx} className="text-amber-300 font-mono text-[11px]">
+                      &bull; {w}
                     </div>
                   ))}
                 </div>

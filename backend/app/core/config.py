@@ -104,11 +104,21 @@ class Settings(BaseSettings):
     PAYMENT_UPI_ID: str = ""
     PAYMENT_BANK_DETAILS: str = ""
     BILLING_ENFORCED: bool = True             # block new billable calls when the wallet balance is <= 0
+    SUBSCRIPTION_GRACE_DAYS: int = 3          # calls keep working this long after a plan period ends unpaid
+    MIN_WALLET_TOPUP_INR: float = 500.0       # smallest online wallet top-up (GST included)
+    NUMBER_GRACE_DAYS: int = 3                # unpaid number rent: released back to Exotel after this
+    NUMBER_RENTAL_CHECK_S: int = 900          # how often number rent is renewed / released
+
+    # Razorpay (online payments for plans and wallet top-ups)
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    RAZORPAY_WEBHOOK_SECRET: str = ""
 
     # --------------------------------------------------------
     # Google Sign-In
     # --------------------------------------------------------
     GOOGLE_CLIENT_ID: str = ""
+    CLIENT_SELF_SIGNUP: bool = True           # new Google accounts sign up as clients (staff stay invite-only)
 
     # --------------------------------------------------------
     # Phone call behaviour (cost control)
@@ -144,6 +154,7 @@ class Settings(BaseSettings):
     EXOTEL_FLOW_ID: Optional[str] = "1341429"
     # ExoPhone shown as caller ID on outbound calls placed directly by an agent
     EXOTEL_CALLER_ID: Optional[str] = None
+    EXOTEL_NUMBERS_MOCK: bool = False         # fake number search/purchase (no Exotel calls) for local testing
     # Where phone call recordings (stereo WAV: caller left, agent right) are stored
     RECORDINGS_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "recordings")
     RUN_REAL_TELEPHONY_TESTS: bool = False

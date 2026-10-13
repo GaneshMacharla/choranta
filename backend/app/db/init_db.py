@@ -1,4 +1,5 @@
 import logging
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 from app.db.session import engine, Base, SessionLocal
 from app.models import (
@@ -11,8 +12,21 @@ from app.services.auth_service import AuthService
 logger = logging.getLogger("choranta.init_db")
 
 
+# Placeholder number rents (pre-GST, INR/month); admins change them on the Plans page
+DEFAULT_NUMBER_RENTS = {"Landline": 499.0, "Mobile": 699.0, "TollFree": 1999.0}
+
+
+def seed_number_pricing(db: Session) -> None:
+    from app.models.subscription import NumberPricing
+    for number_type, rent in DEFAULT_NUMBER_RENTS.items():
+        if not db.get(NumberPricing, number_type):
+            db.add(NumberPricing(number_type=number_type, monthly_rent_inr=rent, is_available=True))
+    db.commit()
+
+
 def seed_catalogs(db: Session) -> None:
     """Seed default system tools, integrations, and sample knowledge sources if empty."""
+    seed_number_pricing(db)
     # 1. Tools
     initial_tools = [
         {
@@ -338,9 +352,26 @@ def seed_real_estate_data(db: Session) -> None:
     db.commit()
 
 
+# Columns added to tables that already exist; create_all only creates missing tables
+_ADDED_COLUMNS = [
+    ("invoices", "description", "TEXT"),
+]
+
+
+def _add_missing_columns() -> None:
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        for table, column, ddl_type in _ADDED_COLUMNS:
+            if table in tables and column not in {c["name"] for c in inspector.get_columns(table)}:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+                logger.info(f"Added column {table}.{column}")
+
+
 def init_db() -> None:
     """Create tables if they do not exist and seed the initial internal administrator and catalogs."""
     Base.metadata.create_all(bind=engine)
+    _add_missing_columns()
     
     db: Session = SessionLocal()
     try:

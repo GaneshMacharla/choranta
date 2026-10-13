@@ -104,7 +104,7 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
             <span className={`font-mono text-2xl font-bold ${wallet.calls_blocked ? 'text-rose-300' : wallet.low_balance ? 'text-amber-300' : 'text-slate-100'}`}>
               {inr(wallet.balance_inr)}
             </span>
-            {wallet.calls_blocked && <span className="ml-2 text-rose-300">Calls paused (no balance)</span>}
+            {wallet.calls_blocked && <span className="ml-2 text-rose-300">Calls paused: {wallet.calls_blocked_reason}</span>}
             {!wallet.calls_blocked && wallet.low_balance && <span className="ml-2 text-amber-300">Low balance</span>}
           </div>
           {isAdmin && (

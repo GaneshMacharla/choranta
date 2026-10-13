@@ -1,9 +1,13 @@
 import React, { useEffect, useState } from 'react';
+import { Link, Navigate } from 'react-router-dom';
 import { AlertTriangle, PhoneCall, Clock, IndianRupee, Wallet } from 'lucide-react';
 import { Card } from '../../components/common/Card';
 import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { inr, PaymentInstructions, PortalSummary, portalService } from '../../services/portal';
+import { minutesLabel, plansService } from '../../services/plans';
+import { useAuth } from '../../context/AuthContext';
+import { hasSkippedPlanChoice } from './PortalPlansPage';
 
 const Stat: React.FC<{ icon: React.ReactNode; label: string; value: string; hint?: string }> = ({ icon, label, value, hint }) => (
   <div className="rounded-xl border border-[#1b2030] bg-[#0c0e14] p-4">
@@ -45,15 +49,18 @@ const DailyBars: React.FC<{ data: PortalSummary['daily']; metric: 'minutes' | 's
 };
 
 export const PortalDashboardPage: React.FC = () => {
+  const { user } = useAuth();
   const [summary, setSummary] = useState<PortalSummary | null>(null);
   const [payment, setPayment] = useState<PaymentInstructions | null>(null);
+  const [planCount, setPlanCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([portalService.summary(), portalService.paymentInstructions()])
-      .then(([s, p]) => {
+    Promise.all([portalService.summary(), portalService.paymentInstructions(), plansService.list()])
+      .then(([s, p, plans]) => {
         setSummary(s);
         setPayment(p);
+        setPlanCount(plans.length);
       })
       .catch((err) => setError(err.message || 'Could not load your dashboard.'));
   }, []);
@@ -61,7 +68,11 @@ export const PortalDashboardPage: React.FC = () => {
   if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />;
   if (!summary) return <LoadingState message="Loading dashboard..." />;
 
-  const { wallet, month } = summary;
+  const { wallet, month, subscription: plan } = summary;
+  // Clients who have never had a plan choose one first (unless they chose pay-as-you-go)
+  if (!plan && planCount > 0 && !hasSkippedPlanChoice(user?.id)) return <Navigate to="/portal/plans" replace />;
+  const planCoversCalls = !!plan?.usable && plan.minutes_remaining > 0;
+  const showLowBalance = wallet.low_balance && !planCoversCalls;
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div>
@@ -69,21 +80,43 @@ export const PortalDashboardPage: React.FC = () => {
         <p className="text-xs text-slate-400">Welcome back, {summary.user_name}</p>
       </div>
 
-      {(wallet.low_balance || wallet.calls_blocked) && (
+      {(showLowBalance || wallet.calls_blocked) && (
         <div className={`flex items-start gap-2 rounded-lg border p-3 text-xs ${wallet.calls_blocked ? 'border-rose-800/60 bg-rose-950/40 text-rose-200' : 'border-amber-700/60 bg-amber-950/30 text-amber-200'}`}>
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             {wallet.calls_blocked
-              ? 'Your wallet balance is exhausted, so your AI employee can’t take or make calls. Recharge to resume.'
+              ? wallet.calls_blocked_reason || 'Your AI employee can’t take or make calls right now.'
               : `Low balance: ${inr(wallet.balance_inr)} left (alert below ${inr(wallet.low_balance_threshold_inr, 0)}). Recharge soon to avoid interruptions.`}
           </span>
+          <Link to={plan ? '/portal/billing' : '/portal/plans'} className="ml-auto shrink-0 font-semibold underline-offset-2 hover:underline">
+            {plan ? 'Top up wallet' : 'Choose a plan'}
+          </Link>
         </div>
       )}
+
+      {summary.numbers_past_due.map((n) => (
+        <div key={n.phone_number} className="flex items-start gap-2 rounded-lg border border-rose-800/60 bg-rose-950/40 p-3 text-xs text-rose-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Rent of {inr(n.monthly_rent_inr)} for {n.phone_number} is overdue.
+            {n.grace_ends_at && ` Top up your wallet by ${new Date(n.grace_ends_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} or the number will be released.`}
+          </span>
+        </div>
+      ))}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat icon={<Wallet className="h-4 w-4 text-[#00df8f]" />} label="Wallet balance" value={inr(wallet.balance_inr)} hint="excluding GST" />
         <Stat icon={<PhoneCall className="h-4 w-4 text-indigo-400" />} label="Calls this month" value={String(month.calls)} />
-        <Stat icon={<Clock className="h-4 w-4 text-sky-400" />} label="Minutes this month" value={month.minutes.toFixed(1)} />
+        {plan?.usable ? (
+          <Stat
+            icon={<Clock className="h-4 w-4 text-sky-400" />}
+            label="Plan minutes left"
+            value={minutesLabel(plan.minutes_remaining)}
+            hint={`of ${plan.included_minutes} · renews ${new Date(plan.current_period_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`}
+          />
+        ) : (
+          <Stat icon={<Clock className="h-4 w-4 text-sky-400" />} label="Minutes this month" value={month.minutes.toFixed(1)} />
+        )}
         <Stat icon={<IndianRupee className="h-4 w-4 text-amber-400" />} label="Spend this month" value={inr(month.spend_inr)} />
       </div>
 

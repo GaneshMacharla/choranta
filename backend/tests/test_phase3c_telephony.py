@@ -403,16 +403,17 @@ def outbound_settings(monkeypatch):
 
 
 def test_outbound_call_directly_as_agent(client: TestClient, telephony_setup, auth_headers, db: Session, outbound_settings):
-    """An agent can call a number without a provisioned PhoneNumber, using EXOTEL_CALLER_ID."""
-    resp = client.post(
-        "/api/telephony/calls/outbound",
-        headers=auth_headers,
-        json={
-            "agent_id": telephony_setup["agent"].id,
-            "agent_version_id": telephony_setup["version"].id,
-            "destination_number": "09876543210",
-        }
-    )
+    """A live call placed as an agent shows the client's own number; test calls use EXOTEL_CALLER_ID."""
+    body = {
+        "agent_id": telephony_setup["agent"].id,
+        "agent_version_id": telephony_setup["version"].id,
+        "destination_number": "09876543210",
+    }
+    live = client.post("/api/telephony/calls/outbound", headers=auth_headers, json=body)
+    assert live.status_code == 201, live.text
+    assert live.json()["caller_number"] == telephony_setup["phone_number"].phone_number
+
+    resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json={**body, "is_test": True})
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert data["direction"] == "OUTBOUND"
@@ -432,7 +433,7 @@ def test_outbound_call_directly_as_agent(client: TestClient, telephony_setup, au
     assert call.runtime_session_id is not None
 
 
-def test_outbound_call_validates_setup(client: TestClient, telephony_setup, auth_headers, outbound_settings, monkeypatch):
+def test_outbound_call_validates_setup(client: TestClient, telephony_setup, auth_headers, outbound_settings, monkeypatch, db: Session):
     """Missing caller ID or a non-public base URL fails fast with an actionable error."""
     body = {
         "agent_id": telephony_setup["agent"].id,
@@ -441,9 +442,18 @@ def test_outbound_call_validates_setup(client: TestClient, telephony_setup, auth
     }
 
     monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", None, raising=False)
-    resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json=body)
+    resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json={**body, "is_test": True})
     assert resp.status_code == 400
     assert "EXOTEL_CALLER_ID" in resp.json()["detail"]
+
+    # Live calls need the client's own active number
+    telephony_setup["phone_number"].status = "INACTIVE"
+    db.commit()
+    resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json=body)
+    assert resp.status_code == 400
+    assert "Buy a phone number" in resp.json()["detail"]
+    telephony_setup["phone_number"].status = "ACTIVE"
+    db.commit()
 
     monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", "08047112233", raising=False)
     monkeypatch.setattr(settings, "TELEPHONY_BASE_URL", "http://127.0.0.1:8000", raising=False)

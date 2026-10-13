@@ -12,6 +12,7 @@ import {
   Radio,
   Cpu,
   DollarSign,
+  Layers,
   Terminal,
   LogOut,
   ShieldCheck,
@@ -40,6 +41,7 @@ export const Sidebar: React.FC = () => {
     { name: 'Knowledge', path: '/knowledge', icon: BookOpen },
     { name: 'Integrations', path: '/integrations', icon: Puzzle },
     { name: 'AI Providers', path: '/providers', icon: Cpu },
+    { name: 'Plans', path: '/plans', icon: Layers },
     { name: 'Usage & Costs', path: '/usage', icon: DollarSign },
     { name: 'Errors / Logs', path: '/logs', icon: Terminal },
     

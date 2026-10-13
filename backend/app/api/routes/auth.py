@@ -25,7 +25,7 @@ def google_login(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
 def auth_config():
     """Public sign-in configuration for the login page."""
     from app.core.config import settings
-    return {"google_client_id": settings.GOOGLE_CLIENT_ID or None}
+    return {"google_client_id": settings.GOOGLE_CLIENT_ID or None, "self_signup": settings.CLIENT_SELF_SIGNUP}
 
 
 @router.get("/me", response_model=UserResponse)

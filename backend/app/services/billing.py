@@ -4,11 +4,15 @@ Prepaid wallet billing.
 Clients recharge by bank transfer / UPI; an admin records the payment, which issues a GST tax
 invoice (tax on the advance) and credits the wallet with the taxable value. Each completed call
 is then debited at its client charge (pre-GST `charge_total`), so tax is never charged twice.
+
+Clients on a monthly plan (services/subscriptions.py) use the plan's included minutes first; only the
+overage is debited from the wallet, at the plan's overage rate.
 """
 import json
 import logging
-from datetime import date, datetime, timezone
-from typing import Any, Dict, Optional
+import math
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -19,6 +23,8 @@ from app.models.billing import ClientBillingProfile, ClientWallet, Invoice, Wall
 from app.models.call import Call
 from app.models.client import Client
 from app.models.runtime_session import RuntimeSession
+from app.models.subscription import CallUsage, Plan
+from app.services import subscriptions
 from app.services.call_costing import estimate_call_cost
 from app.services.pricing import get_pricing
 
@@ -47,12 +53,50 @@ def get_wallet(db: Session, client_id: str, lock: bool = False) -> ClientWallet:
     return wallet
 
 
-def can_place_call(db: Session, client_id: Optional[str]) -> bool:
-    """New billable calls need a positive balance (when balance enforcement is on)."""
+# Calls in these states hold a line; older rows are treated as stuck and don't count
+LIVE_CALL_STATUSES = ("INITIATED", "RINGING", "ANSWERED", "ACTIVE")
+LIVE_CALL_WINDOW = timedelta(hours=3)
+
+
+def live_call_count(db: Session, client_id: str) -> int:
+    since = subscriptions.utcnow() - LIVE_CALL_WINDOW
+    return (
+        db.query(func.count(Call.id))
+        .filter(Call.client_id == client_id, Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= since)
+        .scalar() or 0
+    )
+
+
+def check_call_allowed(db: Session, client_id: Optional[str]) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    Whether a new billable call may start, as (allowed, reason, code). Codes: PLAN_EXPIRED, NO_BALANCE,
+    CONCURRENCY. Plan clients need plan minutes or wallet balance for overage; others need wallet balance.
+    """
     if not settings.BILLING_ENFORCED or not client_id:
-        return True
+        return True, None, None
     wallet = db.query(ClientWallet).filter(ClientWallet.client_id == client_id).first()
-    return bool(wallet and wallet.balance_inr > 0)
+    has_balance = bool(wallet and wallet.balance_inr > 0)
+    sub = subscriptions.get_subscription(db, client_id)
+    plan = db.get(Plan, sub.plan_id) if sub else None
+
+    if sub and plan and subscriptions.is_usable(sub):
+        if subscriptions.remaining_minutes(sub, plan) <= 0 and not has_balance:
+            return False, "Plan minutes are used up and the wallet is empty. Top up the wallet to keep calling.", "NO_BALANCE"
+        if plan.max_concurrent_calls and live_call_count(db, client_id) >= plan.max_concurrent_calls:
+            return False, (f"The {plan.name} plan allows {plan.max_concurrent_calls} call(s) at a time. "
+                           "Wait for a call to finish or upgrade the plan."), "CONCURRENCY"
+        return True, None, None
+    if sub and plan and sub.status == "PAST_DUE":
+        return False, f"The {plan.name} plan has expired. Renew it to resume calls.", "PLAN_EXPIRED"
+    # No plan, or a cancelled one: pay-as-you-go from the wallet
+    if not has_balance:
+        return False, "Wallet balance is exhausted. Choose a plan or top up the wallet to resume calls.", "NO_BALANCE"
+    return True, None, None
+
+
+def can_place_call(db: Session, client_id: Optional[str]) -> bool:
+    """New billable calls need plan minutes or a positive balance (when balance enforcement is on)."""
+    return check_call_allowed(db, client_id)[0]
 
 
 def gst_split(total_received: float, client_state_code: Optional[str]) -> Dict[str, Any]:
@@ -96,11 +140,11 @@ def _next_invoice_number(db: Session, fy: str) -> tuple:
     return sequence, f"{settings.INVOICE_PREFIX}/{fy}/{sequence:04d}"
 
 
-def record_payment(
+def _issue_invoice(
     db: Session, client_id: str, amount_received: float, reference: Optional[str], admin_id: Optional[str],
-    issue_date: Optional[date] = None,
-) -> Dict[str, Any]:
-    """Records a GST-inclusive recharge: issues the invoice and credits the taxable value."""
+    description: Optional[str] = None, issue_date: Optional[date] = None,
+) -> Tuple[Invoice, Dict[str, Any]]:
+    """Adds (does not commit) a GST tax invoice for a GST-inclusive amount received."""
     if amount_received <= 0:
         raise ValidationException("Payment amount must be greater than zero.")
     bill_to = _bill_to(db, client_id)
@@ -108,9 +152,6 @@ def record_payment(
     day = issue_date or datetime.now(timezone.utc).date()
     fy = financial_year(day)
     sequence, number = _next_invoice_number(db, fy)
-
-    wallet = get_wallet(db, client_id, lock=True)
-    wallet.balance_inr = _money(wallet.balance_inr + split["taxable_inr"])
     invoice = Invoice(
         number=number,
         client_id=client_id,
@@ -125,10 +166,22 @@ def record_payment(
         place_of_supply=split["place_of_supply"],
         payment_reference=reference,
         bill_to=json.dumps(bill_to),
+        description=description,
         created_by=admin_id,
     )
     db.add(invoice)
     db.flush()
+    return invoice, split
+
+
+def record_payment(
+    db: Session, client_id: str, amount_received: float, reference: Optional[str], admin_id: Optional[str],
+    issue_date: Optional[date] = None, commit: bool = True,
+) -> Dict[str, Any]:
+    """Records a GST-inclusive recharge: issues the invoice and credits the taxable value."""
+    invoice, split = _issue_invoice(db, client_id, amount_received, reference, admin_id, issue_date=issue_date)
+    wallet = get_wallet(db, client_id, lock=True)
+    wallet.balance_inr = _money(wallet.balance_inr + split["taxable_inr"])
     txn = WalletTransaction(
         client_id=client_id,
         type="CREDIT",
@@ -136,15 +189,47 @@ def record_payment(
         balance_after_inr=wallet.balance_inr,
         invoice_id=invoice.id,
         reference=reference,
-        note=f"Recharge, invoice {number}",
+        note=f"Recharge, invoice {invoice.number}",
         created_by=admin_id,
     )
     db.add(txn)
     db.flush()
     invoice.transaction_id = txn.id
-    db.commit()
-    logger.info(f"Recorded payment of Rs {amount_received} for {client_id}: invoice {number}, wallet {wallet.balance_inr}")
-    return {"invoice_id": invoice.id, "invoice_number": number, "balance_inr": wallet.balance_inr, **split}
+    if commit:
+        db.commit()
+    logger.info(f"Recorded payment of Rs {amount_received} for {client_id}: invoice {invoice.number}, wallet {wallet.balance_inr}")
+    return {"invoice_id": invoice.id, "invoice_number": invoice.number, "balance_inr": wallet.balance_inr, **split}
+
+
+def plan_price_with_gst(plan: Plan) -> float:
+    return _money(plan.monthly_price_inr * (1 + settings.GST_RATE_PERCENT / 100.0))
+
+
+def pay_for_plan(
+    db: Session, client_id: str, plan: Plan, reference: Optional[str], admin_id: Optional[str],
+    amount_received: Optional[float] = None, commit: bool = True,
+) -> Dict[str, Any]:
+    """Records a plan payment (GST included): applies the period and issues its invoice. No wallet credit."""
+    blocker = subscriptions.renewal_blocker(subscriptions.get_subscription(db, client_id), plan)
+    if blocker:
+        raise ValidationException(blocker)
+    sub = subscriptions.activate_period(db, client_id, plan)
+    # The invoice covers the period being paid for, which is the next one when renewing early
+    if sub.renewed_ahead:
+        start = sub.current_period_end
+        label = f"{start:%d %b %Y} - {subscriptions.add_month(start):%d %b %Y}"
+    else:
+        label = subscriptions.period_label(sub)
+    description = f"AI voice agent services - {plan.name} plan, {label}"
+    invoice, split = _issue_invoice(
+        db, client_id, amount_received if amount_received is not None else plan_price_with_gst(plan),
+        reference, admin_id, description=description,
+    )
+    if commit:
+        db.commit()
+    logger.info(f"Recorded {plan.name} plan payment for {client_id}: invoice {invoice.number}")
+    return {"invoice_id": invoice.id, "invoice_number": invoice.number,
+            "subscription": subscriptions.subscription_out(db, client_id), **split}
 
 
 def adjust_wallet(db: Session, client_id: str, amount: float, note: str, admin_id: Optional[str]) -> ClientWallet:
@@ -176,15 +261,13 @@ def call_charge(db: Session, call: Call) -> Optional[float]:
     return _money(amount) if amount > 0 else None
 
 
-def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
-    """Debits a completed call's charge from the client's wallet, once per call."""
-    if not call.client_id:
-        return None
-    if db.query(WalletTransaction.id).filter(WalletTransaction.call_id == call.id).first():
-        return None
-    amount = call_charge(db, call)
-    if amount is None:
-        return None
+def billed_minutes(duration_seconds: float) -> float:
+    """Call minutes billed against a plan, in the carrier's pulses (60 s pulse -> per started minute)."""
+    pulse = max(1, settings.TELEPHONY_BILLING_PULSE_SECONDS)
+    return math.ceil(max(0.0, float(duration_seconds)) / pulse) * pulse / 60.0
+
+
+def _debit(db: Session, call: Call, amount: float) -> WalletTransaction:
     wallet = get_wallet(db, call.client_id, lock=True)
     wallet.balance_inr = _money(wallet.balance_inr - amount)
     txn = WalletTransaction(
@@ -196,8 +279,52 @@ def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
         note=f"Call to {call.destination_number}" if call.direction == "OUTBOUND" else f"Call from {call.caller_number}",
     )
     db.add(txn)
+    return txn
+
+
+def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
+    """
+    Bills a completed call once. Plan clients use included minutes first and pay the overage from the
+    wallet; others pay the full charge from the wallet. Returns the wallet debit, if there was one.
+    """
+    if not call.client_id:
+        return None
+    already = (
+        db.query(CallUsage.id).filter(CallUsage.call_id == call.id).first()
+        or db.query(WalletTransaction.id).filter(WalletTransaction.call_id == call.id).first()
+    )
+    if already:
+        return None
+    if (call.metadata_ or {}).get("is_test") or call.status != "COMPLETED" or not call.duration_seconds:
+        return None
+
+    sub = subscriptions.get_subscription(db, call.client_id, lock=True)
+    plan = db.get(Plan, sub.plan_id) if sub else None
+    if sub and plan and subscriptions.is_usable(sub):
+        minutes = billed_minutes(call.duration_seconds)
+        included = min(minutes, subscriptions.remaining_minutes(sub, plan))
+        overage = round(minutes - included, 4)
+        charge = _money(overage * plan.overage_per_minute_inr)
+        sub.minutes_used = round(float(sub.minutes_used or 0.0) + included, 4)
+        txn = _debit(db, call, charge) if charge > 0 else None
+        db.add(CallUsage(
+            call_id=call.id, client_id=call.client_id, plan_id=plan.id, billed_minutes=minutes,
+            included_minutes=included, overage_minutes=overage, overage_charge_inr=charge,
+        ))
+        db.commit()
+        logger.info(f"Charged call {call.id} on {plan.name}: {included} plan min, {overage} overage min (Rs {charge})")
+        return txn
+
+    amount = call_charge(db, call)
+    if amount is None:
+        return None
+    txn = _debit(db, call, amount)
+    db.add(CallUsage(
+        call_id=call.id, client_id=call.client_id, plan_id=None,
+        billed_minutes=billed_minutes(call.duration_seconds), overage_charge_inr=amount,
+    ))
     db.commit()
-    logger.info(f"Charged call {call.id}: Rs {amount}, wallet now {wallet.balance_inr}")
+    logger.info(f"Charged call {call.id}: Rs {amount}, wallet now {txn.balance_after_inr}")
     return txn
 
 

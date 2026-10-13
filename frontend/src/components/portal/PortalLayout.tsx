@@ -1,12 +1,14 @@
 import React from 'react';
 import { NavLink, Navigate, Outlet } from 'react-router-dom';
-import { LayoutDashboard, PhoneCall, Wallet, Building, LogOut } from 'lucide-react';
+import { LayoutDashboard, PhoneCall, Phone, Wallet, Building, LogOut, Layers } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { LoadingState } from '../common/LoadingState';
 
 const NAV = [
   { to: '/portal', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/portal/plans', label: 'Plans', icon: Layers, end: false },
   { to: '/portal/calls', label: 'Calls', icon: PhoneCall, end: false },
+  { to: '/portal/numbers', label: 'Phone numbers', icon: Phone, end: false },
   { to: '/portal/billing', label: 'Billing', icon: Wallet, end: false },
   { to: '/portal/inventory', label: 'Properties', icon: Building, end: false },
 ];

@@ -16,6 +16,12 @@ export interface PhoneNumber {
   metadata?: Record<string, any>;
   created_at: string;
   updated_at: string;
+  // Numbers bought from Choranta (rented from the wallet); null for free numbers
+  monthly_rent_inr?: number | null;
+  rental_status?: 'ACTIVE' | 'PAST_DUE' | 'RELEASED' | null;
+  current_period_end?: string | null;
+  cancel_at_period_end?: boolean;
+  grace_ends_at?: string | null;
 }
 
 export interface CreatePhoneNumberInput {

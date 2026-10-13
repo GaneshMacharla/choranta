@@ -16,6 +16,7 @@ from app.models.lead import Lead
 from app.models.pricing_settings import PricingSettings
 from app.models.inventory_source import InventorySource
 from app.models.billing import ClientUser, ClientWallet, WalletTransaction, ClientBillingProfile, Invoice
+from app.models.subscription import Plan, ClientSubscription, CallUsage, PaymentOrder, NumberPricing, NumberRental
 
 __all__ = [
     "User",
@@ -44,5 +45,11 @@ __all__ = [
     "ClientWallet",
     "WalletTransaction",
     "ClientBillingProfile",
-    "Invoice"
+    "Invoice",
+    "Plan",
+    "ClientSubscription",
+    "CallUsage",
+    "PaymentOrder",
+    "NumberPricing",
+    "NumberRental",
 ]

@@ -38,6 +38,7 @@ export const LoginPage: React.FC = () => {
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
   const [googleReady, setGoogleReady] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const [selfSignup, setSelfSignup] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -49,7 +50,8 @@ export const LoginPage: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        const { google_client_id } = await authService.getConfig();
+        const { google_client_id, self_signup } = await authService.getConfig();
+        if (!cancelled) setSelfSignup(self_signup);
         if (!google_client_id) {
           if (!cancelled) setGoogleReady('unavailable');
           return;
@@ -124,7 +126,11 @@ export const LoginPage: React.FC = () => {
         <div className="rounded-xl border border-[#143c49] bg-[#091b22] p-6 shadow-2xl space-y-4">
           <div className="flex items-center gap-2 rounded border border-[#00df8f]/30 bg-[#00df8f]/10 px-3 py-2 text-xs text-[#00df8f]">
             <ShieldCheck className="h-4 w-4 shrink-0 text-[#00df8f]" />
-            <span>Invite-only. Sign in with the Google account your administrator added.</span>
+            <span>
+              {selfSignup
+                ? 'Sign in with Google. New here? Your account is created automatically.'
+                : 'Invite-only. Sign in with the Google account your administrator added.'}
+            </span>
           </div>
 
           {error && (

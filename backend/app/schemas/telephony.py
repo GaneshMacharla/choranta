@@ -46,6 +46,12 @@ class PhoneNumberResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+    # Set for numbers bought from Choranta (rented monthly from the wallet); None for free numbers
+    monthly_rent_inr: Optional[float] = None
+    rental_status: Optional[str] = None
+    current_period_end: Optional[datetime] = None
+    cancel_at_period_end: bool = False
+    grace_ends_at: Optional[datetime] = None
 
 
 class PhoneNumberReadinessResponse(BaseModel):
@@ -101,12 +107,12 @@ class CallDetailResponse(CallResponse):
 class InitiateOutboundCallRequest(BaseModel):
     """
     Call from a provisioned number (phone_number_id; uses its assigned agent) or directly as an
-    agent (agent_id + agent_version_id; caller ID from caller_id or EXOTEL_CALLER_ID).
+    agent (agent_id + agent_version_id; caller ID is the client's own active number, or EXOTEL_CALLER_ID for test calls).
     """
     phone_number_id: Optional[str] = Field(None, description="ID of the provisioned PhoneNumber in Choranta Studio")
     agent_id: Optional[str] = Field(None, description="Agent to place the call as (when not using phone_number_id)")
     agent_version_id: Optional[str] = Field(None, description="Published AgentVersion to run (with agent_id)")
-    caller_id: Optional[str] = Field(None, description="ExoPhone to call from (defaults to EXOTEL_CALLER_ID)")
+    caller_id: Optional[str] = Field(None, description="Which of the client's numbers to call from (test calls: defaults to EXOTEL_CALLER_ID)")
     destination_number: str = Field(..., description="The customer phone number to call (e.g. 09876543210 or +919876543210)")
     flow_id: Optional[str] = Field(None, description="Optional Exotel Flow ID. Defaults to configured EXOTEL_FLOW_ID.")
     custom_field: Optional[str] = Field(None, description="Optional tracking metadata string")

@@ -7,6 +7,7 @@ interface CardProps {
   subtitle?: React.ReactNode;
   action?: React.ReactNode;
   noPadding?: boolean;
+  bodyClassName?: string;
 }
 
 export const Card: React.FC<CardProps> = ({
@@ -16,9 +17,10 @@ export const Card: React.FC<CardProps> = ({
   subtitle,
   action,
   noPadding = false,
+  bodyClassName = '',
 }) => {
   return (
-    <div className={`rounded-lg border border-[#143c49] bg-[#091b22] shadow-sm ${className}`}>
+    <div className={`flex flex-col rounded-lg border border-[#143c49] bg-[#091b22] shadow-sm ${className}`}>
       {(title || action) && (
         <div className="flex items-center justify-between border-b border-[#102d38] px-5 py-3.5">
           <div>
@@ -34,7 +36,7 @@ export const Card: React.FC<CardProps> = ({
           {action && <div className="shrink-0">{action}</div>}
         </div>
       )}
-      <div className={noPadding ? '' : 'p-5'}>
+      <div className={`flex-1 ${noPadding ? '' : 'p-5'} ${bodyClassName}`}>
         {children}
       </div>
     </div>

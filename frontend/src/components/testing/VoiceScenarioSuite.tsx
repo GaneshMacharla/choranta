@@ -503,20 +503,22 @@ export const VoiceScenarioSuite: React.FC<VoiceScenarioSuiteProps> = ({
       </div>
 
       {/* 3. MAIN WORKSPACE: SCENARIOS CATALOG & DEEP TRACE INSPECTOR */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className={`grid grid-cols-1 lg:grid-cols-12 gap-6 ${selectedScenario ? 'items-start' : 'items-stretch'}`}>
         {/* LEFT PANEL: SCENARIOS LIST (5 COLS) */}
-        <div className="lg:col-span-5 space-y-3">
+        <div className="lg:col-span-5 flex flex-col">
           <Card
             title={`Configured Scenarios (${scenarios.length})`}
             subtitle="Deterministic voice tests with programmatic assertions & mock state"
+            className="flex-1"
+            bodyClassName={scenarios.length === 0 ? 'flex items-center justify-center' : ''}
           >
             {isLoadingScenarios ? (
               <div className="py-8 text-center text-xs text-slate-500">Loading test scenarios...</div>
             ) : scenarios.length === 0 ? (
-              <div className="py-12 text-center text-xs text-slate-400 space-y-3">
+              <div className="py-10 text-center text-xs text-slate-400 space-y-3">
                 <FlaskConical className="h-8 w-8 mx-auto text-slate-600 mb-2" />
                 <p>No test scenarios configured for this agent yet.</p>
-                <div className="flex justify-center gap-2">
+                <div className="flex flex-wrap justify-center gap-2">
                   <Button size="sm" variant="primary" onClick={handleOpenTemplates}>
                     <Sparkles className="h-3.5 w-3.5 mr-1 inline" /> Pick From 10 Templates
                   </Button>
@@ -603,11 +605,17 @@ export const VoiceScenarioSuite: React.FC<VoiceScenarioSuiteProps> = ({
         </div>
 
         {/* RIGHT PANEL: LIVE RUN EXECUTION & DEEP TRACE INSPECTOR (7 COLS) */}
-        <div className="lg:col-span-7 space-y-4">
+        <div className="lg:col-span-7 flex flex-col space-y-4">
           {!selectedScenario ? (
-            <Card title="Scenario Execution & Traces">
-              <div className="py-16 text-center text-xs text-slate-500">
-                Select a scenario from the list or pick from templates to run tests and inspect execution traces.
+            <Card
+              title="Scenario Execution & Traces"
+              subtitle="Live run output, assertion results and turn-by-turn traces"
+              className="flex-1"
+              bodyClassName="flex items-center justify-center"
+            >
+              <div className="py-10 text-center text-xs text-slate-500 space-y-3 max-w-sm">
+                <Activity className="h-8 w-8 mx-auto text-slate-600 mb-2" />
+                <p>Select a scenario from the list or pick from templates to run tests and inspect execution traces.</p>
               </div>
             </Card>
           ) : (

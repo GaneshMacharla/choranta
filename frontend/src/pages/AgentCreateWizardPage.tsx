@@ -54,6 +54,20 @@ const DIRECTIONS: { value: CallDirection; label: string; hint: string; icon: Rea
   { value: 'both', label: 'Both', hint: 'Answers and places calls', icon: <Phone className="h-4 w-4" /> },
 ];
 
+const ROLE_OPTIONS = [
+  'Receptionist',
+  'Appointment Booking Assistant',
+  'Lead Qualification Specialist',
+  'Sales Follow-up Caller',
+  'Customer Support Agent',
+  'Order & Delivery Status Agent',
+  'Payment Reminder Agent',
+  'Feedback & Survey Caller',
+  'Site Visit Coordinator',
+  'Recruitment Screening Caller',
+].map((r) => ({ value: r, label: r }));
+const CUSTOM_ROLE = '__custom__';
+
 const TONE_OPTIONS = ['professional', 'friendly', 'warm', 'casual'].map((t) => ({
   value: t,
   label: t.charAt(0).toUpperCase() + t.slice(1),
@@ -90,6 +104,7 @@ export const AgentCreateWizardPage: React.FC = () => {
     description: '',
     business_notes: '',
   });
+  const [isCustomRole, setIsCustomRole] = useState(false);
   const [config, setConfig] = useState<AgentConfigurationData | null>(null);
   const [draftNotice, setDraftNotice] = useState<string | null>(null);
   const [isDrafting, setIsDrafting] = useState(false);
@@ -210,12 +225,27 @@ export const AgentCreateWizardPage: React.FC = () => {
           value={form.name}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
         />
-        <Input
-          label="Role"
-          placeholder="e.g. Appointment Booking Receptionist"
-          value={form.role}
-          onChange={(e) => setForm({ ...form, role: e.target.value })}
-        />
+        <div className="space-y-2">
+          <Select
+            label="Role"
+            placeholder="Select a role"
+            options={[...ROLE_OPTIONS, { value: CUSTOM_ROLE, label: 'Other (type your own)' }]}
+            value={isCustomRole ? CUSTOM_ROLE : form.role}
+            onChange={(e) => {
+              const custom = e.target.value === CUSTOM_ROLE;
+              setIsCustomRole(custom);
+              setForm({ ...form, role: custom ? '' : e.target.value });
+            }}
+          />
+          {isCustomRole && (
+            <Input
+              placeholder="e.g. Insurance Renewal Caller"
+              value={form.role}
+              onChange={(e) => setForm({ ...form, role: e.target.value })}
+              autoFocus
+            />
+          )}
+        </div>
         <Select
           label="Primary spoken language"
           options={AVAILABLE_LANGUAGES}

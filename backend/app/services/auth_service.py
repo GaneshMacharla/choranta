@@ -37,8 +37,9 @@ class AuthService:
 
     def authenticate_google(self, credential: str) -> TokenResponse:
         """
-        Verifies a Google Identity Services ID token and signs in the invited user with that
-        verified email. There is no self-signup: the email must already exist in Choranta.
+        Verifies a Google Identity Services ID token and signs in the user with that verified email.
+        A new email signs up as a client (its own client account and portal login) when
+        CLIENT_SELF_SIGNUP is on; internal staff roles are only ever granted by invitation.
         """
         if not settings.GOOGLE_CLIENT_ID:
             raise AuthenticationException("Google Sign-In isn't configured on the server (GOOGLE_CLIENT_ID).")
@@ -53,14 +54,35 @@ class AuthService:
         if not claims.get("email") or not claims.get("email_verified"):
             raise AuthenticationException("Your Google account email isn't verified.")
 
-        user = self.user_repo.get_by_email(str(claims["email"]).lower().strip())
+        email = str(claims["email"]).lower().strip()
+        user = self.user_repo.get_by_email(email)
         if not user:
-            raise AuthenticationException(
-                f"{claims['email']} hasn't been invited to Choranta. Ask your administrator for access."
-            )
+            if not settings.CLIENT_SELF_SIGNUP:
+                raise AuthenticationException(
+                    f"{claims['email']} hasn't been invited to Choranta. Ask your administrator for access."
+                )
+            user = self._sign_up_client(email, (claims.get("name") or "").strip())
         if user.status != "ACTIVE":
             raise AuthenticationException("This account is inactive. Contact your administrator.")
         return self._issue_token(user)
+
+    def _sign_up_client(self, email: str, name: str) -> User:
+        """Creates a client account and its first portal login for a new Google user."""
+        from app.models.billing import ClientUser
+        from app.models.client import Client
+
+        display_name = name or email.split("@")[0]
+        client = Client(
+            id=generate_unique_id("cli_"), name=display_name, business_type="OTHER",
+            contact_name=display_name, contact_email=email, status="ACTIVE",
+        )
+        user = User(id=generate_unique_id("usr", 12), email=email, name=display_name, hashed_password=None,
+                    role="CLIENT", status="ACTIVE")
+        self.db.add_all([client, user])
+        self.db.flush()
+        self.db.add(ClientUser(user_id=user.id, client_id=client.id))
+        self.db.commit()
+        return user
 
     def _issue_token(self, user: User) -> TokenResponse:
         token = create_access_token(

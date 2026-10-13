@@ -48,7 +48,7 @@ export const Button: React.FC<ButtonProps> = ({
       ) : leftIcon ? (
         <span className="shrink-0">{leftIcon}</span>
       ) : null}
-      <span>{children}</span>
+      <span className="inline-flex items-center">{children}</span>
       {!isLoading && rightIcon ? <span className="shrink-0">{rightIcon}</span> : null}
     </button>
   );
