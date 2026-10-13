@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { CallOutputsCard } from '../components/calls/CallOutputsCard';
 import {
   PhoneCall,
   PhoneIncoming,
@@ -325,6 +326,8 @@ export const CallsPage: React.FC = () => {
 
             {/* Choranta's own stereo recording of both sides of the call */}
             {callDetail.has_recording && <CallRecordingPlayer callId={callDetail.id} />}
+
+            <CallOutputsCard metadata={callDetail.metadata} />
 
             {/* Carrier recording (if the carrier provided a playable link) */}
             {!callDetail.has_recording && callDetail.recording_url && (

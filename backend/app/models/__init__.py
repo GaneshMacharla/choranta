@@ -17,6 +17,8 @@ from app.models.pricing_settings import PricingSettings
 from app.models.inventory_source import InventorySource
 from app.models.billing import ClientUser, ClientWallet, WalletTransaction, ClientBillingProfile, Invoice
 from app.models.subscription import Plan, ClientSubscription, CallUsage, PaymentOrder, NumberPricing, NumberRental
+from app.models.campaign import Campaign, CampaignRecipient, CampaignAttempt, DoNotCallEntry, WebhookDelivery
+from app.models.api_key import ApiKey
 
 __all__ = [
     "User",
@@ -52,4 +54,10 @@ __all__ = [
     "PaymentOrder",
     "NumberPricing",
     "NumberRental",
+    "Campaign",
+    "CampaignRecipient",
+    "CampaignAttempt",
+    "DoNotCallEntry",
+    "WebhookDelivery",
+    "ApiKey",
 ]

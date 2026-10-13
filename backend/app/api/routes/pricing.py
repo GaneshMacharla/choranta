@@ -18,8 +18,9 @@ PREVIEW_WINDOW_DAYS = 30
 
 
 class UpdatePricingRequest(BaseModel):
-    profit_percent: float = Field(..., description="Profit margin added on top of cost, in percent")
-    infra_cost_per_minute_inr: float = Field(..., description="Infrastructure overhead per conversation minute (INR)")
+    credits_per_minute: Optional[float] = Field(None, gt=0, description="Credits (1 credit = Rs 1) a client pays per billed call minute")
+    infra_cost_per_minute_inr: float = Field(..., description="Infrastructure overhead per conversation minute (INR), for profit reporting")
+    profit_percent: Optional[float] = Field(None, description="Legacy: no longer used to price calls")
 
 
 def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
@@ -57,6 +58,7 @@ def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
 
 def _response(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
     return {
+        "credits_per_minute": pricing.credits_per_minute,
         "profit_percent": pricing.profit_percent,
         "infra_cost_per_minute_inr": pricing.infra_cost_per_minute_inr,
         "updated_at": pricing.updated_at.isoformat() if pricing.updated_at else None,
@@ -67,7 +69,7 @@ def _response(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
 
 @router.get("")
 def get_pricing_settings(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    """Current profit margin and infrastructure overhead, with a preview from recent calls (admin only)."""
+    """Credits per minute and infrastructure overhead, with a cost/profit preview from recent calls (admin only)."""
     return _response(db, get_pricing(db))
 
 
@@ -77,6 +79,8 @@ def update_pricing_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    """Sets the profit margin and infrastructure overhead used to price every call (admin only)."""
-    pricing = update_pricing(db, req.profit_percent, req.infra_cost_per_minute_inr, current_user.id)
+    """Sets the credits charged per call minute and the infrastructure overhead (admin only)."""
+    current = get_pricing(db)
+    profit = req.profit_percent if req.profit_percent is not None else current.profit_percent
+    pricing = update_pricing(db, profit, req.infra_cost_per_minute_inr, current_user.id, credits_per_minute=req.credits_per_minute)
     return _response(db, pricing)

@@ -10,6 +10,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.api.deps import get_db, require_admin, require_operator
+from app.db.session import SessionLocal
 from app.core.config import settings
 from app.core.security import generate_unique_id
 from app.models.user import User
@@ -34,6 +35,7 @@ from app.services.call_costing import estimate_call_cost
 from app.services.pricing import PricingSnapshot, get_pricing
 from app.services import phone_numbers
 from app.services.billing import check_call_allowed
+from app.services.outbound_calls import OutboundCallError, place_outbound_call, with_webhook_token
 from app.schemas.telephony import (
     CreatePhoneNumberRequest,
     UpdatePhoneNumberRequest,
@@ -170,9 +172,153 @@ async def _collect_webhook_params(request: Request) -> Dict[str, Any]:
     return params
 
 
-def _with_token(url: str) -> str:
-    secret = getattr(settings, "EXOTEL_WEBHOOK_SECRET", None)
-    return f"{url}?{urlencode({'token': secret})}" if secret else url
+_with_token = with_webhook_token
+
+
+# Exotel CallSid -> background task finishing that call's session setup (see exotel_inbound_call_webhook)
+_pending_call_setups: Dict[str, "asyncio.Task[None]"] = {}
+
+
+def _finish_call_setup(
+    db: Session,
+    call_id: str,
+    outbound: bool,
+    caller: str,
+    destination: str,
+    provider_call_id: str,
+) -> None:
+    """Starts the RuntimeSession for an answered call, links it to the Call and records routing events."""
+    call_repo = CallRepository(db)
+    call_record = db.query(Call).filter(Call.id == call_id).first()
+    if not call_record or call_record.runtime_session_id:
+        return
+
+    if outbound:
+        custom_vars = dict((call_record.metadata_ or {}).get("variables") or {})
+
+        # If variables missing, look up lead by destination phone number
+        from app.models.lead import Lead
+        lead = db.query(Lead).filter(Lead.phone == call_record.destination_number).first()
+        if not lead and len(call_record.destination_number) >= 10:
+            lead = db.query(Lead).filter(Lead.phone.endswith(call_record.destination_number[-10:])).first()
+        if lead:
+            custom_vars.setdefault("user_name", lead.name)
+            custom_vars.setdefault("lead_id", lead.id)
+            if lead.property_viewed:
+                custom_vars.setdefault("property_viewed", lead.property_viewed)
+            if lead.enquiry_location:
+                custom_vars.setdefault("enquiry_location", lead.enquiry_location)
+            if lead.enquiry_budget:
+                custom_vars.setdefault("enquiry_budget", lead.enquiry_budget)
+            if lead.enquiry_bhk:
+                custom_vars.setdefault("enquiry_bhk", lead.enquiry_bhk)
+
+        metadata = {
+            "origin": "telephony_outbound",
+            "call_id": call_record.id,
+            "provider": call_record.provider or "exotel",
+            "caller": call_record.caller_number,
+            "destination": call_record.destination_number,
+            "phone_number_id": call_record.phone_number_id,
+            **custom_vars
+        }
+    else:
+        metadata = {
+            "origin": "telephony_inbound",
+            "call_id": call_record.id,
+            "provider": "exotel",
+            "caller": caller,
+            "destination": destination,
+            "phone_number_id": call_record.phone_number_id
+        }
+
+    session_obj = AgentRuntime(db, registry=default_registry).start_session(
+        agent_id=call_record.agent_id,
+        agent_version_id=call_record.agent_version_id,
+        metadata=metadata
+    )
+    call_record.runtime_session_id = session_obj.id
+    call_record.status = "ANSWERED"
+    if outbound:
+        call_record.answered_at = datetime.now(timezone.utc)
+    call_repo.update(call_record)
+
+    # Telephony routing events
+    emitter = EventEmitter(db)
+    common = dict(
+        session_id=session_obj.id,
+        agent_id=call_record.agent_id,
+        agent_version_id=call_record.agent_version_id,
+        client_id=call_record.client_id,
+    )
+    emitter.emit(RuntimeEventType.CALL_RECEIVED, payload={"call_id": call_record.id, "caller": caller, "destination": destination}, **common)
+    emitter.emit(RuntimeEventType.CALL_ROUTING_STARTED, payload={"phone_number_id": call_record.phone_number_id}, **common)
+    emitter.emit(RuntimeEventType.CALL_ROUTED, payload={"agent_id": call_record.agent_id, "agent_version_id": call_record.agent_version_id}, **common)
+    emitter.emit(RuntimeEventType.CALL_ANSWERED, payload={"call_id": call_record.id, "provider_call_id": provider_call_id}, **common)
+
+
+def _finish_call_setup_in_own_session(setup_args: Dict[str, Any]) -> None:
+    db = SessionLocal()
+    try:
+        _finish_call_setup(db, **setup_args)
+    except Exception:
+        logger.exception(f"Failed to set up runtime session for call {setup_args.get('call_id')}")
+    finally:
+        db.close()
+
+
+def _schedule_call_setup(provider_call_id: str, setup_args: Dict[str, Any]) -> None:
+    """Runs _finish_call_setup off the request path; webhook retries reuse the running setup."""
+    if provider_call_id in _pending_call_setups:
+        return
+    task = asyncio.create_task(asyncio.to_thread(_finish_call_setup_in_own_session, setup_args))
+    _pending_call_setups[provider_call_id] = task
+    task.add_done_callback(lambda _t: _pending_call_setups.pop(provider_call_id, None))
+
+
+_background_tasks: set = set()
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+def _load_version_config(agent_version_id: str) -> Optional[Dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        version = db.query(AgentVersion).filter(AgentVersion.id == agent_version_id).first()
+        return dict(version.configuration_json or {}) if version else None
+    finally:
+        db.close()
+
+
+async def _warm_call_voice(agent_version_id: str) -> None:
+    """Opens the agent's text-to-speech connection while the call is set up, so the greeting starts sooner."""
+    try:
+        config = await asyncio.to_thread(_load_version_config, agent_version_id)
+        if not config:
+            return
+        tts_name = (settings.TTS_PROVIDER_OVERRIDE or "").strip().lower() or (config.get("providers") or {}).get("tts")
+        voice = config.get("voice") or {}
+        await default_registry.get_tts(tts_name).warm(
+            voice_id=voice.get("voice_id"),
+            speed=voice.get("speed") or 1.0,
+            language=(config.get("languages") or {}).get("primary"),
+        )
+    except Exception as e:
+        logger.warning(f"Could not warm the voice for agent version {agent_version_id}: {type(e).__name__}: {e}")
+
+
+async def _wait_for_call_setup(provider_call_id: str, timeout: float = 20.0) -> None:
+    setup = _pending_call_setups.get(provider_call_id)
+    if not setup:
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(setup), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.error(f"Timed out waiting for runtime session setup of call '{provider_call_id}'")
 
 
 @router.api_route("/exotel/inbound", methods=["GET", "POST"], response_class=Response)
@@ -248,147 +394,62 @@ async def exotel_inbound_call_webhook(
             return Response(content=rejection, media_type=media_type)
         route = phone_record
 
-    # 4. Verify deployment readiness
-    checker = RuntimeReadinessChecker(db, default_registry)
-    readiness = checker.check(route.agent_id, route.agent_version_id)
-    if not readiness["ready"]:
-        error_reasons = "; ".join(readiness["errors"])
-        logger.error(f"Readiness check failed for call on agent {route.agent_id}: {error_reasons}")
-        rejection = telephony_provider.generate_reject_response(
-            "The requested AI assistant is currently undergoing maintenance. Please call back shortly."
-        )
-        return Response(content=rejection, media_type=media_type)
+    # 4. Verify deployment readiness and balance (calls we placed were checked when dialled)
+    if not existing_call:
+        checker = RuntimeReadinessChecker(db, default_registry)
+        readiness = checker.check(route.agent_id, route.agent_version_id)
+        if not readiness["ready"]:
+            error_reasons = "; ".join(readiness["errors"])
+            logger.error(f"Readiness check failed for call on agent {route.agent_id}: {error_reasons}")
+            rejection = telephony_provider.generate_reject_response(
+                "The requested AI assistant is currently undergoing maintenance. Please call back shortly."
+            )
+            return Response(content=rejection, media_type=media_type)
 
-    # New inbound calls need prepaid balance (calls we placed were checked when dialled)
-    allowed, block_reason, _ = (True, None, None) if existing_call else check_call_allowed(db, route.client_id)
-    if not allowed:
-        logger.warning(f"Rejecting inbound call for client {route.client_id}: {block_reason}")
-        rejection = telephony_provider.generate_reject_response(
-            "This service is temporarily unavailable. Please call back later."
-        )
-        return Response(content=rejection, media_type=media_type)
+        allowed, block_reason, _ = check_call_allowed(db, route.client_id)
+        if not allowed:
+            logger.warning(f"Rejecting inbound call for client {route.client_id}: {block_reason}")
+            rejection = telephony_provider.generate_reject_response(
+                "This service is temporarily unavailable. Please call back later."
+            )
+            return Response(content=rejection, media_type=media_type)
 
     # 5. Idempotency: webhook retries reuse the existing Call / Session
-    runtime = AgentRuntime(db, registry=default_registry)
-    emitter = EventEmitter(db)
+    if not (existing_call and existing_call.runtime_session_id):
+        if existing_call:
+            call_id = existing_call.id
+        else:
+            call_id = generate_unique_id("call", 12)
+            call_repo.create(Call(
+                id=call_id,
+                client_id=route.client_id,
+                agent_id=route.agent_id,
+                agent_version_id=route.agent_version_id,
+                phone_number_id=route.id,
+                provider="exotel",
+                provider_call_id=payload.provider_call_id,
+                direction="INBOUND",
+                caller_number=payload.caller_number,
+                destination_number=payload.destination_number,
+                status="RINGING",
+                started_at=datetime.now(timezone.utc),
+                metadata_=payload.raw_params
+            ))
 
-    if existing_call and existing_call.runtime_session_id:
-        call_record = existing_call
-        session_id = existing_call.runtime_session_id
-    elif existing_call:
-        # Outbound call answered by the customer: start its runtime session now
-        call_record = existing_call
-        custom_vars = dict((call_record.metadata_ or {}).get("variables") or {})
-
-        # If variables missing, look up lead by destination phone number
-        from app.models.lead import Lead
-        lead = db.query(Lead).filter(Lead.phone == call_record.destination_number).first()
-        if not lead and len(call_record.destination_number) >= 10:
-            lead = db.query(Lead).filter(Lead.phone.endswith(call_record.destination_number[-10:])).first()
-        if lead:
-            custom_vars.setdefault("user_name", lead.name)
-            custom_vars.setdefault("lead_id", lead.id)
-            if lead.property_viewed:
-                custom_vars.setdefault("property_viewed", lead.property_viewed)
-            if lead.enquiry_location:
-                custom_vars.setdefault("enquiry_location", lead.enquiry_location)
-            if lead.enquiry_budget:
-                custom_vars.setdefault("enquiry_budget", lead.enquiry_budget)
-            if lead.enquiry_bhk:
-                custom_vars.setdefault("enquiry_bhk", lead.enquiry_bhk)
-
-        session_obj = runtime.start_session(
-            agent_id=call_record.agent_id,
-            agent_version_id=call_record.agent_version_id,
-            metadata={
-                "origin": "telephony_outbound",
-                "call_id": call_record.id,
-                "provider": call_record.provider or "exotel",
-                "caller": call_record.caller_number,
-                "destination": call_record.destination_number,
-                "phone_number_id": call_record.phone_number_id,
-                **custom_vars
-            }
-        )
-        call_record.runtime_session_id = session_obj.id
-        call_record.status = "ANSWERED"
-        call_record.answered_at = datetime.now(timezone.utc)
-        call_repo.update(call_record)
-        session_id = session_obj.id
-    else:
-        # Create Call Record in RINGING state
-        call_id = generate_unique_id("call", 12)
-        call_record = Call(
-            id=call_id,
-            client_id=route.client_id,
-            agent_id=route.agent_id,
-            agent_version_id=route.agent_version_id,
-            phone_number_id=route.id,
-            provider="exotel",
+        # 6. Start the RuntimeSession. Exotel hangs up if this webhook takes more than a few
+        # seconds, so on a live server it runs after we reply; the media stream waits for it.
+        setup_args = dict(
+            call_id=call_id,
+            outbound=bool(existing_call),
+            caller=payload.caller_number,
+            destination=payload.destination_number,
             provider_call_id=payload.provider_call_id,
-            direction="INBOUND",
-            caller_number=payload.caller_number,
-            destination_number=payload.destination_number,
-            status="RINGING",
-            started_at=datetime.now(timezone.utc),
-            metadata_=payload.raw_params
         )
-        call_repo.create(call_record)
-
-        # 6. Create RuntimeSession with pinned immutable version
-        session_obj = runtime.start_session(
-            agent_id=route.agent_id,
-            agent_version_id=route.agent_version_id,
-            metadata={
-                "origin": "telephony_inbound",
-                "call_id": call_id,
-                "provider": "exotel",
-                "caller": payload.caller_number,
-                "destination": payload.destination_number,
-                "phone_number_id": route.id
-            }
-        )
-        call_record.runtime_session_id = session_obj.id
-        call_record.status = "ANSWERED"
-        call_repo.update(call_record)
-        session_id = session_obj.id
-
-    # Emit telephony routing events
-    emitter.emit(
-        RuntimeEventType.CALL_RECEIVED,
-        session_id=session_id or "",
-        agent_id=route.agent_id,
-        agent_version_id=route.agent_version_id,
-        client_id=route.client_id,
-        payload={"call_id": call_record.id, "caller": payload.caller_number, "destination": payload.destination_number}
-    )
-
-    emitter.emit(
-        RuntimeEventType.CALL_ROUTING_STARTED,
-        session_id=session_id or "",
-        agent_id=route.agent_id,
-        agent_version_id=route.agent_version_id,
-        client_id=route.client_id,
-        payload={"phone_number_id": route.id}
-    )
-
-    emitter.emit(
-        RuntimeEventType.CALL_ROUTED,
-        session_id=session_id or "",
-        agent_id=route.agent_id,
-        agent_version_id=route.agent_version_id,
-        client_id=route.client_id,
-        payload={"agent_id": route.agent_id, "agent_version_id": route.agent_version_id}
-    )
-
-    emitter.emit(
-        RuntimeEventType.CALL_ANSWERED,
-        session_id=session_id or "",
-        agent_id=route.agent_id,
-        agent_version_id=route.agent_version_id,
-        client_id=route.client_id,
-        payload={"call_id": call_record.id, "provider_call_id": payload.provider_call_id}
-    )
+        if settings.ENVIRONMENT == "test":
+            _finish_call_setup(db, **setup_args)
+        else:
+            _schedule_call_setup(payload.provider_call_id, setup_args)
+            _spawn(_warm_call_voice(route.agent_version_id))
 
     # 7. Return the bidirectional media stream URL
     base_url = settings.TELEPHONY_BASE_URL or str(request.base_url).rstrip("/")
@@ -524,6 +585,7 @@ async def exotel_telephony_media_websocket(
                     f"media_format={start_info.get('media_format')}, start_keys={sorted(start_info.keys())}"
                 )
 
+                await _wait_for_call_setup(call_sid)
                 call_repo = CallRepository(db)
                 call_record = call_repo.get_by_provider_call_id(call_sid)
                 if not call_record:
@@ -793,122 +855,21 @@ def initiate_outbound_call_endpoint(
     Triggers an outbound call to a customer via the configured telephony carrier (Exotel).
     Once the customer answers, Exotel connects the call to the AI Employee.
     """
-    phone_record: Optional[PhoneNumber] = None
-    if req.phone_number_id:
-        phone_repo = PhoneNumberRepository(db)
-        phone_record = phone_repo.get_by_id(req.phone_number_id) or phone_repo.get_by_e164(req.phone_number_id)
-        if not phone_record:
-            raise HTTPException(status_code=404, detail=f"Phone number '{req.phone_number_id}' not found.")
-        if not phone_record.agent_id or not phone_record.agent_version_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Phone number '{phone_record.phone_number}' is not assigned to an AI Employee."
-            )
-        if not req.is_test and (phone_record.status != "ACTIVE" or phone_numbers.blocked_reason(db, phone_record)):
-            raise HTTPException(status_code=400, detail=f"Phone number '{phone_record.phone_number}' can't place calls right now.")
-        agent_id, agent_version_id = phone_record.agent_id, phone_record.agent_version_id
-        caller_id = phone_record.phone_number
-        provider_name = phone_record.provider or "exotel"
-    elif req.agent_id and req.agent_version_id:
-        agent_id, agent_version_id = req.agent_id, req.agent_version_id
-        if req.is_test:
-            # Test calls from the Tests step may use Choranta's own ExoPhone
-            caller_id = req.caller_id or getattr(settings, "EXOTEL_CALLER_ID", None)
-            if not caller_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No caller ID: set EXOTEL_CALLER_ID in backend/.env to your ExoPhone, or pass caller_id."
-                )
-        else:
-            # Live calls show the client's own number, bought from Choranta
-            owner = db.get(Agent, agent_id)
-            own_number = phone_numbers.client_caller_number(db, owner.client_id, req.caller_id) if owner else None
-            if not own_number:
-                raise HTTPException(
-                    status_code=400,
-                    detail="This client has no active phone number to call from. Buy a phone number to place calls."
-                    if not req.caller_id else f"'{req.caller_id}' isn't one of this client's active numbers.",
-                )
-            caller_id = own_number.phone_number
-        provider_name = "exotel"
-    else:
-        raise HTTPException(status_code=400, detail="Provide phone_number_id, or agent_id and agent_version_id.")
-
-    readiness = RuntimeReadinessChecker(db, default_registry).check(agent_id, agent_version_id)
-    if not readiness["ready"]:
-        raise HTTPException(status_code=400, detail="Agent is not ready for calls: " + "; ".join(readiness["errors"]))
-    agent = db.get(Agent, agent_id)
-
-    allowed, block_reason, block_code = (True, None, None) if req.is_test else check_call_allowed(db, agent.client_id)
-    if not allowed:
-        raise HTTPException(status_code=429 if block_code == "CONCURRENCY" else 402, detail=block_reason)
-
-    # Exotel must reach this server when the customer answers; fail fast instead of placing a dead call
-    base_url = (settings.TELEPHONY_BASE_URL or "").rstrip("/")
-    if not base_url.startswith("https://") or any(h in base_url for h in ("localhost", "127.0.0.1")):
-        raise HTTPException(
-            status_code=400,
-            detail="TELEPHONY_BASE_URL must be a public https:// address Exotel can reach (e.g. your ngrok URL)."
-        )
-
-    flow_id = req.flow_id or getattr(settings, "EXOTEL_FLOW_ID", None)
-    account_sid = getattr(settings, "EXOTEL_ACCOUNT_SID", None)
-    if not flow_id or not account_sid:
-        raise HTTPException(status_code=400, detail="EXOTEL_FLOW_ID and EXOTEL_ACCOUNT_SID must be configured.")
-    flow_url = f"http://my.exotel.com/{account_sid}/exoml/start_voice/{flow_id}"
-    status_callback_url = _with_token(f"{base_url}/api/telephony/exotel/status")
-
-    telephony_provider = default_registry.get_telephony(provider_name)
-
-    # Initiate carrier call
     try:
-        call_result = telephony_provider.initiate_outbound_call(
-            customer_number=req.destination_number,
-            caller_id=caller_id,
-            flow_url=flow_url,
-            status_callback_url=status_callback_url,
-            custom_field=req.custom_field or f"agent:{agent_id}"
+        saved_call = place_outbound_call(
+            db,
+            destination_number=req.destination_number,
+            phone_number_id=req.phone_number_id,
+            agent_id=req.agent_id,
+            agent_version_id=req.agent_version_id,
+            caller_id=req.caller_id,
+            is_test=req.is_test,
+            flow_id=req.flow_id,
+            custom_field=req.custom_field,
+            variables=req.variables,
         )
-    except Exception as exc:
-        logger.error(f"Failed to initiate outbound call: {exc}")
-        raise HTTPException(status_code=502, detail=f"Carrier error: {str(exc)}")
-
-    # Extract Call SID from provider response
-    exotel_call_obj = call_result.get("Call") or {}
-    provider_call_id = exotel_call_obj.get("Sid") or generate_unique_id("call", 12)
-
-    # Persist the Call record
-    call_repo = CallRepository(db)
-    now = datetime.now(timezone.utc)
-    call_id = generate_unique_id("call", 10)
-    call_record = Call(
-        id=call_id,
-        client_id=agent.client_id,
-        agent_id=agent_id,
-        agent_version_id=agent_version_id,
-        phone_number_id=phone_record.id if phone_record else None,
-        provider=provider_name,
-        provider_call_id=provider_call_id,
-        direction="OUTBOUND",
-        caller_number=caller_id,
-        destination_number=req.destination_number,
-        status="INITIATED",
-        started_at=now,
-        duration_seconds=0.0,
-        metadata_={"exotel_response": call_result, "custom_field": req.custom_field, "variables": req.variables or {}, "is_test": req.is_test}
-    )
-    saved_call = call_repo.create(call_record)
-
-    emitter = EventEmitter(db)
-    emitter.emit(
-        RuntimeEventType.CALL_INITIATED,
-        session_id="",
-        agent_id=agent_id,
-        agent_version_id=agent_version_id,
-        client_id=agent.client_id,
-        payload={"call_id": saved_call.id, "direction": "OUTBOUND", "provider_call_id": provider_call_id}
-    )
-
+    except OutboundCallError as e:
+        raise HTTPException(status_code=e.http_status, detail=e.message)
     return _format_call_response(saved_call, db, current_user)
 
 

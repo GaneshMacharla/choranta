@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge } from '../common/Badge';
-import { minutesLabel, Subscription } from '../../services/plans';
+import { creditsLabel, Subscription } from '../../services/plans';
 
 const fmtDate = (value: string) => new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -10,9 +10,10 @@ export const SubscriptionStatusBadge: React.FC<{ subscription: Subscription }> =
   return <Badge variant="gray">CANCELLED</Badge>;
 };
 
-/** Plan name, period and a minutes-used bar. */
+/** Plan name, period and a credits-used bar. */
 export const PlanUsageBar: React.FC<{ subscription: Subscription }> = ({ subscription: s }) => {
-  const pct = s.included_minutes > 0 ? Math.min(100, (s.minutes_used / s.included_minutes) * 100) : 100;
+  const pct = s.monthly_credits > 0 ? Math.min(100, (s.credits_used / s.monthly_credits) * 100) : 100;
+  const minutesLeft = s.credits_per_minute > 0 ? Math.floor(s.credits_remaining / s.credits_per_minute) : 0;
   const barColor = pct >= 100 ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-400' : 'bg-[#00df8f]';
   return (
     <div className="space-y-3">
@@ -29,8 +30,10 @@ export const PlanUsageBar: React.FC<{ subscription: Subscription }> = ({ subscri
           </p>
         </div>
         <div className="text-right text-xs">
-          <span className="font-mono text-lg font-bold text-slate-100">{minutesLabel(s.minutes_remaining)}</span>
-          <span className="block text-slate-500">left of {minutesLabel(s.included_minutes)}</span>
+          <span className="font-mono text-lg font-bold text-slate-100">{creditsLabel(s.credits_remaining)}</span>
+          <span className="block text-slate-500">
+            left of {creditsLabel(s.monthly_credits)} · about {minutesLeft.toLocaleString('en-IN')} min
+          </span>
         </div>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-[#0f2a33]">
@@ -38,7 +41,7 @@ export const PlanUsageBar: React.FC<{ subscription: Subscription }> = ({ subscri
       </div>
       {s.plan && (
         <p className="text-[11px] text-slate-500">
-          Extra minutes ₹{s.plan.overage_per_minute_inr}/min from your wallet
+          {s.credits_per_minute} credits per call minute · after plan credits run out, bought credits are used
           {s.plan.max_concurrent_calls ? ` · up to ${s.plan.max_concurrent_calls} call${s.plan.max_concurrent_calls === 1 ? '' : 's'} at a time` : ''}
         </p>
       )}

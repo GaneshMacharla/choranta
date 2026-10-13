@@ -6,6 +6,7 @@ import {
   Bot,
   Settings,
   PhoneCall,
+  Megaphone,
   Wrench,
   BookOpen,
   Puzzle,
@@ -16,6 +17,7 @@ import {
   Terminal,
   LogOut,
   ShieldCheck,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Badge } from '../common/Badge';
@@ -35,6 +37,8 @@ export const Sidebar: React.FC = () => {
     { name: 'AI Employees', path: '/agents', icon: Bot },
     
     { name: 'Calls', path: '/calls', icon: PhoneCall },
+    { name: 'Campaigns', path: '/campaigns', icon: Megaphone },
+    { name: 'Instant Outbound', path: '/instant-outbound', icon: Zap },
     { name: 'Telephony', path: '/telephony', icon: Radio },
     
     { name: 'Tools', path: '/tools', icon: Wrench },

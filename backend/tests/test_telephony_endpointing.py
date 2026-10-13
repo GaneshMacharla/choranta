@@ -80,3 +80,40 @@ def test_flush_returns_speech_cut_off_by_hangup():
     event = ep.flush()
     assert event is not None and event.kind == "utterance"
     assert ep.flush() is None
+
+
+def test_pause_event_lets_transcription_start_before_the_turn_ends():
+    ep = SpeechEndpointer(EndpointerConfig(end_silence_ms=600, early_transcribe_ms=250))
+    _feed(ep, NOISE, 1000)
+    _feed(ep, SPEECH, 1000)
+    events = _feed(ep, SILENCE, 300)
+    assert [e.kind for e in events] == ["pause"]
+    pause_audio = events[0].audio
+    assert pause_audio
+
+    events = _feed(ep, SILENCE, 400)
+    assert [e.kind for e in events] == ["utterance"]
+    assert events[0].same_as_pause is True
+    # The utterance only adds trailing silence after the paused audio
+    assert events[0].audio.startswith(pause_audio)
+
+
+def test_speech_after_pause_invalidates_early_transcript():
+    ep = SpeechEndpointer(EndpointerConfig(end_silence_ms=600, early_transcribe_ms=250))
+    _feed(ep, NOISE, 1000)
+    _feed(ep, SPEECH, 800)
+    assert [e.kind for e in _feed(ep, SILENCE, 300)] == ["pause"]
+    # Caller carries on talking: a second pause is allowed, and the final turn reflects the latest one
+    _feed(ep, SPEECH, 600)
+    events = _feed(ep, SILENCE, 300) + _feed(ep, SILENCE, 400)
+    assert [e.kind for e in events] == ["pause", "utterance"]
+    assert events[1].same_as_pause is True
+
+
+def test_utterance_without_pause_is_not_marked_same_as_pause():
+    ep = SpeechEndpointer(EndpointerConfig(end_silence_ms=600))
+    _feed(ep, NOISE, 1000)
+    _feed(ep, SPEECH, 1000)
+    events = _feed(ep, SILENCE, 800)
+    assert [e.kind for e in events] == ["utterance"]
+    assert events[0].same_as_pause is False

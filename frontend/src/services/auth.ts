@@ -26,6 +26,10 @@ export const authService = {
     return request<{ google_client_id: string | null; self_signup: boolean }>('/auth/config');
   },
 
+  refresh: async (): Promise<LoginResponse> => {
+    return request<LoginResponse>('/auth/refresh', { method: 'POST' });
+  },
+
   getCurrentUser: async (): Promise<User> => {
     return request<User>('/auth/me', {
       method: 'GET',

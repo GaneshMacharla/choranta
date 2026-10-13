@@ -695,7 +695,7 @@ async def test_media_session_turns_only_on_real_speech(db: Session, telephony_se
     )
     turns = []
 
-    async def fake_turn(audio, t_start=None, t_end=None):
+    async def fake_turn(audio, t_start=None, t_end=None, **kwargs):
         turns.append(len(audio))
 
     session.execute_turn = fake_turn

@@ -27,10 +27,13 @@ from app.runtime.telephony.endpointing import SpeechEndpointer, EndpointerConfig
 from app.runtime.telephony.speech_text import SentenceChunker, clean_for_speech, is_backchannel
 from app.runtime.tools.catalog import describe_tools
 from app.runtime.telephony.recorder import CallRecorder
+from app.runtime.telephony import tts_cache
 
 logger = logging.getLogger("choranta.runtime.telephony.session")
 
 active_telephony_calls: Set[str] = set()
+# Post-call work (output extraction) kept referenced until it finishes
+_background_tasks: Set[asyncio.Task] = set()
 
 # Audio already handed to the carrier but not yet played; small so interruptions are near-instant
 PLAYBACK_LEAD_MS = 250
@@ -38,7 +41,9 @@ PLAYBACK_LEAD_MS = 250
 EVENT_FLUSH_INTERVAL_S = 0.5
 # Speaking-rate estimate used to work out how much of a sentence the caller heard before cutting in
 CHARS_PER_SECOND = 15.0
-CALL_ENDPOINTER_CONFIG = EndpointerConfig(end_silence_ms=600)
+# Transcription starts after 250 ms of silence and is reused if the caller stays quiet until the
+# turn ends at 600 ms, which hides most of the speech-to-text time
+CALL_ENDPOINTER_CONFIG = EndpointerConfig(end_silence_ms=600, early_transcribe_ms=250)
 # Appended to the agent's instructions on phone calls: short spoken replies are both more natural
 # and cheaper (TTS is billed per character).
 PHONE_STYLE_MARKER = "Live phone call style:"
@@ -142,6 +147,7 @@ class TelephonyMediaSession:
         # Caller speech endpointing: utterances are complete phrases, never silence or noise
         self.endpointer = SpeechEndpointer(CALL_ENDPOINTER_CONFIG)
         self._utterance_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
+        self._early_transcript: Optional[asyncio.Task] = None
         self._utterance_worker: Optional[asyncio.Task] = None
 
         # Reply state
@@ -263,6 +269,20 @@ class TelephonyMediaSession:
         except Exception as e:
             logger.error(f"Could not charge call {self.call_record.id}: {type(e).__name__}: {e}")
 
+        # Fill in the agent's output variables from the transcript, off the call path
+        if settings.ENVIRONMENT != "test":
+            try:
+                from app.db.session import SessionLocal
+                from app.services import call_outputs
+                if call_outputs.mark_pending(self.db, self.call_record):
+                    task = asyncio.create_task(
+                        asyncio.to_thread(call_outputs.run_extraction_job, SessionLocal, self.call_record.id)
+                    )
+                    _background_tasks.add(task)
+                    task.add_done_callback(_background_tasks.discard)
+            except Exception as e:
+                logger.error(f"Could not start output extraction for call {self.call_record.id}: {type(e).__name__}: {e}")
+
     # ------------------------------------------------------------------
     # Inbound audio
     # ------------------------------------------------------------------
@@ -290,40 +310,69 @@ class TelephonyMediaSession:
                 if self._paused:
                     logger.info("False interruption (noise); resuming the agent's reply.")
                     self._resume()
+            elif event.kind == "pause":
+                self._cancel_early_transcript()
+                if self.context:
+                    self._early_transcript = asyncio.create_task(self._transcribe(event.audio))
             elif event.kind == "utterance":
                 logger.info(f"Caller utterance detected ({event.speech_ms:.0f} ms of speech).")
-                await self.execute_turn(event.audio, t_end=time.perf_counter())
+                early = self._early_transcript if event.same_as_pause else None
+                if early is None:
+                    self._cancel_early_transcript()
+                self._early_transcript = None
+                await self.execute_turn(event.audio, t_end=time.perf_counter(), early_transcript=early)
 
-    async def execute_turn(self, pcm16_audio_bytes: bytes, t_start: Optional[float] = None, t_end: Optional[float] = None):
+    def _cancel_early_transcript(self) -> None:
+        if self._early_transcript and not self._early_transcript.done():
+            self._early_transcript.cancel()
+        self._early_transcript = None
+
+    async def _transcribe(self, audio: bytes):
+        stt_provider = default_registry.get_stt(self.context.agent_spec.providers.stt)
+        async with _speech_provider_slot():
+            return await stt_provider.process_audio_async(audio)
+
+    async def execute_turn(
+        self,
+        pcm16_audio_bytes: bytes,
+        t_start: Optional[float] = None,
+        t_end: Optional[float] = None,
+        early_transcript: Optional[asyncio.Task] = None,
+    ):
         """Queues one complete caller utterance; utterances are handled strictly in order."""
         if self.closed:
             return
-        await self._utterance_queue.put((pcm16_audio_bytes, t_end or time.perf_counter()))
+        await self._utterance_queue.put((pcm16_audio_bytes, t_end or time.perf_counter(), early_transcript))
 
     async def _utterance_loop(self) -> None:
         while not self.closed:
-            audio, t_end = await self._utterance_queue.get()
+            audio, t_end, early_transcript = await self._utterance_queue.get()
             try:
-                await self._handle_utterance(audio, t_end)
+                await self._handle_utterance(audio, t_end, early_transcript)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error(f"Error handling caller utterance: {type(e).__name__}: {e}")
 
-    async def _handle_utterance(self, audio: bytes, t_end: float) -> None:
+    async def _handle_utterance(self, audio: bytes, t_end: float, early_transcript: Optional[asyncio.Task] = None) -> None:
         if not self.context or not self.runtime_session:
             return
         self._processing_utterance = True
         try:
-            await self._handle_utterance_inner(audio, t_end)
+            await self._handle_utterance_inner(audio, t_end, early_transcript)
         finally:
             self._processing_utterance = False
             self._last_activity = time.monotonic()
 
-    async def _handle_utterance_inner(self, audio: bytes, t_end: float) -> None:
-        stt_provider = default_registry.get_stt(self.context.agent_spec.providers.stt)
-        async with _speech_provider_slot():
-            transcript = await stt_provider.process_audio_async(audio)
+    async def _handle_utterance_inner(self, audio: bytes, t_end: float, early_transcript: Optional[asyncio.Task] = None) -> None:
+        transcript = None
+        if early_transcript is not None:
+            try:
+                transcript = await early_transcript
+            except (asyncio.CancelledError, Exception) as e:
+                logger.info(f"Early transcription unavailable ({type(e).__name__}); transcribing the full utterance.")
+        if transcript is None:
+            transcript = await self._transcribe(audio)
         user_text = (transcript.text or "").strip()
         self.context.usage_tracker.record_stt(len(audio) / (16000 * 2))
         stt_ms = round((time.perf_counter() - t_end) * 1000)
@@ -638,19 +687,31 @@ class TelephonyMediaSession:
                     task.cancel()
 
     async def _synthesize(self, tts, sentence: _SpokenSentence) -> None:
+        spec = self.context.agent_spec
+        key = tts_cache.cache_key(
+            spec.providers.tts, spec.voice.voice_id, spec.voice.speed, spec.languages.primary,
+            type(self.telephony_provider).__name__, sentence.text,
+        )
         try:
+            cached = tts_cache.get(key)
+            if cached is not None:
+                # Said before in this voice: replay it, nothing is billed
+                sentence.audio.extend(cached)
+                sentence.updated.set()
+                return
             # Sentences queue for a provider slot in order, so the next one to play goes first
             async with _speech_provider_slot():
                 async for chunk in tts.synthesize_stream(
                     text=sentence.text,
-                    voice_id=self.context.agent_spec.voice.voice_id,
-                    speed=self.context.agent_spec.voice.speed,
-                    language=self.context.agent_spec.languages.primary
+                    voice_id=spec.voice.voice_id,
+                    speed=spec.voice.speed,
+                    language=spec.languages.primary
                 ):
                     if chunk:
                         sentence.audio.extend(self.telephony_provider.normalize_audio_outbound(chunk))
                         sentence.updated.set()
             self.context.usage_tracker.record_tts(len(sentence.audio) / 16000.0, characters=len(sentence.text))
+            tts_cache.put(key, bytes(sentence.audio))
         except asyncio.CancelledError:
             raise
         except Exception as e:

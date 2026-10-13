@@ -11,7 +11,8 @@ from app.db.init_db import init_db
 from app.api.routes import (
     auth, clients, agents, dashboard,
     agent_configuration, catalogs, runtime,
-    websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing, inventory, billing, portal, plans
+    websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing, inventory, billing, portal, plans,
+    campaigns, api_keys, public_leads
 )
 
 logging.basicConfig(
@@ -52,13 +53,31 @@ async def _number_rental_loop() -> None:
         await asyncio.sleep(settings.NUMBER_RENTAL_CHECK_S)
 
 
+async def _campaign_loop() -> None:
+    """Places outbound campaign calls inside their calling windows and records outcomes."""
+    from app.db.session import SessionLocal
+    from app.services.campaigns import run_campaign_job
+    while True:
+        try:
+            await asyncio.to_thread(run_campaign_job, SessionLocal)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Campaign loop error: {type(e).__name__}: {e}")
+        await asyncio.sleep(settings.CAMPAIGN_TICK_S)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup validation and seeding
     logger.info("Initializing Choranta Internal Agent Studio backend...")
     init_db()
     background = (
-        [asyncio.create_task(_inventory_sync_loop()), asyncio.create_task(_number_rental_loop())]
+        [
+            asyncio.create_task(_inventory_sync_loop()),
+            asyncio.create_task(_number_rental_loop()),
+            asyncio.create_task(_campaign_loop()),
+        ]
         if settings.ENVIRONMENT != "test" else []
     )
     yield
@@ -140,6 +159,11 @@ app.include_router(inventory.router, prefix=settings.API_V1_PREFIX)
 app.include_router(billing.router, prefix=settings.API_V1_PREFIX)
 app.include_router(portal.router, prefix=settings.API_V1_PREFIX)
 app.include_router(plans.router, prefix=settings.API_V1_PREFIX)
+app.include_router(campaigns.router, prefix=settings.API_V1_PREFIX)
+app.include_router(campaigns.portal_router, prefix=settings.API_V1_PREFIX)
+app.include_router(api_keys.portal_router, prefix=settings.API_V1_PREFIX)
+app.include_router(api_keys.admin_router, prefix=settings.API_V1_PREFIX)
+app.include_router(public_leads.router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)

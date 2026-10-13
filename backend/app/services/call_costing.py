@@ -19,8 +19,9 @@ def estimate_call_cost(duration_seconds: Optional[float], usage: Optional[Dict[s
     - Infrastructure: admin-set overhead per conversation minute (servers, DB, plans)
     USD-priced providers are converted with USD_TO_INR.
 
-    The client charge is cost x (1 + profit %), with profit % and infra from `pricing`
-    (a PricingSnapshot); defaults from settings are used when it is not given.
+    The client charge is billed minutes x credits per minute (1 credit = Rs 1), with the credit rate and
+    infra from `pricing` (a PricingSnapshot); defaults from settings are used when it is not given.
+    profit_percent is the resulting markup over cost.
     """
     usage = usage or {}
     duration = max(0.0, float(duration_seconds or 0.0))
@@ -54,14 +55,16 @@ def estimate_call_cost(duration_seconds: Optional[float], usage: Optional[Dict[s
             + output_millions * settings.LLM_OUTPUT_USD_PER_MILLION_TOKENS
         ) * fx
 
-    profit_percent = pricing.profit_percent if pricing is not None else settings.DEFAULT_PROFIT_PERCENT
     infra_rate = pricing.infra_cost_per_minute_inr if pricing is not None else settings.DEFAULT_INFRA_COST_PER_MINUTE_INR
     minutes = duration / 60.0
     infra = minutes * infra_rate
 
     total = telephony + stt + tts + llm + infra
-    profit = total * profit_percent / 100.0
-    charge_total = total + profit
+    # Clients pay a flat number of credits (1 credit = Rs 1) per billed minute; profit is what's left over cost
+    credit_rate = pricing.credits_per_minute if pricing is not None else settings.DEFAULT_CREDITS_PER_MINUTE
+    charge_total = billed_seconds / 60.0 * credit_rate
+    profit = charge_total - total
+    profit_percent = round(profit / total * 100.0, 1) if total > 0 else 0.0
     return {
         "currency": "INR",
         "estimated": True,
@@ -95,5 +98,6 @@ def estimate_call_cost(duration_seconds: Optional[float], usage: Optional[Dict[s
             "sarvam_output_inr_per_million_tokens": settings.SARVAM_OUTPUT_INR_PER_MILLION_TOKENS,
             "usd_to_inr": fx,
             "infra_per_minute_inr": infra_rate,
+            "credits_per_minute": credit_rate,
         },
     }

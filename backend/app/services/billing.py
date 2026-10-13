@@ -1,12 +1,13 @@
 """
-Prepaid wallet billing.
+Prepaid credits.
 
-Clients recharge by bank transfer / UPI; an admin records the payment, which issues a GST tax
-invoice (tax on the advance) and credits the wallet with the taxable value. Each completed call
-is then debited at its client charge (pre-GST `charge_total`), so tax is never charged twice.
+1 credit = Rs 1 (pre-GST). Clients buy credits by recharging (online, bank transfer or UPI); the payment
+issues a GST tax invoice (tax on the advance) and adds the taxable value to the wallet as bought credits,
+which never expire. Each completed call costs billed minutes x credits per minute, so tax is never
+charged twice.
 
-Clients on a monthly plan (services/subscriptions.py) use the plan's included minutes first; only the
-overage is debited from the wallet, at the plan's overage rate.
+Clients on a monthly plan (services/subscriptions.py) use the period's plan credits first; only the rest
+is taken from bought credits.
 """
 import json
 import logging
@@ -22,10 +23,8 @@ from app.core.exceptions import ValidationException
 from app.models.billing import ClientBillingProfile, ClientWallet, Invoice, WalletTransaction
 from app.models.call import Call
 from app.models.client import Client
-from app.models.runtime_session import RuntimeSession
 from app.models.subscription import CallUsage, Plan
 from app.services import subscriptions
-from app.services.call_costing import estimate_call_cost
 from app.services.pricing import get_pricing
 
 logger = logging.getLogger("choranta.services.billing")
@@ -70,7 +69,7 @@ def live_call_count(db: Session, client_id: str) -> int:
 def check_call_allowed(db: Session, client_id: Optional[str]) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Whether a new billable call may start, as (allowed, reason, code). Codes: PLAN_EXPIRED, NO_BALANCE,
-    CONCURRENCY. Plan clients need plan minutes or wallet balance for overage; others need wallet balance.
+    CONCURRENCY. Plan clients need plan credits or bought credits; others need bought credits.
     """
     if not settings.BILLING_ENFORCED or not client_id:
         return True, None, None
@@ -80,17 +79,17 @@ def check_call_allowed(db: Session, client_id: Optional[str]) -> Tuple[bool, Opt
     plan = db.get(Plan, sub.plan_id) if sub else None
 
     if sub and plan and subscriptions.is_usable(sub):
-        if subscriptions.remaining_minutes(sub, plan) <= 0 and not has_balance:
-            return False, "Plan minutes are used up and the wallet is empty. Top up the wallet to keep calling.", "NO_BALANCE"
+        if subscriptions.remaining_credits(sub, plan) <= 0 and not has_balance:
+            return False, "This month's plan credits are used up. Buy credits to keep calling.", "NO_BALANCE"
         if plan.max_concurrent_calls and live_call_count(db, client_id) >= plan.max_concurrent_calls:
             return False, (f"The {plan.name} plan allows {plan.max_concurrent_calls} call(s) at a time. "
                            "Wait for a call to finish or upgrade the plan."), "CONCURRENCY"
         return True, None, None
     if sub and plan and sub.status == "PAST_DUE":
         return False, f"The {plan.name} plan has expired. Renew it to resume calls.", "PLAN_EXPIRED"
-    # No plan, or a cancelled one: pay-as-you-go from the wallet
+    # No plan, or a cancelled one: bought credits only
     if not has_balance:
-        return False, "Wallet balance is exhausted. Choose a plan or top up the wallet to resume calls.", "NO_BALANCE"
+        return False, "You're out of credits. Choose a plan or buy credits to resume calls.", "NO_BALANCE"
     return True, None, None
 
 
@@ -249,16 +248,11 @@ def adjust_wallet(db: Session, client_id: str, amount: float, note: str, admin_i
 
 
 def call_charge(db: Session, call: Call) -> Optional[float]:
-    """Client charge (pre-GST, INR) for a finished call, or None if it isn't billable."""
+    """Credits (1 credit = Rs 1, pre-GST) a finished call costs, or None if it isn't billable."""
     if (call.metadata_ or {}).get("is_test") or call.status != "COMPLETED" or not call.duration_seconds:
         return None
-    usage: Dict[str, Any] = {}
-    if call.runtime_session_id:
-        session_obj = db.get(RuntimeSession, call.runtime_session_id)
-        if session_obj and isinstance(session_obj.usage_json, dict):
-            usage = session_obj.usage_json
-    amount = estimate_call_cost(call.duration_seconds, usage, get_pricing(db))["charge_total"]
-    return _money(amount) if amount > 0 else None
+    amount = _money(billed_minutes(call.duration_seconds) * get_pricing(db).credits_per_minute)
+    return amount if amount > 0 else None
 
 
 def billed_minutes(duration_seconds: float) -> float:
@@ -268,6 +262,7 @@ def billed_minutes(duration_seconds: float) -> float:
 
 
 def _debit(db: Session, call: Call, amount: float) -> WalletTransaction:
+    """Takes bought credits for a call; the balance may dip below zero for the call that ran it out."""
     wallet = get_wallet(db, call.client_id, lock=True)
     wallet.balance_inr = _money(wallet.balance_inr - amount)
     txn = WalletTransaction(
@@ -284,8 +279,8 @@ def _debit(db: Session, call: Call, amount: float) -> WalletTransaction:
 
 def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     """
-    Bills a completed call once. Plan clients use included minutes first and pay the overage from the
-    wallet; others pay the full charge from the wallet. Returns the wallet debit, if there was one.
+    Bills a completed call once: billed minutes x credits per minute. Plan credits are used first, then
+    bought credits (the wallet). Returns the wallet debit, if there was one.
     """
     if not call.client_id:
         return None
@@ -298,33 +293,29 @@ def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     if (call.metadata_ or {}).get("is_test") or call.status != "COMPLETED" or not call.duration_seconds:
         return None
 
+    credits = call_charge(db, call)
+    if credits is None:
+        return None
+    minutes = billed_minutes(call.duration_seconds)
+    rate = credits / minutes if minutes else 0.0
+
     sub = subscriptions.get_subscription(db, call.client_id, lock=True)
     plan = db.get(Plan, sub.plan_id) if sub else None
-    if sub and plan and subscriptions.is_usable(sub):
-        minutes = billed_minutes(call.duration_seconds)
-        included = min(minutes, subscriptions.remaining_minutes(sub, plan))
-        overage = round(minutes - included, 4)
-        charge = _money(overage * plan.overage_per_minute_inr)
-        sub.minutes_used = round(float(sub.minutes_used or 0.0) + included, 4)
-        txn = _debit(db, call, charge) if charge > 0 else None
-        db.add(CallUsage(
-            call_id=call.id, client_id=call.client_id, plan_id=plan.id, billed_minutes=minutes,
-            included_minutes=included, overage_minutes=overage, overage_charge_inr=charge,
-        ))
-        db.commit()
-        logger.info(f"Charged call {call.id} on {plan.name}: {included} plan min, {overage} overage min (Rs {charge})")
-        return txn
-
-    amount = call_charge(db, call)
-    if amount is None:
-        return None
-    txn = _debit(db, call, amount)
+    on_plan = bool(sub and plan and subscriptions.is_usable(sub))
+    from_plan = _money(min(credits, subscriptions.remaining_credits(sub, plan))) if on_plan else 0.0
+    from_wallet = _money(credits - from_plan)
+    if on_plan:
+        sub.credits_used = round(float(sub.credits_used or 0.0) + from_plan, 4)
+        sub.minutes_used = round(float(sub.minutes_used or 0.0) + minutes, 4)
+    txn = _debit(db, call, from_wallet) if from_wallet > 0 else None
+    plan_minutes = round(from_plan / rate, 4) if rate else 0.0
     db.add(CallUsage(
-        call_id=call.id, client_id=call.client_id, plan_id=None,
-        billed_minutes=billed_minutes(call.duration_seconds), overage_charge_inr=amount,
+        call_id=call.id, client_id=call.client_id, plan_id=plan.id if on_plan else None, billed_minutes=minutes,
+        included_minutes=plan_minutes, overage_minutes=round(minutes - plan_minutes, 4),
+        overage_charge_inr=from_wallet, plan_credits=from_plan, wallet_credits=from_wallet,
     ))
     db.commit()
-    logger.info(f"Charged call {call.id}: Rs {amount}, wallet now {txn.balance_after_inr}")
+    logger.info(f"Charged call {call.id}: {credits} credits ({from_plan} plan, {from_wallet} bought)")
     return txn
 
 

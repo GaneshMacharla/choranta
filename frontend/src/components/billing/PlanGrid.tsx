@@ -2,7 +2,7 @@ import React from 'react';
 import { Check } from 'lucide-react';
 import { Button } from '../common/Button';
 import { inr } from '../../services/portal';
-import { Plan, Subscription } from '../../services/plans';
+import { creditsLabel, Plan, Subscription } from '../../services/plans';
 import { fmtDate } from './PlanUsageBar';
 
 const planAction = (plan: Plan, sub: Subscription | null): { label: string; disabled: boolean } => {
@@ -11,6 +11,18 @@ const planAction = (plan: Plan, sub: Subscription | null): { label: string; disa
   if (sub.renewed_ahead) return { label: 'Next month paid', disabled: true };
   if (sub.status === 'PAST_DUE') return { label: 'Renew now', disabled: false };
   return { label: 'Pay next month', disabled: false };
+};
+
+/**
+ * Per-minute price range (excl. GST): minutes paid with plan credits cost the plan fee per credit,
+ * minutes paid with bought credits cost ₹1 per credit.
+ */
+export const perMinuteRange = (plan: Plan): string => {
+  const rates = [plan.credits_per_minute];
+  if (plan.monthly_credits > 0) rates.push((plan.monthly_price_inr / plan.monthly_credits) * plan.credits_per_minute);
+  const low = Math.round(Math.min(...rates));
+  const high = Math.round(Math.max(...rates));
+  return low === high ? `₹${low}` : `₹${low}–${high}`;
 };
 
 interface PlanGridProps {
@@ -41,11 +53,13 @@ export const PlanGrid: React.FC<PlanGridProps> = ({ plans, subscription: sub, on
           <div className="mt-4">
             <span className="font-mono text-2xl font-bold text-slate-100">{inr(plan.monthly_price_inr, 0)}</span>
             <span className="text-xs text-slate-500"> / month + {gstRate}% GST</span>
+            <div className="mt-1 text-xs font-medium text-[#00df8f]">{perMinuteRange(plan)} per minute</div>
           </div>
           <ul className="mt-4 flex-1 space-y-1.5 text-xs text-slate-300">
             {[
-              `${plan.included_minutes.toLocaleString('en-IN')} call minutes included`,
-              `${inr(plan.overage_per_minute_inr)} per extra minute`,
+              `${creditsLabel(plan.monthly_credits)} every month`,
+              `About ${plan.approx_minutes.toLocaleString('en-IN')} call minutes (${plan.credits_per_minute} credits per minute)`,
+              'Unused plan credits expire at the end of the month',
               plan.max_concurrent_calls
                 ? `Up to ${plan.max_concurrent_calls} call${plan.max_concurrent_calls === 1 ? '' : 's'} at a time`
                 : 'No limit on calls at a time',

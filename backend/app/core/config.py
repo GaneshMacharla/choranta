@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # Internal Auth / JWT verification secret
     JWT_SECRET_KEY: Optional[str] = None
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days; the app renews it on each visit (POST /auth/refresh)
 
     # Initial Platform Administrator Seed Credentials (empty by default)
     INITIAL_ADMIN_EMAIL: Optional[str] = None
@@ -90,6 +90,8 @@ class Settings(BaseSettings):
     # Pricing defaults until an admin sets them in Settings (stored in pricing_settings)
     DEFAULT_PROFIT_PERCENT: float = 40.0
     DEFAULT_INFRA_COST_PER_MINUTE_INR: float = 0.30
+    # Credits: 1 credit = Rs 1 (pre-GST). Every billed call minute costs this many credits until an admin sets it
+    DEFAULT_CREDITS_PER_MINUTE: float = 7.0
 
     # --------------------------------------------------------
     # Billing & GST invoices
@@ -108,6 +110,8 @@ class Settings(BaseSettings):
     MIN_WALLET_TOPUP_INR: float = 500.0       # smallest online wallet top-up (GST included)
     NUMBER_GRACE_DAYS: int = 3                # unpaid number rent: released back to Exotel after this
     NUMBER_RENTAL_CHECK_S: int = 900          # how often number rent is renewed / released
+    CAMPAIGN_TICK_S: int = 5                  # how often the campaign dispatcher checks for calls to place
+    CAMPAIGN_MAX_DIALS_PER_MIN: int = 60      # pacing across all campaigns (Exotel default: 60 calls/minute)
 
     # Razorpay (online payments for plans and wallet top-ups)
     RAZORPAY_KEY_ID: str = ""
@@ -123,8 +127,9 @@ class Settings(BaseSettings):
     # --------------------------------------------------------
     # Phone call behaviour (cost control)
     # --------------------------------------------------------
-    VOICE_MAX_REPLY_CHARS: int = 280          # stop the agent's reply after the sentence that crosses this
+    VOICE_MAX_REPLY_CHARS: int = 220          # stop the agent's reply after the sentence that crosses this (TTS is billed per character)
     VOICE_PREFETCH_SENTENCES: int = 1         # sentences synthesized ahead of playback (unheard audio is still billed)
+    VOICE_TTS_CACHE_MB: int = 64              # repeated sentences (greeting, farewell, common replies) replay from memory; 0 = off
     CALL_SILENCE_REPROMPT_S: float = 8.0      # caller silent this long -> "Are you still there?"
     CALL_SILENCE_HANGUP_S: float = 8.0        # still silent after the reprompt -> goodbye and hang up
     CALL_MAX_DURATION_S: int = 600            # wrap up and hang up after this many seconds

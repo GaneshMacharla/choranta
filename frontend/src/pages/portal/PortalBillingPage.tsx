@@ -6,7 +6,7 @@ import { Modal } from '../../components/common/Modal';
 import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { inr, InvoiceSummary, portalService, Wallet } from '../../services/portal';
-import { Plan, plansService, Subscription } from '../../services/plans';
+import { creditsLabel, Plan, plansService, Subscription } from '../../services/plans';
 import { WalletLedger } from '../../components/billing/WalletLedger';
 import { fmtDate, PlanUsageBar } from '../../components/billing/PlanUsageBar';
 import { payWithRazorpay } from '../../components/billing/razorpayCheckout';
@@ -81,8 +81,7 @@ export const PortalBillingPage: React.FC = () => {
       <div className="flex flex-wrap items-end justify-between gap-2">
         <h1 className="text-xl font-bold">Billing</h1>
         <p className="text-sm">
-          Wallet balance: <span className="font-mono font-bold text-[#00df8f]">{inr(wallet.balance_inr)}</span>
-          <span className="ml-1 text-xs text-slate-500">(excl. GST)</span>
+          Bought credits: <span className="font-mono font-bold text-[#00df8f]">{creditsLabel(wallet.balance_inr)}</span>
         </p>
       </div>
 
@@ -116,14 +115,14 @@ export const PortalBillingPage: React.FC = () => {
             <PlanUsageBar subscription={sub} />
           ) : (
             <p className="text-xs text-slate-400">
-              You're on pay-as-you-go: each call is charged from your wallet. Pick a monthly plan below to get included minutes at a lower rate.
+              You're on pay-as-you-go: each call uses your bought credits. Pick a monthly plan below to get bonus credits every month.
             </p>
           )}
         </Card>
 
         <Card
-          title="Wallet"
-          subtitle={sub ? 'Pays for minutes beyond your plan' : 'Pays for your calls'}
+          title="Bought credits"
+          subtitle={sub ? 'Used after your plan credits run out · never expire' : 'Pay for your calls · never expire'}
           className="lg:col-span-5"
           bodyClassName="flex flex-col justify-between gap-4"
         >
@@ -132,8 +131,8 @@ export const PortalBillingPage: React.FC = () => {
               <WalletIcon className="h-5 w-5" />
             </div>
             <div>
-              <span className="block font-mono text-2xl font-bold text-slate-100">{inr(wallet.balance_inr)}</span>
-              <span className="text-xs text-slate-500">excluding GST</span>
+              <span className="block font-mono text-2xl font-bold text-slate-100">{creditsLabel(wallet.balance_inr)}</span>
+              <span className="text-xs text-slate-500">1 credit = ₹1 (excl. GST)</span>
             </div>
           </div>
           <Button
@@ -146,7 +145,7 @@ export const PortalBillingPage: React.FC = () => {
               setTopupOpen(true);
             }}
           >
-            <Plus className="mr-1.5 h-4 w-4" /> Top up wallet
+            <Plus className="mr-1.5 h-4 w-4" /> Buy credits
           </Button>
         </Card>
       </div>
@@ -170,7 +169,7 @@ export const PortalBillingPage: React.FC = () => {
         </div>
       )}
 
-      <Card title="Invoices" subtitle="GST tax invoices for your plans and wallet top-ups" noPadding>
+      <Card title="Invoices" subtitle="GST tax invoices for your plans and credit purchases" noPadding>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="border-b border-[#1f2433] text-slate-400">
@@ -219,8 +218,8 @@ export const PortalBillingPage: React.FC = () => {
       <Modal
         isOpen={topupOpen}
         onClose={() => setTopupOpen(false)}
-        title="Top up wallet"
-        description={`Pay any amount from ${inr(info.min_topup_inr, 0)}, GST included. Your wallet is credited with the amount excluding GST, and a GST invoice is issued.`}
+        title="Buy credits"
+        description={`Pay any amount from ${inr(info.min_topup_inr, 0)}, GST included. You get 1 credit per ₹1 excluding GST, and a GST invoice is issued. Bought credits never expire.`}
       >
         <div className="space-y-3 text-xs">
           <div className="flex flex-wrap gap-2">
@@ -247,7 +246,8 @@ export const PortalBillingPage: React.FC = () => {
           </label>
           {Number(topupAmount) > 0 && (
             <p className="text-slate-400">
-              Wallet credit: <span className="font-mono text-[#00df8f]">{inr(Number(topupAmount) / (1 + gstRate / 100))}</span>
+              You get:{' '}
+              <span className="font-mono text-[#00df8f]">{creditsLabel(Math.floor((Number(topupAmount) / (1 + gstRate / 100)) * 100) / 100)}</span>
             </p>
           )}
           <div className="flex justify-end gap-2">
@@ -256,7 +256,7 @@ export const PortalBillingPage: React.FC = () => {
               variant="primary"
               disabled={Number(topupAmount) < info.min_topup_inr}
               isLoading={busy === 'topup'}
-              onClick={() => pay('topup', { purpose: 'WALLET_TOPUP', amount_inr: Number(topupAmount) }, 'Payment received. Your wallet has been topped up.')}
+              onClick={() => pay('topup', { purpose: 'WALLET_TOPUP', amount_inr: Number(topupAmount) }, 'Payment received. Your credits have been added.')}
             >
               Pay {Number(topupAmount) > 0 ? inr(Number(topupAmount), 0) : ''}
             </Button>

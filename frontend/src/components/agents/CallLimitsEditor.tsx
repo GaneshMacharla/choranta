@@ -16,7 +16,7 @@ const FIELDS: { key: NumericLimit; label: string; unit: string; min: number; max
   { key: 'max_call_duration_s', label: 'Max call duration', unit: 'seconds', min: 60, max: 3600, step: 30, fallback: '600', help: 'Agent says goodbye and hangs up after this long.' },
   { key: 'silence_reprompt_s', label: 'Ask "Are you still there?" after', unit: 'seconds of silence', min: 3, max: 60, step: 1, fallback: '8', help: 'How long to wait for a silent caller before checking in.' },
   { key: 'silence_hangup_s', label: 'Hang up after a further', unit: 'seconds of silence', min: 3, max: 120, step: 1, fallback: '8', help: 'Ends dead-air calls you would otherwise pay for.' },
-  { key: 'max_reply_chars', label: 'Max reply length', unit: 'characters', min: 80, max: 1000, step: 20, fallback: '280', help: 'Long replies are cut after the sentence that crosses this. Voice is billed per character.' },
+  { key: 'max_reply_chars', label: 'Max reply length', unit: 'characters', min: 80, max: 1000, step: 20, fallback: '220', help: 'Long replies are cut after the sentence that crosses this. Voice is billed per character.' },
   { key: 'max_tool_rounds', label: 'Max tool steps per turn', unit: 'steps', min: 1, max: 6, step: 1, fallback: '4', help: 'Each step is an extra AI model call.' },
 ];
 

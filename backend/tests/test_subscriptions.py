@@ -20,8 +20,9 @@ from test_portal import _client_headers
 
 @pytest.fixture
 def plan(db: Session) -> Plan:
-    p = Plan(name="Growth", monthly_price_inr=5000.0, included_minutes=10, overage_per_minute_inr=4.0,
-             max_concurrent_calls=1, is_active=True)
+    # 70 credits = 10 minutes at the default 7 credits per minute
+    p = Plan(name="Growth", monthly_price_inr=5000.0, included_minutes=10, overage_per_minute_inr=7.0,
+             monthly_credits=70.0, max_concurrent_calls=1, is_active=True)
     db.add(p)
     db.commit()
     return p
@@ -53,23 +54,25 @@ def _subscribe(db: Session, client_id: str, plan: Plan):
 
 # ---------------------------------------------------------------- call charging
 
-def test_plan_minutes_used_first_then_overage_from_wallet(db: Session, telephony_setup, plan, company):
+def test_plan_credits_used_first_then_bought_credits(db: Session, telephony_setup, plan, company):
     cid = telephony_setup["client"].id
     _subscribe(db, cid, plan)
-    billing.record_payment(db, cid, 1180, None, None)  # Rs 1000 wallet
+    billing.record_payment(db, cid, 1180, None, None)  # 1000 bought credits
 
-    first = _completed_call(db, telephony_setup, duration=6 * 60)  # 6 min, all included
+    first = _completed_call(db, telephony_setup, duration=6 * 60)  # 6 min x 7 = 42 plan credits
     assert billing.charge_call(db, first) is None
-    assert subscriptions.get_subscription(db, cid).minutes_used == 6
+    sub = subscriptions.get_subscription(db, cid)
+    assert (sub.credits_used, sub.minutes_used) == (42, 6)
     assert billing.get_wallet(db, cid).balance_inr == 1000.0
 
-    second = _completed_call(db, telephony_setup, duration=5 * 60 + 10)  # 6 billed min: 4 included + 2 overage
+    second = _completed_call(db, telephony_setup, duration=5 * 60 + 10)  # 6 billed min = 42: 28 plan + 14 bought
     txn = billing.charge_call(db, second)
-    assert txn.amount_inr == -8.0  # 2 min x Rs 4
+    assert txn.amount_inr == -14.0
     usage = db.query(CallUsage).filter(CallUsage.call_id == second.id).one()
+    assert (usage.plan_credits, usage.wallet_credits) == (28, 14)
     assert (usage.included_minutes, usage.overage_minutes) == (4, 2)
-    assert subscriptions.get_subscription(db, cid).minutes_used == 10
-    assert billing.get_wallet(db, cid).balance_inr == 992.0
+    assert subscriptions.get_subscription(db, cid).credits_used == 70
+    assert billing.get_wallet(db, cid).balance_inr == 986.0
 
     assert billing.charge_call(db, second) is None  # billed once
     assert db.query(CallUsage).filter(CallUsage.call_id == second.id).count() == 1
@@ -91,14 +94,14 @@ def test_check_call_allowed_rules(db: Session, telephony_setup, plan, company, m
     monkeypatch.setattr(settings, "BILLING_ENFORCED", True, raising=False)
     cid = telephony_setup["client"].id
     sub = _subscribe(db, cid, plan)
-    assert billing.check_call_allowed(db, cid)[0]  # plan minutes, empty wallet
+    assert billing.check_call_allowed(db, cid)[0]  # plan credits, no bought credits
 
-    sub.minutes_used = plan.included_minutes
+    sub.credits_used = plan.monthly_credits
     db.commit()
     allowed, _, code = billing.check_call_allowed(db, cid)
     assert not allowed and code == "NO_BALANCE"
     billing.record_payment(db, cid, 118, None, None)
-    assert billing.check_call_allowed(db, cid)[0]  # overage paid from wallet
+    assert billing.check_call_allowed(db, cid)[0]  # bought credits cover the rest
 
     live = Call(id=generate_unique_id("call_"), client_id=cid, agent_id=telephony_setup["agent"].id,
                 agent_version_id=telephony_setup["version"].id, caller_number="+914045209348",
@@ -235,7 +238,7 @@ def test_wallet_topup_via_webhook(client: TestClient, auth_headers: dict, teleph
 
 
 def test_admin_plan_api(client: TestClient, auth_headers: dict, operator_headers: dict, telephony_setup, company):
-    body = {"name": "Starter", "monthly_price_inr": 2000, "included_minutes": 300, "overage_per_minute_inr": 6}
+    body = {"name": "Starter", "monthly_price_inr": 2000, "monthly_credits": 2100}
     assert client.post("/api/plans", headers=operator_headers, json=body).status_code == 403
     created = client.post("/api/plans", headers=auth_headers, json=body)
     assert created.status_code == 201
@@ -248,6 +251,22 @@ def test_admin_plan_api(client: TestClient, auth_headers: dict, operator_headers
                            json={"plan_id": pid, "reference": "UTR55"})
     assert assigned.status_code == 200, assigned.text
     got = client.get(f"/api/clients/{cid}/subscription", headers=operator_headers).json()["subscription"]
-    assert got["plan"]["name"] == "Starter" and got["minutes_remaining"] == 300
+    assert got["plan"]["name"] == "Starter" and got["credits_remaining"] == 2100
+    assert got["plan"]["approx_minutes"] == 300  # 2100 credits at 7 per minute
     cancelled = client.put(f"/api/clients/{cid}/subscription", headers=auth_headers, json={"cancel_at_period_end": True})
     assert cancelled.json()["subscription"]["cancel_at_period_end"] is True
+
+
+def test_minute_plans_migrate_to_credits(db: Session):
+    from app.db.init_db import _migrate_to_credits
+    rate = settings.DEFAULT_CREDITS_PER_MINUTE
+    cheap = Plan(name="Old Starter", monthly_price_inr=2999.0, included_minutes=300, overage_per_minute_inr=6.0, is_active=True)
+    rich = Plan(name="Old Pro", monthly_price_inr=14999.0, included_minutes=2500, overage_per_minute_inr=4.0, is_active=True)
+    db.add_all([cheap, rich])
+    db.commit()
+    _migrate_to_credits(db.connection(), set())
+    db.commit()
+    db.refresh(cheap)
+    db.refresh(rich)
+    assert cheap.monthly_credits == 2999.0           # never fewer credits than the price paid
+    assert rich.monthly_credits == 2500 * rate      # never fewer minutes than before

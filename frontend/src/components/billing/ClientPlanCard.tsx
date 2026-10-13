@@ -8,7 +8,7 @@ import { Modal } from '../common/Modal';
 import { PlanUsageBar } from './PlanUsageBar';
 import { BuyNumberModal } from './BuyNumberModal';
 import { inr } from '../../services/portal';
-import { CallUsage, minutesLabel, NumberPrice, Plan, plansService, Subscription } from '../../services/plans';
+import { CallUsage, creditsLabel, minutesLabel, NumberPrice, Plan, plansService, Subscription } from '../../services/plans';
 
 const inputClass = 'w-full rounded border border-[#232736] bg-[#10121a] p-2 text-xs text-slate-100';
 
@@ -101,7 +101,7 @@ export const ClientPlanCard: React.FC<{ clientId: string; onChange?: () => void 
           <p className="text-slate-500">Loading plan...</p>
         ) : subscription === null ? (
           <p className="text-slate-400">
-            No plan. This client pays as they go from the wallet.
+            No plan. This client's calls use bought credits.
             {plans.length === 0 && (
               <>
                 {' '}
@@ -136,10 +136,10 @@ export const ClientPlanCard: React.FC<{ clientId: string; onChange?: () => void 
                   <span className="text-slate-500">{new Date(u.created_at).toLocaleString('en-IN')}</span>
                   <span className="font-mono text-slate-300">{minutesLabel(u.billed_minutes)}</span>
                   <span className="text-slate-400">
-                    {u.plan_id ? `${minutesLabel(u.included_minutes)} from plan` : 'Pay as you go'}
+                    {u.plan_credits > 0 ? `${creditsLabel(u.plan_credits)} from plan` : 'Bought credits'}
                   </span>
-                  <span className={`font-mono ${u.overage_charge_inr > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
-                    {u.overage_charge_inr > 0 ? `-${inr(u.overage_charge_inr)}` : '—'}
+                  <span className={`font-mono ${u.wallet_credits > 0 ? 'text-amber-300' : 'text-slate-500'}`}>
+                    {u.wallet_credits > 0 ? `-${creditsLabel(u.wallet_credits)}` : '—'}
                   </span>
                 </div>
               ))}
@@ -165,7 +165,7 @@ export const ClientPlanCard: React.FC<{ clientId: string; onChange?: () => void 
             <select className={inputClass} value={planId} onChange={(e) => setPlanId(e.target.value)}>
               {plans.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} · {inr(p.monthly_price_with_gst_inr)} incl. GST · {p.included_minutes} min
+                  {p.name} · {inr(p.monthly_price_with_gst_inr)} incl. GST · {creditsLabel(p.monthly_credits)}
                 </option>
               ))}
             </select>
@@ -175,7 +175,7 @@ export const ClientPlanCard: React.FC<{ clientId: string; onChange?: () => void 
               {sameActivePlan
                 ? 'Same plan as now: this pays for the next month, which starts when the current period ends.'
                 : subscription
-                ? 'A different plan starts today with fresh minutes. Unused minutes on the current plan are dropped.'
+                ? 'A different plan starts today with fresh credits. Unused credits on the current plan are dropped.'
                 : 'The plan starts today.'}
             </p>
           )}

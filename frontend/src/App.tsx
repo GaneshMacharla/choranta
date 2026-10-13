@@ -18,6 +18,7 @@ import { IntegrationsPage } from './pages/IntegrationsPage';
 import { ProvidersPage } from './pages/ProvidersPage';
 import { UsagePage } from './pages/UsagePage';
 import { PlansPage } from './pages/PlansPage';
+import { CampaignsPage, CampaignDetailPage, InstantOutboundPage, InstantOutboundDetailPage } from './pages/CampaignsPage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
@@ -28,6 +29,13 @@ import { PortalBillingPage } from './pages/portal/PortalBillingPage';
 import { PortalInventoryPage } from './pages/portal/PortalInventoryPage';
 import { PortalNumbersPage } from './pages/portal/PortalNumbersPage';
 import { PortalPlansPage } from './pages/portal/PortalPlansPage';
+import {
+  PortalCampaignsPage,
+  PortalCampaignDetailPage,
+  PortalInstantOutboundPage,
+  PortalInstantOutboundDetailPage,
+} from './pages/portal/PortalCampaignsPage';
+import { PortalIntegrationsPage } from './pages/portal/PortalIntegrationsPage';
 
 /** Old Test Lab links open the agent's Tests step (or the AI Employees list). */
 function TestLabRedirect() {
@@ -49,6 +57,11 @@ export function App() {
             <Route path="/portal" element={<PortalLayout />}>
               <Route index element={<PortalDashboardPage />} />
               <Route path="calls" element={<PortalCallsPage />} />
+              <Route path="campaigns" element={<PortalCampaignsPage />} />
+              <Route path="campaigns/:id" element={<PortalCampaignDetailPage />} />
+              <Route path="instant-outbound" element={<PortalInstantOutboundPage />} />
+              <Route path="instant-outbound/:id" element={<PortalInstantOutboundDetailPage />} />
+              <Route path="integrations" element={<PortalIntegrationsPage />} />
               <Route path="plans" element={<PortalPlansPage />} />
               <Route path="numbers" element={<PortalNumbersPage />} />
               <Route path="billing" element={<PortalBillingPage />} />
@@ -67,6 +80,10 @@ export function App() {
               <Route path="/test-lab" element={<TestLabRedirect />} />
               <Route path="/telephony" element={<TelephonyPage />} />
               <Route path="/calls" element={<CallsPage />} />
+              <Route path="/campaigns" element={<CampaignsPage />} />
+              <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
+              <Route path="/instant-outbound" element={<InstantOutboundPage />} />
+              <Route path="/instant-outbound/:id" element={<InstantOutboundDetailPage />} />
 
               {/* Internal Operation Modules */}
               <Route path="/tools" element={<ToolsPage />} />

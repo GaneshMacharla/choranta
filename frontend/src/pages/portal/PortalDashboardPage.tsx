@@ -5,7 +5,7 @@ import { Card } from '../../components/common/Card';
 import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { inr, PaymentInstructions, PortalSummary, portalService } from '../../services/portal';
-import { minutesLabel, plansService } from '../../services/plans';
+import { creditsLabel, plansService } from '../../services/plans';
 import { useAuth } from '../../context/AuthContext';
 import { hasSkippedPlanChoice } from './PortalPlansPage';
 
@@ -71,7 +71,7 @@ export const PortalDashboardPage: React.FC = () => {
   const { wallet, month, subscription: plan } = summary;
   // Clients who have never had a plan choose one first (unless they chose pay-as-you-go)
   if (!plan && planCount > 0 && !hasSkippedPlanChoice(user?.id)) return <Navigate to="/portal/plans" replace />;
-  const planCoversCalls = !!plan?.usable && plan.minutes_remaining > 0;
+  const planCoversCalls = !!plan?.usable && plan.credits_remaining > 0;
   const showLowBalance = wallet.low_balance && !planCoversCalls;
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -86,10 +86,10 @@ export const PortalDashboardPage: React.FC = () => {
           <span>
             {wallet.calls_blocked
               ? wallet.calls_blocked_reason || 'Your AI employee can’t take or make calls right now.'
-              : `Low balance: ${inr(wallet.balance_inr)} left (alert below ${inr(wallet.low_balance_threshold_inr, 0)}). Recharge soon to avoid interruptions.`}
+              : `Low on credits: ${creditsLabel(wallet.balance_inr)} left (alert below ${creditsLabel(wallet.low_balance_threshold_inr)}). Buy credits soon to avoid interruptions.`}
           </span>
           <Link to={plan ? '/portal/billing' : '/portal/plans'} className="ml-auto shrink-0 font-semibold underline-offset-2 hover:underline">
-            {plan ? 'Top up wallet' : 'Choose a plan'}
+            {plan ? 'Buy credits' : 'Choose a plan'}
           </Link>
         </div>
       )}
@@ -105,27 +105,27 @@ export const PortalDashboardPage: React.FC = () => {
       ))}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat icon={<Wallet className="h-4 w-4 text-[#00df8f]" />} label="Wallet balance" value={inr(wallet.balance_inr)} hint="excluding GST" />
+        <Stat icon={<Wallet className="h-4 w-4 text-[#00df8f]" />} label="Bought credits" value={creditsLabel(wallet.balance_inr)} hint="never expire · 1 credit = ₹1" />
         <Stat icon={<PhoneCall className="h-4 w-4 text-indigo-400" />} label="Calls this month" value={String(month.calls)} />
         {plan?.usable ? (
           <Stat
             icon={<Clock className="h-4 w-4 text-sky-400" />}
-            label="Plan minutes left"
-            value={minutesLabel(plan.minutes_remaining)}
-            hint={`of ${plan.included_minutes} · renews ${new Date(plan.current_period_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`}
+            label="Plan credits left"
+            value={creditsLabel(plan.credits_remaining)}
+            hint={`of ${plan.monthly_credits.toLocaleString('en-IN')} · reset ${new Date(plan.current_period_end).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`}
           />
         ) : (
           <Stat icon={<Clock className="h-4 w-4 text-sky-400" />} label="Minutes this month" value={month.minutes.toFixed(1)} />
         )}
-        <Stat icon={<IndianRupee className="h-4 w-4 text-amber-400" />} label="Spend this month" value={inr(month.spend_inr)} />
+        <Stat icon={<IndianRupee className="h-4 w-4 text-amber-400" />} label="Bought credits used" value={creditsLabel(month.spend_inr)} hint="this month" />
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card title="Call minutes" subtitle="Last 30 days">
           <DailyBars data={summary.daily} metric="minutes" color="bg-sky-500/70" format={(v) => `${v} min`} />
         </Card>
-        <Card title="Spend" subtitle="Last 30 days, charged from your wallet">
-          <DailyBars data={summary.daily} metric="spend_inr" color="bg-amber-500/70" format={(v) => inr(v)} />
+        <Card title="Bought credits used" subtitle="Last 30 days">
+          <DailyBars data={summary.daily} metric="spend_inr" color="bg-amber-500/70" format={(v) => creditsLabel(v)} />
         </Card>
       </div>
 

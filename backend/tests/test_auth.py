@@ -47,3 +47,18 @@ def test_get_current_user_profile(client, auth_headers):
 def test_unauthenticated_request_rejected(client):
     response = client.get("/api/auth/me")
     assert response.status_code == 401
+
+
+def test_refresh_issues_new_token(client, auth_headers):
+    response = client.post("/api/auth/refresh", headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["access_token"]
+    assert body["user"]["email"] == "admin@choranta.internal"
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"})
+    assert me.status_code == 200
+
+
+def test_refresh_rejects_invalid_token(client):
+    assert client.post("/api/auth/refresh").status_code == 401
+    assert client.post("/api/auth/refresh", headers={"Authorization": "Bearer not-a-token"}).status_code == 401

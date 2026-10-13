@@ -53,7 +53,7 @@ export const CallCostCard: React.FC<{ cost: CallCost }> = ({ cost }) => {
               <span className="font-mono text-slate-200">{cost.per_minute != null ? inr(cost.per_minute) : '—'}</span>
             </div>
             <div>
-              <span className="block text-[10px] uppercase tracking-wider text-slate-500">Profit</span>
+              <span className="block text-[10px] uppercase tracking-wider text-slate-500">Markup</span>
               <span className="font-mono text-emerald-300">{cost.profit_percent ?? 0}%</span>
             </div>
             <div>
@@ -89,7 +89,7 @@ export const CallCostCard: React.FC<{ cost: CallCost }> = ({ cost }) => {
             <p className="text-[10px] leading-relaxed text-slate-500">
               Estimated from backend rates (Exotel ₹{cost.rates.telephony_per_minute_inr}/min billed per{' '}
               {cost.rates.billing_pulse_seconds}s, TTS ${cost.rates.tts_usd_per_minute}/min, infra ₹
-              {cost.rates.infra_per_minute_inr}/min). Profit % and infra are set in Settings.
+              {cost.rates.infra_per_minute_inr}/min). The client pays {cost.rates.credits_per_minute ?? '—'} credits per billed minute, set in Settings.
             </p>
           )}
         </>

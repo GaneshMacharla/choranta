@@ -6,14 +6,17 @@ export interface Plan {
   description: string | null;
   monthly_price_inr: number;
   monthly_price_with_gst_inr: number;
-  included_minutes: number;
-  overage_per_minute_inr: number;
+  /** Credits granted each period (1 credit = ₹1); they expire when the period ends */
+  monthly_credits: number;
+  /** Platform rate: credits one billed call minute costs */
+  credits_per_minute: number;
+  approx_minutes: number;
   max_concurrent_calls: number | null;
   is_active: boolean;
   sort_order: number;
 }
 
-export type PlanInput = Omit<Plan, 'id' | 'monthly_price_with_gst_inr'>;
+export type PlanInput = Omit<Plan, 'id' | 'monthly_price_with_gst_inr' | 'credits_per_minute' | 'approx_minutes'>;
 
 export interface Subscription {
   plan: Plan | null;
@@ -25,8 +28,10 @@ export interface Subscription {
   current_period_end: string;
   days_left: number;
   minutes_used: number;
-  included_minutes: number;
-  minutes_remaining: number;
+  monthly_credits: number;
+  credits_used: number;
+  credits_remaining: number;
+  credits_per_minute: number;
   cancel_at_period_end: boolean;
   renewed_ahead: boolean;
 }
@@ -38,6 +43,8 @@ export interface CallUsage {
   included_minutes: number;
   overage_minutes: number;
   overage_charge_inr: number;
+  plan_credits: number;
+  wallet_credits: number;
   created_at: string;
 }
 
@@ -102,3 +109,7 @@ export const plansService = {
 };
 
 export const minutesLabel = (value: number) => `${Number.isInteger(value) ? value : value.toFixed(1)} min`;
+
+/** 1 credit = ₹1 (excl. GST): plan credits each month, bought credits in the wallet. */
+export const creditsLabel = (value: number) =>
+  `${value.toLocaleString('en-IN', { maximumFractionDigits: Number.isInteger(value) ? 0 : 2 })} credits`;

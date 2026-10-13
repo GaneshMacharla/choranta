@@ -36,6 +36,10 @@ class Lead(Base):
     next_action = Column(String(128), nullable=True)
     notes = Column(Text, nullable=True)
     meta = Column(JSON, nullable=False, default=dict)
+    # Consent to be called, as given on the client's website form (TRAI record keeping)
+    consent_given = Column(Boolean, nullable=True)
+    consent_at = Column(DateTime, nullable=True)
+    consent_source = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 

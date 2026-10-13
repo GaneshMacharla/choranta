@@ -58,14 +58,19 @@ def test_defaults_until_admin_sets_pricing(client: TestClient, auth_headers: dic
 
 def test_admin_updates_pricing_and_preview_uses_it(client: TestClient, auth_headers: dict, telephony_setup, db: Session):
     _completed_call(db, telephony_setup)
-    resp = client.put("/api/pricing", headers=auth_headers, json={"profit_percent": 50, "infra_cost_per_minute_inr": 0.25})
+    resp = client.put("/api/pricing", headers=auth_headers, json={"credits_per_minute": 9, "infra_cost_per_minute_inr": 0.25})
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["profit_percent"] == 50 and data["infra_cost_per_minute_inr"] == 0.25
+    assert data["credits_per_minute"] == 9 and data["infra_cost_per_minute_inr"] == 0.25
     preview = data["preview"]
     assert preview["calls"] >= 1
-    assert preview["avg_charge_per_minute"] == pytest.approx(preview["avg_cost_per_minute"] * 1.5, rel=1e-3)
-    assert client.get("/api/pricing", headers=auth_headers).json()["profit_percent"] == 50
+    assert preview["avg_charge_per_minute"] > preview["avg_cost_per_minute"]
+    assert client.get("/api/pricing", headers=auth_headers).json()["credits_per_minute"] == 9
+
+
+def test_credits_per_minute_must_be_positive(client: TestClient, auth_headers: dict):
+    body = {"credits_per_minute": 0, "infra_cost_per_minute_inr": 0.3}
+    assert client.put("/api/pricing", headers=auth_headers, json=body).status_code == 422
 
 
 @pytest.mark.parametrize("body", [
@@ -87,12 +92,12 @@ def test_admin_sees_cost_and_margin_operator_sees_only_charge(
     client: TestClient, auth_headers: dict, operator_headers: dict, telephony_setup, db: Session
 ):
     call = _completed_call(db, telephony_setup)
-    client.put("/api/pricing", headers=auth_headers, json={"profit_percent": 40, "infra_cost_per_minute_inr": 0.30})
+    client.put("/api/pricing", headers=auth_headers, json={"credits_per_minute": 8, "infra_cost_per_minute_inr": 0.30})
 
     admin_cost = client.get(f"/api/telephony/calls/{call.id}", headers=auth_headers).json()["cost"]
-    assert admin_cost["profit_percent"] == 40
     assert admin_cost["breakdown"]["infra"] == 0.6
-    assert admin_cost["charge_total"] == pytest.approx(admin_cost["total"] * 1.4, abs=1e-3)
+    assert admin_cost["charge_total"] == 16.0  # 2 billed min x 8 credits
+    assert admin_cost["profit"] == pytest.approx(16.0 - admin_cost["total"], abs=1e-3)
 
     operator_cost = client.get(f"/api/telephony/calls/{call.id}", headers=operator_headers).json()["cost"]
     assert set(operator_cost) == {"currency", "estimated", "duration_seconds", "billed_minutes", "charge_total", "charge_per_minute"}

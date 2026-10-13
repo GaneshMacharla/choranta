@@ -8,6 +8,7 @@ import { Modal } from '../components/common/Modal';
 import { Table, Column } from '../components/common/Table';
 import { EmptyState } from '../components/common/EmptyState';
 import { inr } from '../services/portal';
+import { perMinuteRange } from '../components/billing/PlanGrid';
 import { NUMBER_TYPE_LABELS, NumberPrice, Plan, PlanInput, plansService } from '../services/plans';
 
 const inputClass = 'w-full rounded border border-[#232736] bg-[#10121a] p-2 text-xs text-slate-100';
@@ -16,8 +17,7 @@ const emptyDraft: PlanInput = {
   name: '',
   description: '',
   monthly_price_inr: 0,
-  included_minutes: 0,
-  overage_per_minute_inr: 0,
+  monthly_credits: 0,
   max_concurrent_calls: null,
   is_active: true,
   sort_order: 0,
@@ -65,7 +65,7 @@ export const PlansPage: React.FC = () => {
     }
   };
 
-  const valid = draft.name.trim() && draft.monthly_price_inr > 0 && draft.included_minutes >= 0 && draft.overage_per_minute_inr >= 0;
+  const valid = draft.name.trim() && draft.monthly_price_inr > 0 && draft.monthly_credits > 0;
 
   const columns: Column<Plan>[] = [
     {
@@ -88,8 +88,17 @@ export const PlansPage: React.FC = () => {
         </div>
       ),
     },
-    { key: 'minutes', header: 'Included minutes', render: (p) => <span className="font-mono">{p.included_minutes.toLocaleString('en-IN')}</span> },
-    { key: 'overage', header: 'Extra minute', render: (p) => <span className="font-mono">{inr(p.overage_per_minute_inr)}</span> },
+    {
+      key: 'credits',
+      header: 'Credits / month',
+      render: (p) => (
+        <div className="font-mono">
+          {p.monthly_credits.toLocaleString('en-IN')}
+          <span className="block text-[11px] text-slate-500">≈ {p.approx_minutes.toLocaleString('en-IN')} min</span>
+        </div>
+      ),
+    },
+    { key: 'per_minute', header: 'Per minute', render: (p) => <span className="font-mono">{perMinuteRange(p)}</span> },
     { key: 'concurrency', header: 'Calls at a time', render: (p) => <span className="font-mono">{p.max_concurrent_calls ?? 'No limit'}</span> },
     { key: 'status', header: 'Status', render: (p) => <Badge variant={p.is_active ? 'green' : 'gray'}>{p.is_active ? 'AVAILABLE' : 'ARCHIVED'}</Badge> },
     {
@@ -159,7 +168,7 @@ export const PlansPage: React.FC = () => {
               <EmptyState
                 icon={<Layers className="h-5 w-5" />}
                 title="No plans yet"
-                description="Create a plan, e.g. Growth: ₹4,999/month with 1,000 minutes and ₹5 per extra minute."
+                description="Create a plan, e.g. Starter: ₹3,000/month with 3,500 credits."
               />
             }
           />
@@ -190,8 +199,7 @@ export const PlansPage: React.FC = () => {
           </label>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {numberField('monthly_price_inr', 'Monthly fee (₹, excl. GST)', undefined, '0.01')}
-            {numberField('included_minutes', 'Included minutes / month')}
-            {numberField('overage_per_minute_inr', 'Extra minute (₹, excl. GST)', 'Debited from the wallet', '0.01')}
+            {numberField('monthly_credits', 'Credits / month', '1 credit = ₹1. Expire at the end of each month; give more credits than the fee as a bonus.')}
             <label className="block space-y-1">
               <span className="text-slate-300">Calls at a time</span>
               <input

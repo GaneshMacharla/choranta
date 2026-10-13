@@ -19,13 +19,17 @@ class EndpointerConfig:
     noise_multiplier: float = 3.0       # speech must also exceed this multiple of the learned noise floor
     max_threshold: float = 2500.0       # cap so a loud noise floor can't make normal speech undetectable
     noise_adapt_rate: float = 0.05      # how fast the noise floor follows non-speech frames
+    early_transcribe_ms: int = 0        # trailing silence that emits a "pause" so transcription can start
+                                        # before the turn ends (0 = off)
 
 
 @dataclass
 class EndpointerEvent:
-    kind: str                           # "speech_start", "utterance" or "speech_discarded"
-    audio: bytes = b""                  # full utterance audio (pre-roll included) for "utterance"
+    kind: str                           # "speech_start", "pause", "utterance" or "speech_discarded"
+    audio: bytes = b""                  # utterance audio so far (pre-roll included) for "pause" / "utterance"
     speech_ms: float = 0.0
+    same_as_pause: bool = False         # "utterance" only: no speech since the last "pause", so its audio
+                                        # holds the same words (plus trailing silence)
 
 
 class SpeechEndpointer:
@@ -50,6 +54,7 @@ class SpeechEndpointer:
         self._voiced_ms = 0.0
         self._silence_ms = 0.0
         self._utterance_ms = 0.0
+        self._paused_since_speech = False
 
     @property
     def in_speech(self) -> bool:
@@ -95,18 +100,29 @@ class SpeechEndpointer:
         if voiced:
             self._voiced_ms += frame_ms
             self._silence_ms = 0.0
+            self._paused_since_speech = False
         else:
             self._silence_ms += frame_ms
 
         if self._silence_ms >= self.config.end_silence_ms or self._utterance_ms >= self.config.max_utterance_ms:
             audio = bytes(self._utterance)
             voiced_ms = self._voiced_ms
+            same_as_pause = self._paused_since_speech
             self._end_speech()
             if voiced_ms >= self.config.min_utterance_ms:
-                events.append(EndpointerEvent(kind="utterance", audio=audio, speech_ms=voiced_ms))
+                events.append(EndpointerEvent(kind="utterance", audio=audio, speech_ms=voiced_ms, same_as_pause=same_as_pause))
             else:
                 # Speech started but turned out to be a short noise burst
                 events.append(EndpointerEvent(kind="speech_discarded", speech_ms=voiced_ms))
+        elif (
+            self.config.early_transcribe_ms
+            and not self._paused_since_speech
+            and self._silence_ms >= self.config.early_transcribe_ms
+            and self._voiced_ms >= self.config.min_utterance_ms
+        ):
+            # The caller has probably finished: hand over the audio so far to start transcribing
+            self._paused_since_speech = True
+            events.append(EndpointerEvent(kind="pause", audio=bytes(self._utterance), speech_ms=self._voiced_ms))
         return events
 
     def flush(self) -> Optional[EndpointerEvent]:
@@ -133,6 +149,7 @@ class SpeechEndpointer:
 
     def _end_speech(self) -> None:
         self._in_speech = False
+        self._paused_since_speech = False
         self._utterance = bytearray()
         self._utterance_ms = 0.0
         self._voiced_ms = 0.0

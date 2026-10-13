@@ -81,4 +81,4 @@ def test_google_not_configured(client: TestClient, monkeypatch):
     monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "", raising=False)
     resp = client.post("/api/auth/google", json={"credential": "x"})
     assert resp.status_code == 401 and "GOOGLE_CLIENT_ID" in resp.json()["error"]
-    assert client.get("/api/auth/config").json() == {"google_client_id": None}
+    assert client.get("/api/auth/config").json()["google_client_id"] is None

@@ -1,9 +1,12 @@
+import asyncio
 import base64
 import io
 import logging
 import re
+import time
 import wave
-from typing import Any, AsyncIterator, Dict, Optional
+import weakref
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -25,6 +28,37 @@ def _wav_to_pcm(data: bytes) -> bytes:
         return data
     with wave.open(io.BytesIO(data)) as wav:
         return wav.readframes(wav.getnframes())
+
+
+# Open streaming connections are reused across sentences and calls: a new WebSocket costs
+# 0.5-1 s of handshake before the first audio
+_IDLE_TTL_S = 45.0
+_MAX_IDLE_PER_VOICE = 4
+
+
+class _TTSConnection:
+    def __init__(self, manager: Any, ws: Any):
+        self.manager = manager
+        self.ws = ws
+        self.last_used = time.monotonic()
+
+    async def close(self) -> None:
+        try:
+            await self.manager.__aexit__(None, None, None)
+        except Exception:
+            pass
+
+
+_idle_pools: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[tuple, List[_TTSConnection]]]" = weakref.WeakKeyDictionary()
+
+
+def _idle_pool() -> Dict[tuple, List[_TTSConnection]]:
+    loop = asyncio.get_running_loop()
+    pool = _idle_pools.get(loop)
+    if pool is None:
+        pool = {}
+        _idle_pools[loop] = pool
+    return pool
 
 
 class SarvamTTSProvider(TTSProvider):
@@ -114,24 +148,82 @@ class SarvamTTSProvider(TTSProvider):
             for i in range(0, len(pcm), 3200):
                 yield pcm[i:i + 3200]
 
-    async def _ws_stream(self, text, voice_id, speed, language) -> AsyncIterator[bytes]:
+    def _ws_key(self, voice_id, speed, language) -> Tuple[str, str, str, float]:
+        return (settings.SARVAM_TTS_MODEL, self._language(language), self._speaker(voice_id), max(0.5, min(2.0, speed or 1.0)))
+
+    async def _open(self, key) -> _TTSConnection:
         from sarvamai import AsyncSarvamAI
 
+        model, language, speaker, pace = key
         client = AsyncSarvamAI(api_subscription_key=self._api_key)
-        async with client.text_to_speech_streaming.connect(
-            model=settings.SARVAM_TTS_MODEL, send_completion_event=True
-        ) as ws:
+        manager = client.text_to_speech_streaming.connect(model=model, send_completion_event=True)
+        ws = await manager.__aenter__()
+        conn = _TTSConnection(manager, ws)
+        try:
             await ws.configure(
-                target_language_code=self._language(language),
-                speaker=self._speaker(voice_id),
-                pace=max(0.5, min(2.0, speed or 1.0)),
+                target_language_code=language,
+                speaker=speaker,
+                pace=pace,
                 speech_sample_rate=SAMPLE_RATE,
                 output_audio_codec="linear16",
             )
-            await ws.convert(text)
-            await ws.flush()
+        except BaseException:
+            await conn.close()
+            raise
+        return conn
+
+    async def _acquire(self, key) -> Tuple[_TTSConnection, bool]:
+        """An idle open connection for these voice settings (reused=True), or a new one."""
+        idle = _idle_pool().get(key) or []
+        now = time.monotonic()
+        while idle:
+            conn = idle.pop()
+            if now - conn.last_used < _IDLE_TTL_S:
+                return conn, True
+            asyncio.ensure_future(conn.close())
+        return await self._open(key), False
+
+    @staticmethod
+    def _release(key, conn: _TTSConnection) -> None:
+        conn.last_used = time.monotonic()
+        idle = _idle_pool().setdefault(key, [])
+        if len(idle) < _MAX_IDLE_PER_VOICE:
+            idle.append(conn)
+        else:
+            asyncio.ensure_future(conn.close())
+
+    async def warm(self, voice_id: Optional[str] = None, speed: float = 1.0, language: Optional[str] = None) -> None:
+        """Opens a streaming connection before the first sentence, so the greeting skips the handshake."""
+        if not settings.SARVAM_TTS_STREAMING:
+            return
+        if not self._api_key:
+            self.initialize({})
+        key = self._ws_key(voice_id, speed, language)
+        if _idle_pool().get(key):
+            return
+        try:
+            self._release(key, await self._open(key))
+        except Exception as e:
+            logger.warning(f"Could not pre-open Sarvam TTS stream: {type(e).__name__}: {e}")
+
+    async def _ws_stream(self, text, voice_id, speed, language) -> AsyncIterator[bytes]:
+        key = self._ws_key(voice_id, speed, language)
+        conn, reused = await self._acquire(key)
+        finished = False
+        try:
+            try:
+                await conn.ws.convert(text)
+                await conn.ws.flush()
+            except Exception:
+                if not reused:
+                    raise
+                # Sarvam closed the idle connection: retry once on a fresh one
+                asyncio.ensure_future(conn.close())
+                conn = await self._open(key)
+                await conn.ws.convert(text)
+                await conn.ws.flush()
             header_checked = False
-            async for message in ws:
+            async for message in conn.ws:
                 kind = getattr(message, "type", "")
                 data = getattr(message, "data", None)
                 if kind == "audio" and data is not None:
@@ -143,9 +235,16 @@ class SarvamTTSProvider(TTSProvider):
                     if chunk:
                         yield chunk
                 elif kind == "event":
-                    break  # completion event: all audio has been sent
+                    finished = True  # completion event: all audio has been sent
+                    break
                 elif kind == "error":
                     raise RuntimeError(f"Sarvam TTS stream error: {getattr(data, 'message', data)}")
+        finally:
+            # Only a connection that finished its sentence is clean enough to reuse
+            if finished:
+                self._release(key, conn)
+            else:
+                asyncio.ensure_future(conn.close())
 
     async def synthesize_stream(
         self,

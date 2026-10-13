@@ -1,6 +1,7 @@
 import logging
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.db.session import engine, Base, SessionLocal
 from app.models import (
     User, Client, Agent, AgentVersion,
@@ -24,9 +25,36 @@ def seed_number_pricing(db: Session) -> None:
     db.commit()
 
 
+# Starter plans (pre-GST, INR); seeded only when no plans exist, admins change them on the Plans page.
+# Bigger plans grant more bonus credits per rupee.
+DEFAULT_PLANS = [
+    {"name": "Starter", "description": "Credits for about 500 minutes of calls a month", "monthly_price_inr": 3000.0,
+     "monthly_credits": 3500.0, "max_concurrent_calls": 2},
+    {"name": "Growth", "description": "Credits for about 2,000 minutes a month for growing teams", "monthly_price_inr": 11500.0,
+     "monthly_credits": 14000.0, "max_concurrent_calls": 5},
+    {"name": "Pro", "description": "Credits for about 5,000 minutes a month for busy sales teams", "monthly_price_inr": 27500.0,
+     "monthly_credits": 35000.0, "max_concurrent_calls": 10},
+    {"name": "Business", "description": "Credits for about 15,000 minutes a month for high call volumes", "monthly_price_inr": 75000.0,
+     "monthly_credits": 105000.0, "max_concurrent_calls": 25},
+]
+
+
+def seed_plans(db: Session) -> None:
+    from app.models.subscription import Plan
+    from app.services.subscriptions import apply_credit_fields
+    if db.query(Plan).first():
+        return
+    for order, plan in enumerate(DEFAULT_PLANS):
+        row = Plan(sort_order=order, is_active=True, **plan)
+        apply_credit_fields(row, plan["monthly_credits"], settings.DEFAULT_CREDITS_PER_MINUTE)
+        db.add(row)
+    db.commit()
+
+
 def seed_catalogs(db: Session) -> None:
     """Seed default system tools, integrations, and sample knowledge sources if empty."""
     seed_number_pricing(db)
+    seed_plans(db)
     # 1. Tools
     initial_tools = [
         {
@@ -234,6 +262,14 @@ def seed_catalogs(db: Session) -> None:
             "status": "READY",
             "metadata": {"pages": 24, "file_size_kb": 3200},
         },
+        {
+            "id": "knw_coaching_course_catalog",
+            "name": "Course Brochure, Batches & Fee Structure.pdf",
+            "type": "PDF",
+            "description": "Courses offered, batch timings and start dates, fees and instalments, faculty, demo class policy and admission FAQ.",
+            "status": "READY",
+            "metadata": {"pages": 12, "file_size_kb": 1450},
+        },
     ]
 
     for knw_data in initial_knowledge:
@@ -355,17 +391,52 @@ def seed_real_estate_data(db: Session) -> None:
 # Columns added to tables that already exist; create_all only creates missing tables
 _ADDED_COLUMNS = [
     ("invoices", "description", "TEXT"),
+    ("campaigns", "kind", "VARCHAR(16) NOT NULL DEFAULT 'BULK'"),
+    ("campaigns", "webhook_url", "TEXT"),
+    ("campaigns", "webhook_secret", "VARCHAR(64)"),
+    ("campaign_recipients", "source", "VARCHAR(64)"),
+    ("leads", "consent_given", "BOOLEAN"),
+    ("leads", "consent_at", "TIMESTAMP"),
+    ("leads", "consent_source", "VARCHAR(255)"),
+    ("plans", "monthly_credits", "FLOAT"),
+    ("client_subscriptions", "credits_used", "FLOAT NOT NULL DEFAULT 0"),
+    ("call_usage", "plan_credits", "FLOAT NOT NULL DEFAULT 0"),
+    ("call_usage", "wallet_credits", "FLOAT NOT NULL DEFAULT 0"),
+    ("pricing_settings", "credits_per_minute", "FLOAT"),
 ]
 
 
 def _add_missing_columns() -> None:
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
+    added = set()
     with engine.begin() as conn:
         for table, column, ddl_type in _ADDED_COLUMNS:
             if table in tables and column not in {c["name"] for c in inspector.get_columns(table)}:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+                added.add((table, column))
                 logger.info(f"Added column {table}.{column}")
+        _migrate_to_credits(conn, added)
+
+
+def _migrate_to_credits(conn, added: set) -> None:
+    """
+    Moves minute-based plans to credits (1 credit = Rs 1). A plan grants the larger of its price and its old
+    minutes at the default credit rate, so no subscriber gets fewer minutes than before. Plan minutes already
+    used this period become used credits.
+    """
+    rate = settings.DEFAULT_CREDITS_PER_MINUTE
+    result = conn.execute(text(
+        "UPDATE plans SET monthly_credits = CASE WHEN included_minutes * :rate > monthly_price_inr "
+        "THEN included_minutes * :rate ELSE monthly_price_inr END WHERE monthly_credits IS NULL"
+    ), {"rate": rate})
+    if result.rowcount:
+        logger.info(f"Converted {result.rowcount} plan(s) to monthly credits")
+    if ("client_subscriptions", "credits_used") in added:
+        conn.execute(text("UPDATE client_subscriptions SET credits_used = minutes_used * :rate"), {"rate": rate})
+    if ("call_usage", "wallet_credits") in added:
+        conn.execute(text("UPDATE call_usage SET wallet_credits = overage_charge_inr, plan_credits = included_minutes * :rate"),
+                     {"rate": rate})
 
 
 def init_db() -> None:

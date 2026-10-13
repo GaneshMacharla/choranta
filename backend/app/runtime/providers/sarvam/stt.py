@@ -2,6 +2,7 @@ import asyncio
 import io
 import logging
 import wave
+import weakref
 from typing import Any, Dict, Optional
 
 import httpx
@@ -15,6 +16,18 @@ from app.runtime.providers.stt import STTProvider
 logger = logging.getLogger("choranta.runtime.providers.sarvam.stt")
 
 SAMPLE_RATE = 16000
+
+# One keep-alive client per event loop: a fresh TLS handshake costs ~500 ms on every utterance
+_clients: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient]" = weakref.WeakKeyDictionary()
+
+
+def _client() -> httpx.AsyncClient:
+    loop = asyncio.get_running_loop()
+    client = _clients.get(loop)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(base_url=SARVAM_REST_BASE_URL, timeout=httpx.Timeout(15.0, connect=5.0))
+        _clients[loop] = client
+    return client
 
 
 def _wav(pcm16: bytes) -> bytes:
@@ -80,13 +93,12 @@ class SarvamSTTProvider(STTProvider):
             "language_code": sarvam_language(settings.SARVAM_STT_LANGUAGE, default="unknown"),
         }
         headers = {"api-subscription-key": self._api_key}
-        async with httpx.AsyncClient(base_url=SARVAM_REST_BASE_URL, timeout=httpx.Timeout(15.0, connect=5.0)) as client:
-            response = await client.post(
-                "/speech-to-text",
-                headers=headers,
-                data=data,
-                files={"file": ("audio.wav", wav_bytes, "audio/wav")},
-            )
+        response = await _client().post(
+            "/speech-to-text",
+            headers=headers,
+            data=data,
+            files={"file": ("audio.wav", wav_bytes, "audio/wav")},
+        )
         if response.status_code >= 400:
             logger.error(f"Sarvam STT failed ({response.status_code}): {response.text[:300]}")
             raise RuntimeError(f"Sarvam STT error {response.status_code}")

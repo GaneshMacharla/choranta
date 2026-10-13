@@ -1,11 +1,13 @@
 """
 Monthly plans.
 
-A plan's fee (pre-GST) buys one month that includes a number of call minutes. Minutes beyond that are
-charged from the prepaid wallet at the plan's overage rate. Clients pay each month; when a period ends
+Credits: 1 credit = Rs 1 (pre-GST), and every billed call minute costs the platform credit rate
+(Pricing settings). A plan's fee (pre-GST) buys one month of plan credits, which are used first and
+expire when the period ends. Bought credits (the prepaid wallet) never expire and cover the rest.
+Clients pay each month; when a period ends
 unpaid the subscription is PAST_DUE and calls keep working for SUBSCRIPTION_GRACE_DAYS. Status is worked
-out whenever a subscription is read, so no scheduler is needed. Clients without a subscription stay on
-pay-as-you-go wallet pricing.
+out whenever a subscription is read, so no scheduler is needed. Clients without a subscription use bought
+credits only.
 """
 import calendar
 import logging
@@ -17,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.exceptions import ValidationException
 from app.models.subscription import ClientSubscription, Plan
+from app.services.pricing import credits_per_minute
 
 logger = logging.getLogger("choranta.services.subscriptions")
 
@@ -39,16 +42,29 @@ def add_month(dt: datetime) -> datetime:
 
 # ---------------------------------------------------------------- plans
 
-def validate_plan_fields(name: str, monthly_price_inr: float, included_minutes: int,
-                         overage_per_minute_inr: float, max_concurrent_calls: Optional[int]) -> None:
+def validate_plan_fields(name: str, monthly_price_inr: float, monthly_credits: float,
+                         max_concurrent_calls: Optional[int]) -> None:
     if not (name or "").strip():
         raise ValidationException("Give the plan a name.")
     if monthly_price_inr <= 0:
         raise ValidationException("Monthly price must be greater than zero.")
-    if included_minutes < 0 or overage_per_minute_inr < 0:
-        raise ValidationException("Included minutes and overage rate can't be negative.")
+    if monthly_credits <= 0:
+        raise ValidationException("Monthly credits must be greater than zero.")
     if max_concurrent_calls is not None and max_concurrent_calls < 1:
         raise ValidationException("Concurrent calls must be at least 1, or empty for no limit.")
+
+
+def apply_credit_fields(plan: Plan, monthly_credits: float, credits_per_minute: float) -> None:
+    """Sets a plan's credits, keeping the legacy minute columns consistent with the credit rate."""
+    plan.monthly_credits = float(monthly_credits)
+    plan.included_minutes = int(monthly_credits // credits_per_minute) if credits_per_minute > 0 else 0
+    plan.overage_per_minute_inr = float(credits_per_minute)
+
+
+def plan_credits(plan: Plan) -> float:
+    if plan.monthly_credits is not None:
+        return float(plan.monthly_credits)
+    return float(plan.included_minutes or 0) * settings.DEFAULT_CREDITS_PER_MINUTE
 
 
 # ---------------------------------------------------------------- subscriptions
@@ -75,6 +91,7 @@ def refresh_status(sub: ClientSubscription, now: Optional[datetime] = None) -> C
         sub.current_period_start = _naive(sub.current_period_end)
         sub.current_period_end = add_month(sub.current_period_start)
         sub.minutes_used = 0.0
+        sub.credits_used = 0.0
         sub.renewed_ahead = False
         sub.status = "ACTIVE"
         return refresh_status(sub, now)
@@ -92,8 +109,9 @@ def is_usable(sub: Optional[ClientSubscription]) -> bool:
     return bool(sub) and (sub.status == "ACTIVE" or in_grace(sub))
 
 
-def remaining_minutes(sub: ClientSubscription, plan: Plan) -> float:
-    return max(0.0, float(plan.included_minutes) - float(sub.minutes_used or 0.0))
+def remaining_credits(sub: ClientSubscription, plan: Plan) -> float:
+    """Plan credits left this period (they expire when it ends)."""
+    return max(0.0, plan_credits(plan) - float(sub.credits_used or 0.0))
 
 
 def renewal_blocker(sub: Optional[ClientSubscription], plan: Plan) -> Optional[str]:
@@ -107,7 +125,8 @@ def activate_period(db: Session, client_id: str, plan: Plan, now: Optional[datet
     """
     Applies a paid period. Renewing the same plan while it is active pays the next period, which starts
     when the current one ends. Renewing within the grace period continues from the old period's end.
-    A plan change or a lapsed renewal starts now. Minutes reset with each new period (no proration).
+    A plan change or a lapsed renewal starts now. Plan credits reset with each new period (no proration
+    or rollover).
     """
     now = now or utcnow()
     sub = get_subscription(db, client_id, lock=True)
@@ -129,6 +148,7 @@ def activate_period(db: Session, client_id: str, plan: Plan, now: Optional[datet
     sub.current_period_start = start
     sub.current_period_end = add_month(start)
     sub.minutes_used = 0.0
+    sub.credits_used = 0.0
     sub.cancel_at_period_end = False
     sub.renewed_ahead = False
     refresh_status(sub, now)  # a grace renewal that is already a month old rolls to past due again
@@ -146,11 +166,12 @@ def subscription_out(db: Session, client_id: str) -> Optional[Dict[str, Any]]:
     if not sub:
         return None
     plan = db.get(Plan, sub.plan_id)
+    rate = credits_per_minute(db)
     now = utcnow()
     end = _naive(sub.current_period_end)
     grace_ends = end + timedelta(days=settings.SUBSCRIPTION_GRACE_DAYS)
     return {
-        "plan": plan_out(plan) if plan else None,
+        "plan": plan_out(plan, rate) if plan else None,
         "status": sub.status,
         "usable": is_usable(sub),
         "in_grace": in_grace(sub),
@@ -159,23 +180,27 @@ def subscription_out(db: Session, client_id: str) -> Optional[Dict[str, Any]]:
         "current_period_end": sub.current_period_end,
         "days_left": max(0, (end - now).days) if now < end else 0,
         "minutes_used": round(float(sub.minutes_used or 0.0), 2),
-        "included_minutes": plan.included_minutes if plan else 0,
-        "minutes_remaining": round(remaining_minutes(sub, plan), 2) if plan else 0,
+        "monthly_credits": plan_credits(plan) if plan else 0,
+        "credits_used": round(float(sub.credits_used or 0.0), 2),
+        "credits_remaining": round(remaining_credits(sub, plan), 2) if plan else 0,
+        "credits_per_minute": rate,
         "cancel_at_period_end": sub.cancel_at_period_end,
         "renewed_ahead": sub.renewed_ahead,
     }
 
 
-def plan_out(plan: Plan) -> Dict[str, Any]:
+def plan_out(plan: Plan, credits_per_minute_rate: float) -> Dict[str, Any]:
     gst = settings.GST_RATE_PERCENT / 100.0
+    credits = plan_credits(plan)
     return {
         "id": plan.id,
         "name": plan.name,
         "description": plan.description,
         "monthly_price_inr": plan.monthly_price_inr,
         "monthly_price_with_gst_inr": round(plan.monthly_price_inr * (1 + gst), 2),
-        "included_minutes": plan.included_minutes,
-        "overage_per_minute_inr": plan.overage_per_minute_inr,
+        "monthly_credits": credits,
+        "credits_per_minute": credits_per_minute_rate,
+        "approx_minutes": int(credits // credits_per_minute_rate) if credits_per_minute_rate > 0 else 0,
         "max_concurrent_calls": plan.max_concurrent_calls,
         "is_active": plan.is_active,
         "sort_order": plan.sort_order,

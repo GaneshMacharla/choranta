@@ -12,6 +12,7 @@ from app.models.client import Client
 from app.models.subscription import CallUsage, NumberPricing, Plan
 from app.models.user import User
 from app.services import billing, exotel_numbers, phone_numbers, razorpay_gateway, subscriptions
+from app.services.pricing import credits_per_minute
 
 logger = logging.getLogger("choranta.api.plans")
 
@@ -22,8 +23,7 @@ class PlanRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = None
     monthly_price_inr: float = Field(..., gt=0, description="Monthly fee, excluding GST")
-    included_minutes: int = Field(..., ge=0)
-    overage_per_minute_inr: float = Field(..., ge=0, description="Per extra minute, excluding GST")
+    monthly_credits: float = Field(..., gt=0, description="Credits granted each period (1 credit = Rs 1); they expire at period end")
     max_concurrent_calls: Optional[int] = Field(None, ge=1, description="Empty for no limit")
     is_active: bool = True
     sort_order: int = 0
@@ -61,7 +61,8 @@ def usage_out(db: Session, client_id: str, limit: int = 100) -> List[Dict[str, A
     return [
         {"call_id": u.call_id, "plan_id": u.plan_id, "billed_minutes": u.billed_minutes,
          "included_minutes": u.included_minutes, "overage_minutes": u.overage_minutes,
-         "overage_charge_inr": u.overage_charge_inr, "created_at": u.created_at}
+         "overage_charge_inr": u.overage_charge_inr, "plan_credits": u.plan_credits or 0.0,
+         "wallet_credits": u.wallet_credits or 0.0, "created_at": u.created_at}
         for u in rows
     ]
 
@@ -73,17 +74,16 @@ def list_plans(include_archived: bool = False, db: Session = Depends(get_db), us
     query = db.query(Plan)
     if not (include_archived and user.role in ("ADMIN", "OPERATOR")):
         query = query.filter(Plan.is_active.is_(True))
-    return [subscriptions.plan_out(p) for p in query.order_by(Plan.sort_order, Plan.monthly_price_inr).all()]
+    rate = credits_per_minute(db)
+    return [subscriptions.plan_out(p, rate) for p in query.order_by(Plan.sort_order, Plan.monthly_price_inr).all()]
 
 
-def _apply_plan(plan: Plan, req: PlanRequest) -> None:
-    subscriptions.validate_plan_fields(req.name, req.monthly_price_inr, req.included_minutes,
-                                       req.overage_per_minute_inr, req.max_concurrent_calls)
+def _apply_plan(plan: Plan, req: PlanRequest, rate: float) -> None:
+    subscriptions.validate_plan_fields(req.name, req.monthly_price_inr, req.monthly_credits, req.max_concurrent_calls)
     plan.name = req.name.strip()
     plan.description = (req.description or "").strip() or None
     plan.monthly_price_inr = req.monthly_price_inr
-    plan.included_minutes = req.included_minutes
-    plan.overage_per_minute_inr = req.overage_per_minute_inr
+    subscriptions.apply_credit_fields(plan, req.monthly_credits, rate)
     plan.max_concurrent_calls = req.max_concurrent_calls
     plan.is_active = req.is_active
     plan.sort_order = req.sort_order
@@ -91,20 +91,22 @@ def _apply_plan(plan: Plan, req: PlanRequest) -> None:
 
 @router.post("/plans", status_code=201)
 def create_plan(req: PlanRequest, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    rate = credits_per_minute(db)
     plan = Plan()
-    _apply_plan(plan, req)
+    _apply_plan(plan, req, rate)
     db.add(plan)
     db.commit()
-    return subscriptions.plan_out(plan)
+    return subscriptions.plan_out(plan, rate)
 
 
 @router.put("/plans/{plan_id}")
 def update_plan(plan_id: str, req: PlanRequest, db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    """Changes apply to current subscribers immediately (minutes, overage rate, call limit)."""
+    """Changes apply to current subscribers immediately (credits, call limit)."""
+    rate = credits_per_minute(db)
     plan = _plan_or_404(db, plan_id)
-    _apply_plan(plan, req)
+    _apply_plan(plan, req, rate)
     db.commit()
-    return subscriptions.plan_out(plan)
+    return subscriptions.plan_out(plan, rate)
 
 
 # ---------------------------------------------------------------- client subscriptions

@@ -33,7 +33,7 @@ class AuthService:
         if not user.hashed_password or not verify_password(password, user.hashed_password):
             raise AuthenticationException("Invalid email or password.")
 
-        return self._issue_token(user)
+        return self.issue_token(user)
 
     def authenticate_google(self, credential: str) -> TokenResponse:
         """
@@ -64,7 +64,7 @@ class AuthService:
             user = self._sign_up_client(email, (claims.get("name") or "").strip())
         if user.status != "ACTIVE":
             raise AuthenticationException("This account is inactive. Contact your administrator.")
-        return self._issue_token(user)
+        return self.issue_token(user)
 
     def _sign_up_client(self, email: str, name: str) -> User:
         """Creates a client account and its first portal login for a new Google user."""
@@ -84,7 +84,7 @@ class AuthService:
         self.db.commit()
         return user
 
-    def _issue_token(self, user: User) -> TokenResponse:
+    def issue_token(self, user: User) -> TokenResponse:
         token = create_access_token(
             subject=user.id,
             claims={

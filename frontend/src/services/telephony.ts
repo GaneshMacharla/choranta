@@ -77,6 +77,7 @@ export interface CallCost {
     llm_output_usd_per_million_tokens: number;
     usd_to_inr: number;
     infra_per_minute_inr: number;
+    credits_per_minute?: number;
   };
 }
 

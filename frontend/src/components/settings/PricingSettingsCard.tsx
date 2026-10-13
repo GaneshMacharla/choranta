@@ -7,17 +7,17 @@ import { pricingService, PricingSettings } from '../../services/pricing';
 const inr = (value: number | null | undefined) =>
   value == null ? '—' : `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-/** Admin-only: profit margin and infrastructure overhead that price every call for clients. */
+/** Admin-only: credits each call minute costs clients, and infra overhead for profit reporting. */
 export const PricingSettingsCard: React.FC = () => {
   const [pricing, setPricing] = useState<PricingSettings | null>(null);
-  const [profit, setProfit] = useState('');
+  const [rate, setRate] = useState('');
   const [infra, setInfra] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   const apply = (data: PricingSettings) => {
     setPricing(data);
-    setProfit(String(data.profit_percent));
+    setRate(String(data.credits_per_minute));
     setInfra(String(data.infra_cost_per_minute_inr));
   };
 
@@ -25,23 +25,28 @@ export const PricingSettingsCard: React.FC = () => {
     pricingService.get().then(apply).catch((err) => setMessage({ ok: false, text: err.message }));
   }, []);
 
-  const profitValue = Number(profit);
+  const rateValue = Number(rate);
   const infraValue = Number(infra);
-  const valid = profit !== '' && infra !== '' && profitValue >= 0 && profitValue <= 1000 && infraValue >= 0;
+  const valid = rate !== '' && infra !== '' && rateValue > 0 && rateValue <= 1000 && infraValue >= 0;
 
-  // Live estimate while typing: recent average provider cost + new infra, then the new margin
+  // Live estimate while typing: recent average provider cost + new infra vs. the new credit rate
   const preview = pricing?.preview;
   const providerCostPerMin =
     preview?.avg_cost_per_minute != null ? preview.avg_cost_per_minute - pricing!.infra_cost_per_minute_inr : null;
   const draftCost = providerCostPerMin != null && valid ? providerCostPerMin + infraValue : null;
-  const draftCharge = draftCost != null ? draftCost * (1 + profitValue / 100) : null;
+  // Billed per started minute, so charge per talk minute runs a little above the rate; scale the recent average
+  const pulseFactor =
+    preview?.avg_charge_per_minute != null && pricing && pricing.credits_per_minute > 0
+      ? preview.avg_charge_per_minute / pricing.credits_per_minute
+      : 1;
+  const draftCharge = draftCost != null && valid ? rateValue * pulseFactor : null;
 
   const save = async () => {
     setSaving(true);
     setMessage(null);
     try {
-      apply(await pricingService.update(profitValue, infraValue));
-      setMessage({ ok: true, text: 'Pricing saved. Call charges now use these values.' });
+      apply(await pricingService.update(rateValue, infraValue));
+      setMessage({ ok: true, text: 'Pricing saved. Calls now use this many credits per minute.' });
     } catch (err: any) {
       setMessage({ ok: false, text: err.message || 'Could not save pricing.' });
     } finally {
@@ -50,18 +55,18 @@ export const PricingSettingsCard: React.FC = () => {
   };
 
   return (
-    <Card title="Client Pricing" subtitle="Profit margin on top of call cost (admin only)">
+    <Card title="Client Pricing" subtitle="Credits per call minute (admin only)">
       <div className="space-y-4 text-xs">
         <div className="grid grid-cols-2 gap-3">
           <label className="space-y-1">
-            <span className="block font-medium text-slate-300">Profit %</span>
+            <span className="block font-medium text-slate-300">Credits per minute</span>
             <input
               type="number"
-              min={0}
+              min={0.5}
               max={1000}
               step="0.5"
-              value={profit}
-              onChange={(e) => setProfit(e.target.value)}
+              value={rate}
+              onChange={(e) => setRate(e.target.value)}
               className="w-full rounded border border-[#232736] bg-[#10121a] p-2 text-slate-100"
             />
           </label>
@@ -78,8 +83,8 @@ export const PricingSettingsCard: React.FC = () => {
           </label>
         </div>
         <p className="leading-relaxed text-slate-500">
-          Client charge per call = (provider cost + infra) × (1 + profit %). Infra covers servers, database and
-          plan fees: monthly infra bill ÷ monthly minutes.
+          1 credit = ₹1 (excl. GST). Each call costs billed minutes × credits per minute, taken from plan credits
+          first, then bought credits. Infra (monthly infra bill ÷ monthly minutes) only feeds the profit preview.
         </p>
 
         <div className="rounded border border-[#1b2030] bg-black/30 p-3">

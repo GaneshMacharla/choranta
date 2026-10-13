@@ -89,7 +89,7 @@ def test_calls_blocked_when_wallet_empty(client: TestClient, auth_headers: dict,
             "destination_number": "09876543210"}
 
     blocked = client.post("/api/telephony/calls/outbound", headers=auth_headers, json=body)
-    assert blocked.status_code == 402 and "Wallet" in blocked.json()["detail"]
+    assert blocked.status_code == 402 and "out of credits" in blocked.json()["detail"]
     # Test calls from the Tests step are never blocked
     assert client.post("/api/telephony/calls/outbound", headers=auth_headers, json={**body, "is_test": True}).status_code == 201
 

@@ -34,3 +34,7 @@ class TTSProvider(BaseProvider):
         for i in range(0, len(result.audio_bytes), chunk_size):
             yield result.audio_bytes[i:i + chunk_size]
 
+    async def warm(self, voice_id: Optional[str] = None, speed: float = 1.0, language: Optional[str] = None) -> None:
+        """Opens provider connections ahead of the first synthesis, where the provider supports it."""
+        return None
+

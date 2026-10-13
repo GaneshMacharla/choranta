@@ -80,7 +80,7 @@ export const PortalPlansPage: React.FC = () => {
         </div>
         <h1 className="text-2xl font-bold">{hasPlan ? 'Plans' : `Welcome${user?.name ? `, ${user.name.split(' ')[0]}` : ''}! Choose your plan`}</h1>
         <p className="mx-auto mt-1 max-w-xl text-sm text-slate-400">
-          Each plan includes call minutes every month for your AI employee. Extra minutes are charged from your wallet.
+          Each plan gives your AI employee credits every month (1 credit = ₹1). Calls use plan credits first, then any credits you buy.
         </p>
       </div>
 
@@ -111,7 +111,7 @@ export const PortalPlansPage: React.FC = () => {
       {!hasPlan && (
         <div className="text-center">
           <button type="button" onClick={skip} className="text-xs text-slate-400 underline-offset-2 hover:text-slate-200 hover:underline">
-            Skip for now — pay as you go from your wallet
+            Skip for now — pay as you go with bought credits
           </button>
         </div>
       )}

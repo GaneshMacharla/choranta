@@ -32,3 +32,9 @@ def auth_config():
 def get_current_profile(current_user: User = Depends(get_any_user)):
     """Return the authenticated user's profile (internal staff or client portal)."""
     return UserResponse.model_validate(current_user)
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh_session(current_user: User = Depends(get_any_user), db: Session = Depends(get_db)):
+    """Swap a still-valid token for a fresh one, so active users stay signed in."""
+    return AuthService(db).issue_token(current_user)

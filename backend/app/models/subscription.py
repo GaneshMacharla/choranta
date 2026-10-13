@@ -16,8 +16,9 @@ class Plan(Base):
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     monthly_price_inr = Column(Float, nullable=False)
-    included_minutes = Column(Integer, nullable=False)
-    overage_per_minute_inr = Column(Float, nullable=False)
+    included_minutes = Column(Integer, nullable=False)        # legacy: derived from monthly_credits
+    overage_per_minute_inr = Column(Float, nullable=False)    # legacy: calls now cost the platform credit rate
+    monthly_credits = Column(Float, nullable=True)            # credits granted each period (1 credit = Rs 1)
     max_concurrent_calls = Column(Integer, nullable=True)  # None = unlimited
     is_active = Column(Boolean, nullable=False, default=True)
     sort_order = Column(Integer, nullable=False, default=0)
@@ -35,6 +36,7 @@ class ClientSubscription(Base):
     current_period_start = Column(DateTime, nullable=False)
     current_period_end = Column(DateTime, nullable=False)
     minutes_used = Column(Float, nullable=False, default=0.0)
+    credits_used = Column(Float, nullable=False, default=0.0)  # plan credits used this period
     cancel_at_period_end = Column(Boolean, nullable=False, default=False)
     renewed_ahead = Column(Boolean, nullable=False, default=False)  # next period already paid
     created_at = Column(DateTime, default=_now, nullable=False)
@@ -42,7 +44,7 @@ class ClientSubscription(Base):
 
 
 class CallUsage(Base):
-    """How one billed call was paid for: plan minutes and/or wallet overage. One row per call."""
+    """How one billed call was paid for: plan credits and/or bought (wallet) credits. One row per call."""
     __tablename__ = "call_usage"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_unique_id("use_"))
@@ -52,7 +54,9 @@ class CallUsage(Base):
     billed_minutes = Column(Float, nullable=False, default=0.0)
     included_minutes = Column(Float, nullable=False, default=0.0)
     overage_minutes = Column(Float, nullable=False, default=0.0)
-    overage_charge_inr = Column(Float, nullable=False, default=0.0)
+    overage_charge_inr = Column(Float, nullable=False, default=0.0)  # = wallet_credits (1 credit = Rs 1)
+    plan_credits = Column(Float, nullable=False, default=0.0)
+    wallet_credits = Column(Float, nullable=False, default=0.0)
     created_at = Column(DateTime, default=_now, nullable=False, index=True)
 
 
