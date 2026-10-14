@@ -12,7 +12,7 @@ from app.api.routes import (
     auth, clients, agents, dashboard,
     agent_configuration, catalogs, runtime,
     websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing, inventory, billing, portal, plans,
-    campaigns, api_keys, public_leads, agent_requests, verifications
+    campaigns, api_keys, public_leads, agent_requests, verifications, demo_leads
 )
 
 logging.basicConfig(
@@ -171,3 +171,5 @@ app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)
 app.include_router(webrtc_audio.router)
+if settings.ENVIRONMENT != "production":
+    app.include_router(demo_leads.router)  # dev-only demo website form at /demo/lead-form

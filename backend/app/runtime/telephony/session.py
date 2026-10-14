@@ -798,6 +798,8 @@ class TelephonyMediaSession:
 
     def _farewell(self) -> str:
         farewell = (self.context.agent_spec.conversation.farewell or "").strip() if self.context else ""
+        if farewell:
+            farewell = self.context.fill_placeholders(farewell)
         return farewell or DEFAULT_FAREWELL
 
     def _mark_caller_activity(self) -> None:

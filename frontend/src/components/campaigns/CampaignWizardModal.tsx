@@ -39,8 +39,18 @@ const STEPS = [
   { id: 'review', title: 'Review & Launch' },
 ] as const;
 
+const CUSTOM_NAME = '__custom__';
+const NAME_PRESETS: Record<CampaignKind, string[]> = {
+  TRIGGER: ['Website enquiries', 'New lead callback', 'Missed call callback', 'Form submission follow-up', 'Demo request'],
+  BULK: ['Lead follow-up', 'Payment reminder', 'Appointment reminder', 'Feedback survey', 'Product promotion', 'Event invitation', 'Renewal reminder'],
+};
+
 const EARLIEST = 9 * 60;
 const LATEST = 21 * 60;
+const DAY_END = '24:00';
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+const DEFAULT_WINDOWS: WindowDraft[] = [{ start: '10:00', end: '19:00' }];
+const DEFAULT_DAYS = [0, 1, 2, 3, 4, 5];
 const TIMEZONES = ['Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Europe/London', 'America/New_York', 'UTC'];
 const AVG_CALL_MIN = 2;
 
@@ -81,6 +91,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
   const [options, setOptions] = useState<CampaignOptions | null>(null);
   const [optionsLoading, setOptionsLoading] = useState(false);
   const [name, setName] = useState('');
+  const [customName, setCustomName] = useState(false);
   const [agentId, setAgentId] = useState('');
   const [versionId, setVersionId] = useState('');
   const [connection, setConnection] = useState('exotel');
@@ -106,6 +117,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
   const [timezone, setTimezone] = useState('Asia/Kolkata');
   const [windows, setWindows] = useState<WindowDraft[]>([{ start: '10:00', end: '19:00' }]);
   const [days, setDays] = useState<number[]>([0, 1, 2, 3, 4, 5]);
+  const [allDay, setAllDay] = useState(false);
   const [maxConcurrent, setMaxConcurrent] = useState(1);
   const [retryEnabled, setRetryEnabled] = useState(true);
   const [retryMax, setRetryMax] = useState(2);
@@ -124,8 +136,10 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
     setCreatedId(null);
     setRecipientsImported(false);
     prefill.current = editCampaign || null;
+    setCustomName(!!editCampaign && !NAME_PRESETS[editCampaign.kind].includes(editCampaign.name));
     if (!editCampaign) {
       chooseKind(initialKind);
+      setName('');
       setWebhookUrl('');
       setConsent(false);
     }
@@ -137,6 +151,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       setConnection(c.provider || 'exotel');
       setWindows(c.windows.map((w) => ({ start: minutesToTime(w.start_min), end: minutesToTime(w.end_min) })));
       setDays(c.days);
+      setAllDay(c.kind === 'TRIGGER' && c.days.length === 7 && c.windows.length === 1 && c.windows[0].start_min === 0 && c.windows[0].end_min >= 1439);
       setMaxConcurrent(c.max_concurrent);
       setRetryEnabled(c.retry_max > 0);
       setRetryMax(Math.max(1, c.retry_max));
@@ -232,8 +247,15 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
 
   const isTrigger = kind === 'TRIGGER';
   const recipientCount = source === 'csv' ? preview?.valid || 0 : selectedLeads.size;
+  const setRoundTheClock = (on: boolean) => {
+    setAllDay(on);
+    setWindows(on ? [{ start: '00:00', end: DAY_END }] : DEFAULT_WINDOWS);
+    setDays(on ? ALL_DAYS : DEFAULT_DAYS);
+  };
+
   const chooseKind = (next: CampaignKind) => {
     setKind(next);
+    setRoundTheClock(next === 'TRIGGER');
     setRetryEnabled(true);
     setRetryMax(2);
     setRetryIntervals(next === 'TRIGGER' ? [5, 30] : [30, 60]);
@@ -258,7 +280,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
           const s = timeToMinutes(w.start);
           const e = timeToMinutes(w.end);
           if (s >= e) return 'Each calling window must end after it starts.';
-          if (s < EARLIEST || e > LATEST) return 'Calling windows must be between 09:00 and 21:00.';
+          if (!isTrigger && (s < EARLIEST || e > LATEST)) return 'Calling windows must be between 09:00 and 21:00.';
         }
         if (days.length === 0) return 'Choose at least one calling day.';
         if (maxConcurrent < 1) return 'Concurrent calls must be at least 1.';
@@ -339,7 +361,28 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
 
   const renderAgent = () => (
     <div className="space-y-5">
-      <Input label={`${isTrigger ? 'Name' : 'Campaign name'} *`} placeholder={isTrigger ? 'e.g. Website enquiries' : 'Enter campaign name'} value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="space-y-2">
+        <Select
+          label={isTrigger ? 'Name' : 'Campaign name'}
+          required
+          placeholder={isTrigger ? 'Select a name' : 'Select a campaign name'}
+          value={customName ? CUSTOM_NAME : NAME_PRESETS[kind].includes(name) ? name : ''}
+          onChange={(e) => {
+            const v = e.target.value;
+            setCustomName(v === CUSTOM_NAME);
+            setName(v === CUSTOM_NAME ? '' : v);
+          }}
+          options={[...NAME_PRESETS[kind].map((n) => ({ value: n, label: n })), { value: CUSTOM_NAME, label: 'Custom…' }]}
+        />
+        {customName && (
+          <Input
+            autoFocus
+            placeholder={isTrigger ? 'e.g. Website enquiries' : 'Enter campaign name'}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        )}
+      </div>
 
       {isAdmin && (
         <Select
@@ -677,15 +720,29 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       </div>
 
       <div className="space-y-2">
-        <span className="block text-xs font-medium text-slate-300">Calling windows</span>
+        <div className="flex items-center justify-between">
+          <span className="block text-xs font-medium text-slate-300">Calling windows</span>
+          {isTrigger && (
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-300">
+              <input type="checkbox" className="accent-[#00df8f]" checked={allDay} onChange={(e) => setRoundTheClock(e.target.checked)} />
+              Call 24/7
+            </label>
+          )}
+        </div>
+        {allDay ? (
+          <p className={`${panel} text-xs text-slate-300`}>
+            Every day, around the clock: each lead is called within seconds of submitting the form, whatever the time.
+          </p>
+        ) : (
+        <>
         {windows.map((w, i) => (
           <div key={i} className="flex items-center gap-2">
             <input
               type="time"
               aria-label="Window start"
               value={w.start}
-              min="09:00"
-              max="21:00"
+              min={isTrigger ? undefined : '09:00'}
+              max={isTrigger ? undefined : '21:00'}
               onChange={(e) => setWindows(windows.map((x, j) => (j === i ? { ...x, start: e.target.value } : x)))}
               className="rounded-md border border-[#153945] bg-[#06141a] px-3 py-1.5 text-sm text-slate-100 [color-scheme:dark]"
             />
@@ -694,8 +751,8 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
               type="time"
               aria-label="Window end"
               value={w.end}
-              min="09:00"
-              max="21:00"
+              min={isTrigger ? undefined : '09:00'}
+              max={isTrigger ? undefined : '21:00'}
               onChange={(e) => setWindows(windows.map((x, j) => (j === i ? { ...x, end: e.target.value } : x)))}
               className="rounded-md border border-[#153945] bg-[#06141a] px-3 py-1.5 text-sm text-slate-100 [color-scheme:dark]"
             />
@@ -737,7 +794,13 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
             );
           })}
         </div>
-        <p className="text-xs text-slate-500">Calls are only placed between 09:00 and 21:00. Paused outside the window, they resume in the next one.</p>
+        <p className="text-xs text-slate-500">
+          {isTrigger
+            ? 'Leads submitted outside the window are called when it next opens.'
+            : 'Calls are only placed between 09:00 and 21:00. Paused outside the window, they resume in the next one.'}
+        </p>
+        </>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -818,7 +881,9 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       ['Start', isTrigger ? 'Always on' : startMode === 'now' ? 'As soon as launched' : new Date(startAt).toLocaleString()],
       [
         'Windows',
-        `${windows.map((w) => `${w.start}–${w.end}`).join(', ')} · ${[...days].sort().map((d) => DAY_LABELS[d]).join(', ')} (${timezone})`,
+        allDay
+          ? '24/7, every day'
+          : `${windows.map((w) => `${w.start}–${w.end}`).join(', ')} · ${[...days].sort().map((d) => DAY_LABELS[d]).join(', ')} (${timezone})`,
       ],
       ['Concurrency', `${maxConcurrent} at a time`],
       ['Retries', retryEnabled ? `${retryMax} × after ${retryIntervals.slice(0, retryMax).join(' / ')} min` : 'Off'],

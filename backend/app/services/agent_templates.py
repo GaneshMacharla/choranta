@@ -41,7 +41,7 @@ REAL_ESTATE_LEAD_QUALIFICATION_TEMPLATE: Dict[str, Any] = {
     ],
     "preview": {
         "persona": "Friendly, professional real estate sales assistant speaking natural conversational tone with concise phrasing suitable for phone conversations.",
-        "sample_greeting": "Hello, am I speaking with {{user_name}}? I'm calling from {{company_name}} regarding your property enquiry.",
+        "sample_greeting": "Hello, I'm calling from {{company_name}} regarding your property enquiry.",
         "key_capabilities": [
             "Verify caller identity and greet warmly",
             "Understand preferred budget and desired location",
@@ -104,8 +104,8 @@ REAL_ESTATE_LEAD_QUALIFICATION_TEMPLATE: Dict[str, Any] = {
         "conversation": {
             "tone": "friendly and professional",
             "verbosity": "concise",
-            "greeting": "Hello, am I speaking with {{user_name}}? I'm calling from {{company_name}} regarding your property enquiry.",
-            "farewell": "Thank you for your time, {{user_name}}. Our property consultant will assist you further. Have a wonderful day!",
+            "greeting": "Hello, I'm calling from {{company_name}} regarding your property enquiry.",
+            "farewell": "Thank you for your time. Our property consultant will assist you further. Have a wonderful day!",
             "interruption_behavior": "pause_and_listen"
         },
         "languages": {
@@ -197,7 +197,7 @@ COACHING_ADMISSION_COUNSELLOR_TEMPLATE: Dict[str, Any] = {
     ],
     "preview": {
         "persona": "Warm, patient admission counsellor who speaks simply to both students and parents and never pressures them.",
-        "sample_greeting": "Hello, am I speaking with {{user_name}}? I'm calling from {{company_name}} regarding your course enquiry.",
+        "sample_greeting": "Hello, I'm calling from {{company_name}} regarding your course enquiry.",
         "key_capabilities": [
             "Confirm whether the caller is the student or a parent",
             "Understand class, target exam and preferred batch timing",
@@ -266,8 +266,8 @@ COACHING_ADMISSION_COUNSELLOR_TEMPLATE: Dict[str, Any] = {
         "conversation": {
             "tone": "warm, patient and encouraging",
             "verbosity": "concise",
-            "greeting": "Hello, am I speaking with {{user_name}}? I'm calling from {{company_name}} regarding your course enquiry.",
-            "farewell": "Thank you, {{user_name}}. You'll receive the details shortly. All the best with your preparation!",
+            "greeting": "Hello, I'm calling from {{company_name}} regarding your course enquiry.",
+            "farewell": "Thank you. You'll receive the details shortly. All the best with your preparation!",
             "interruption_behavior": "pause_and_listen"
         },
         "languages": {

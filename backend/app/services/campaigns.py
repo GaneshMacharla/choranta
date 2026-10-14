@@ -41,8 +41,10 @@ from app.services.outbound_calls import OutboundCallError, place_outbound_call
 logger = logging.getLogger("choranta.services.campaigns")
 
 MAX_RECIPIENTS = 10_000
-# Calls are only placed between 09:00 and 21:00 local time
+# Bulk campaigns only call between 09:00 and 21:00 local time. Instant outbound (TRIGGER) calls
+# people who just asked for a callback, so it may run around the clock (window 00:00-24:00).
 EARLIEST_MIN, LATEST_MIN = 9 * 60, 21 * 60
+DAY_MIN = 24 * 60
 MAX_RETRIES = 3
 RETRYABLE_OUTCOMES = ("no-answer", "busy", "failed")
 TERMINAL_CALL_STATUSES = ("COMPLETED", "FAILED", "TERMINATED", "CANCELLED")
@@ -289,9 +291,12 @@ def validate_config(db: Session, campaign: Campaign) -> None:
     windows = campaign.windows or []
     if not windows:
         raise CampaignError("Add at least one calling window.")
+    earliest, latest = (0, DAY_MIN) if campaign.kind == "TRIGGER" else (EARLIEST_MIN, LATEST_MIN)
     for w in windows:
         start, end = int(w.get("start_min", -1)), int(w.get("end_min", -1))
-        if not (EARLIEST_MIN <= start < end <= LATEST_MIN):
+        if not (earliest <= start < end <= latest):
+            if campaign.kind == "TRIGGER":
+                raise CampaignError("Each calling window must end after it starts.")
             raise CampaignError("Calling windows must be between 09:00 and 21:00 and end after they start.")
     days = campaign.days or []
     if not days or any(d not in range(7) for d in days):

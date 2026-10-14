@@ -377,7 +377,7 @@ class AgentRuntime:
                 if call_rules.wants_to_end(llm_result.tool_calls):
                     # The AI employee is hanging up: say its goodbye and end, no further turns
                     call_ended = True
-                    goodbye = call_rules.goodbye_text(spec, llm_result.text)
+                    goodbye = context.fill_placeholders(call_rules.goodbye_text(spec, llm_result.text))
                     if not llm_result.text:
                         streamed_parts.append(goodbye)
                         yield {"type": "delta", "text": goodbye}
@@ -539,7 +539,7 @@ class AgentRuntime:
                 if call_rules.wants_to_end(llm_result.tool_calls):
                     # The AI employee is hanging up: its goodbye is the last reply
                     call_ended = True
-                    llm_result.text = call_rules.goodbye_text(spec, llm_result.text)
+                    llm_result.text = context.fill_placeholders(call_rules.goodbye_text(spec, llm_result.text))
                     llm_result.tool_calls = []
                     break
                 tool_rounds += 1

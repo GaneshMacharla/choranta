@@ -91,6 +91,20 @@ class RuntimeContext:
         greeting = re.sub(r"\{\{[^}]+\}\}", "", greeting).strip()
         return greeting
 
+    def fill_placeholders(self, text: str) -> str:
+        """Fills {{variable}} placeholders from the session's variables and drops any left unresolved,
+        so a raw placeholder is never spoken (e.g. a farewell written as "Thank you, {{user_name}}.")."""
+        import re
+
+        def value(match: "re.Match[str]") -> str:
+            v = self.metadata.get(match.group(1).strip())
+            return "" if v is None or str(v).strip().lower() in ("none", "null") else str(v).strip()
+
+        text = re.sub(r"\{\{([^}]+)\}\}", value, text or "")
+        text = re.sub(r"\s*,\s*(?=[.!?,]|$)", "", text)  # "time, ." -> "time."
+        text = re.sub(r"\s+([,.!?])", r"", text)  # "Thanks , from" -> "Thanks, from"
+        return re.sub(r"\s{2,}", " ", text).strip()
+
     def _compile_system_prompt(self, spec: CanonicalAgentSpec) -> str:
         """Assembles prompt grounding the agent from its immutable canonical spec and variables."""
         company_name = self.metadata.get("company_name") or (spec.business_context and spec.business_context.business_name) or spec.identity.organization or "Apex Realty Bangalore"

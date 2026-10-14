@@ -73,6 +73,6 @@ def test_coaching_template_creates_valid_agent(db):
             metadata={"user_name": "Priya", "company_name": client.name, "course_enquired": "NEET 2027"},
         )
         greeting = ctx.resolved_greeting
-        assert "Priya" in greeting and client.name in greeting
+        assert "Priya" not in greeting and client.name in greeting
         assert "NEET 2027" in ctx.conversation.system_instruction
         assert "{{" not in greeting

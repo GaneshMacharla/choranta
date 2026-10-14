@@ -78,7 +78,7 @@ def test_malformed_llm_reply_returns_fallback(client, auth_headers, monkeypatch)
     assert body["draft_source"] == "fallback"
     cfg = body["configuration"]
     assert cfg["instructions"]["primary_goal"].startswith("Answer calls for a dental clinic")
-    assert "{{user_name}}" in cfg["conversation"]["greeting"]  # outbound greets the lead by name
+    assert "{{user_name}}" not in cfg["conversation"]["greeting"]  # callers are not addressed by name
 
 
 def test_operator_cannot_draft(client, auth_headers, operator_headers):

@@ -4,6 +4,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Ban,
+  ChevronRight,
   Copy,
   Globe,
   Pencil,
@@ -383,6 +384,69 @@ const resultText = (r: CampaignRecipient) => {
   return parts.join(' · ');
 };
 
+const humanize = (key: string) => key.replace(/_/g, ' ');
+
+/** Everything Choranta learned from one person's call(s): the same data the results webhook sends. */
+const RecipientResult: React.FC<{ recipient: CampaignRecipient; callHref: string | null }> = ({ recipient: r, callHref }) => {
+  const outputs = Object.entries(r.result?.outputs || {}).filter(([, v]) => v !== null && v !== undefined && v !== '');
+  const variables = Object.entries(r.variables || {}).filter(([k]) => k !== 'user_name');
+  const lead = r.result?.lead;
+  const actions = r.result?.actions || [];
+  const field = (label: string, value: React.ReactNode) => (
+    <div key={label}>
+      <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-slate-200">{value}</div>
+    </div>
+  );
+  return (
+    <div className="space-y-4 text-xs">
+      <div>
+        <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Call summary</div>
+        <p className="text-slate-200">{r.result?.summary || (r.status === 'PENDING' || r.status === 'DIALING' ? 'The call has not finished yet.' : 'No summary for this call.')}</p>
+      </div>
+      {outputs.length > 0 && (
+        <div>
+          <div className="mb-2 text-[11px] font-medium text-[#00df8f]">Collected answers</div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">{outputs.map(([k, v]) => field(humanize(k), formatOutputValue(v)))}</div>
+        </div>
+      )}
+      {(lead?.qualification_status || lead?.call_disposition || lead?.next_action) && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+          {lead?.qualification_status && field('Qualification', lead.qualification_status)}
+          {lead?.call_disposition && field('Disposition', lead.call_disposition)}
+          {lead?.next_action && field('Next action', lead.next_action)}
+        </div>
+      )}
+      {actions.length > 0 && (
+        <div>
+          <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Actions taken</div>
+          <ul className="space-y-0.5 text-slate-300">
+            {actions.map((a, i) => (
+              <li key={i}>
+                {humanize(a.tool)}
+                {Object.keys(a.arguments || {}).length > 0 && (
+                  <span className="text-slate-500"> ({Object.entries(a.arguments).map(([k, v]) => `${humanize(k)}: ${formatOutputValue(v)}`).join(', ')})</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {variables.length > 0 && (
+        <div>
+          <div className="mb-2 text-[11px] font-medium text-slate-400">Submitted details</div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">{variables.map(([k, v]) => field(humanize(k), v))}</div>
+        </div>
+      )}
+      {callHref && r.last_call_id && (
+        <Link to={callHref} className="inline-block text-[#00df8f] hover:underline">
+          View call transcript &amp; recording →
+        </Link>
+      )}
+    </div>
+  );
+};
+
 export const CampaignDetail: React.FC<{ scope: CampaignScope; basePath: string }> = ({ scope, basePath }) => {
   const { id = '' } = useParams();
   const navigate = useNavigate();
@@ -396,6 +460,7 @@ export const CampaignDetail: React.FC<{ scope: CampaignScope; basePath: string }
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const pageSize = 50;
 
   const load = useCallback(async () => {
@@ -626,8 +691,15 @@ export const CampaignDetail: React.FC<{ scope: CampaignScope; basePath: string }
             {recipients.map((r) => {
               const b = RECIPIENT_BADGE[r.status];
               return (
-                <tr key={r.id} className="border-t border-[#102d38]">
-                  <td className="px-3 py-2 font-mono">{r.phone}</td>
+                <React.Fragment key={r.id}>
+                <tr
+                  className="cursor-pointer border-t border-[#102d38] hover:bg-[#0a2028]/60"
+                  onClick={() => setExpanded(expanded === r.id ? null : r.id)}
+                >
+                  <td className="px-3 py-2 font-mono">
+                    <ChevronRight className={`mr-1 inline h-3.5 w-3.5 text-slate-500 transition-transform ${expanded === r.id ? 'rotate-90' : ''}`} />
+                    {r.phone}
+                  </td>
                   <td className="px-3 py-2">
                     {r.name || '—'}
                     {r.source && campaign.kind === 'TRIGGER' && <div className="text-[11px] text-slate-500">{r.source}</div>}
@@ -655,6 +727,14 @@ export const CampaignDetail: React.FC<{ scope: CampaignScope; basePath: string }
                     {resultText(r) || '—'}
                   </td>
                 </tr>
+                {expanded === r.id && (
+                  <tr className="bg-[#06141a]">
+                    <td colSpan={6} className="px-4 py-4">
+                      <RecipientResult recipient={r} callHref={scope === 'portal' ? `/portal/calls?call=${r.last_call_id}` : null} />
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               );
             })}
           </tbody>

@@ -118,6 +118,16 @@ def test_validation_rejects_bad_settings(db: Session, telephony_setup):
         svc.launch(db, campaign, "usr_test", consent=False)
 
 
+def test_instant_outbound_may_call_24_7_but_bulk_may_not(db: Session, telephony_setup):
+    round_the_clock = dict(windows=[{"start_min": 0, "end_min": 1440}], days=[0, 1, 2, 3, 4, 5, 6])
+    with pytest.raises(svc.CampaignError, match="between 09:00 and 21:00"):
+        _campaign(db, telephony_setup, **round_the_clock)
+
+    campaign = _campaign(db, telephony_setup, name="Website enquiries", kind="TRIGGER", **round_the_clock)
+    assert svc.in_calling_window(campaign, datetime(2026, 10, 17, 21, 30))  # Sunday 03:00 IST
+    assert svc.in_calling_window(campaign, OUT_OF_WINDOW)
+
+
 def test_dials_only_inside_window_and_respects_concurrency(db: Session, telephony_setup):
     dialer = FakeDialer(db, telephony_setup)
     campaign = _running(db, telephony_setup, csv_text="phone\n9876500001\n9876500002\n9876500003\n", max_concurrent=2)

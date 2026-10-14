@@ -62,7 +62,7 @@ async def test_real_estate_template_creation_and_e2e_flow():
         assert "real estate" in config["identity"]["persona"].lower()
 
         # Greeting & Placeholders
-        assert "{{user_name}}" in config["conversation"]["greeting"]
+        assert "{{user_name}}" not in config["conversation"]["greeting"]
         assert "{{company_name}}" in config["conversation"]["greeting"]
 
         # Voice & Languages
@@ -110,7 +110,7 @@ async def test_real_estate_template_creation_and_e2e_flow():
             metadata={"user_name": "Rahul Sharma", "company_name": "Apex Realty"},
         )
         resolved_a = ctx_with_caller.resolved_greeting
-        assert "Rahul Sharma" in resolved_a
+        assert "Rahul Sharma" not in resolved_a  # callers are not addressed by name
         assert "Apex Realty" in resolved_a
         assert "{{" not in resolved_a and "}}" not in resolved_a
 
@@ -124,7 +124,7 @@ async def test_real_estate_template_creation_and_e2e_flow():
             metadata={"company_name": "Apex Realty"},
         )
         resolved_b = ctx_without_caller.resolved_greeting
-        assert "Rahul Sharma" in resolved_b  # Mock lead fallback applied when no source is connected
+        assert "Rahul Sharma" not in resolved_b
         assert "Apex Realty" in resolved_b
         assert "{{" not in resolved_b and "}}" not in resolved_b
 

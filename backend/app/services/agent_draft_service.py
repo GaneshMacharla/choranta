@@ -51,7 +51,7 @@ Return ONLY a JSON object, with no markdown, in exactly this shape:
   }
 }
 
-Greeting and farewell may use {{user_name}} and {{company_name}}. Use {{user_name}} only for outbound calls, because the caller's name is unknown on inbound calls."""
+Greeting and farewell may use {{company_name}}. Do not address the caller by name or use {{user_name}}."""
 
 _DIRECTION_TEXT = {
     "inbound": "Inbound: customers call the business.",
@@ -91,7 +91,7 @@ class AgentDraftService:
         supported = list(dict.fromkeys([req.primary_language] + req.supported_languages))
         is_outbound = req.call_direction == "outbound"
         greeting = (
-            f"Hello {{{{user_name}}}}, this is {req.name.split()[0]} calling from {client.name}. Is this a good time to talk?"
+            f"Hello, this is {req.name.split()[0]} calling from {client.name}. Is this a good time to talk?"
             if is_outbound
             else f"Hello, thank you for calling {client.name}. How can I assist you today?"
         )

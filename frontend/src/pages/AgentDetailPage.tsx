@@ -853,7 +853,7 @@ export const AgentDetailPage: React.FC = () => {
                     conversation: { ...prev.conversation, greeting: e.target.value },
                   }))
                 }
-                placeholder="e.g. Hello, am I speaking with {{user_name}}? I'm calling from {{company_name}} regarding your property enquiry."
+                placeholder="e.g. Hello, I'm calling from {{company_name}} regarding your property enquiry."
               />
             </div>
 

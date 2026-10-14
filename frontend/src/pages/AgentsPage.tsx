@@ -713,7 +713,7 @@ export const AgentsPage: React.FC = () => {
           <div className="rounded-lg border border-[#12313b] bg-[#05151b] p-4 space-y-2">
             <span className="font-semibold text-[#00df8f] block">Configurable Initial Greeting</span>
             <div className="rounded border border-[#1b4e5f] bg-[#09222c] p-3 font-mono text-slate-100 text-[11px] leading-relaxed">
-              &ldquo;Hello, am I speaking with <span className="text-[#00df8f] font-bold">&#123;&#123;user_name&#125;&#125;</span>? I&apos;m calling from <span className="text-[#00df8f] font-bold">&#123;&#123;company_name&#125;&#125;</span> regarding your property enquiry.&rdquo;
+              &ldquo;Hello, I&apos;m calling from <span className="text-[#00df8f] font-bold">&#123;&#123;company_name&#125;&#125;</span> regarding your property enquiry.&rdquo;
             </div>
             <p className="text-[11px] text-slate-400">
               &bull; Dynamic placeholders are substituted from CRM/lead records. If the caller name is missing, a natural greeting is used without speaking raw placeholder tokens.
