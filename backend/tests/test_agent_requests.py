@@ -35,7 +35,7 @@ def test_voices_listed_and_preview_cached(client: TestClient, portal, monkeypatc
 
     calls = []
     monkeypatch.setattr(sarvam_voices.settings, "SARVAM_API_KEY", "test-key", raising=False)
-    monkeypatch.setattr(sarvam_voices, "_synthesize", lambda voice: calls.append(voice) or b"\x01\x00" * 1600)
+    monkeypatch.setattr(sarvam_voices, "_synthesize", lambda voice, lang="en": calls.append(voice) or b"\x01\x00" * 1600)
     sarvam_voices._previews.clear()
     for _ in range(2):
         resp = client.get("/api/portal/voices/priya/preview", headers=portal["headers"])
@@ -158,7 +158,7 @@ def test_studio_lists_sarvam_voices_with_preview(client: TestClient, auth_header
     voices = client.get("/api/catalogs/sarvam-voices", headers=auth_headers).json()
     assert len(voices) == len(sarvam_voices.SARVAM_VOICES) and all(v["provider"] == "sarvam" for v in voices)
     monkeypatch.setattr(sarvam_voices.settings, "SARVAM_API_KEY", "test-key", raising=False)
-    monkeypatch.setattr(sarvam_voices, "_synthesize", lambda voice: b"\x01\x00" * 1600)
+    monkeypatch.setattr(sarvam_voices, "_synthesize", lambda voice, lang="en": b"\x01\x00" * 1600)
     sarvam_voices._previews.clear()
     resp = client.get("/api/catalogs/sarvam-voices/neha/preview", headers=auth_headers)
     assert resp.status_code == 200 and resp.headers["content-type"] == "audio/wav"

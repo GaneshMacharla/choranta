@@ -17,6 +17,27 @@ from app.runtime.tools.mock import (
 
 logger = logging.getLogger("choranta.runtime.tools")
 
+# On a call, choices are offered two at a time ("9 AM or 2:30 PM?"); reading out a list sounds robotic
+_CHOICE_KEYS = ("slot", "time", "option")
+
+
+def offer_two_choices(data: Any) -> Any:
+    """
+    Trims lists of choices (time slots, options) in a tool result to two well-spaced ones (the first and the
+    last, e.g. a morning and an afternoon slot). The rest stay available under "<key>_only_if_asked".
+    """
+    if not isinstance(data, dict):
+        return data
+    trimmed = dict(data)
+    for key, value in data.items():
+        if (
+            isinstance(value, list) and len(value) > 2 and any(word in key.lower() for word in _CHOICE_KEYS)
+            and all(isinstance(item, (str, int, float)) for item in value)
+        ):
+            trimmed[key] = [value[0], value[-1]]
+            trimmed[f"{key}_only_if_asked"] = value[1:-1]
+    return trimmed
+
 
 class ToolExecutor:
     """
@@ -76,6 +97,7 @@ class ToolExecutor:
                 result_data = handler.execute(arguments, timeout=timeout, context={"client_id": client_id})
             else:
                 result_data = handler.execute(arguments, timeout=timeout)
+            result_data = offer_two_choices(result_data)
             return ToolResult(
                 tool_call_id=tool_call_id,
                 success=True,

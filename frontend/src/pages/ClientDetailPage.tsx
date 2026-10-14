@@ -14,11 +14,13 @@ import {
 } from 'lucide-react';
 import { clientsService } from '../services/clients';
 import { agentsService } from '../services/agents';
-import { Client, Agent, AgentCreateInput, ClientUpdateInput, BusinessType } from '../types';
+import { Client, Agent, ClientUpdateInput, BusinessType } from '../types';
 import { Card } from '../components/common/Card';
 import { PropertyInventoryCard } from '../components/inventory/PropertyInventoryCard';
 import { ClientBillingCard } from '../components/billing/ClientBillingCard';
-import { ClientPlanCard } from '../components/billing/ClientPlanCard';
+import { ClientCallLimitCard } from '../components/billing/ClientCallLimitCard';
+import { ClientKnowledgeCard } from '../components/knowledge/ClientKnowledgeCard';
+import { ClientCoursesCard } from '../components/courses/ClientCoursesCard';
 import { Button } from '../components/common/Button';
 import { StatusBadge, Badge } from '../components/common/Badge';
 import { Table, Column } from '../components/common/Table';
@@ -45,16 +47,8 @@ export const ClientDetailPage: React.FC = () => {
   const [editError, setEditError] = useState<string | null>(null);
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
 
-  // Create Agent Modal
-  const [isCreateAgentOpen, setIsCreateAgentOpen] = useState(false);
-  const [agentForm, setAgentForm] = useState<AgentCreateInput>({
-    client_id: '',
-    name: '',
-    role: '',
-    description: '',
-  });
-  const [agentError, setAgentError] = useState<string | null>(null);
-  const [isSubmittingAgent, setIsSubmittingAgent] = useState(false);
+  // New AI employees go through the full wizard, with this client pre-selected
+  const openAgentWizard = () => navigate(`/agents/new?client=${id}`);
 
   const fetchClientData = async () => {
     if (!id) return;
@@ -67,7 +61,6 @@ export const ClientDetailPage: React.FC = () => {
       ]);
       setClient(clientData);
       setAgents(agentsData.items);
-      setAgentForm((prev) => ({ ...prev, client_id: id }));
       setEditForm({
         name: clientData.name,
         business_type: clientData.business_type,
@@ -102,36 +95,6 @@ export const ClientDetailPage: React.FC = () => {
       setEditError(err.message || 'Failed to update client');
     } finally {
       setIsSubmittingEdit(false);
-    }
-  };
-
-  const handleCreateAgentSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!id) return;
-    setAgentError(null);
-
-    if (!agentForm.name.trim()) {
-      setAgentError('Agent name is required.');
-      return;
-    }
-    if (!agentForm.role.trim()) {
-      setAgentError('Agent role is required.');
-      return;
-    }
-
-    setIsSubmittingAgent(true);
-    try {
-      const created = await agentsService.create({
-        ...agentForm,
-        client_id: id,
-      });
-      setIsCreateAgentOpen(false);
-      setAgentForm({ client_id: id, name: '', role: '', description: '' });
-      navigate(`/agents/${created.id}`);
-    } catch (err: any) {
-      setAgentError(err.message || 'Failed to create AI employee');
-    } finally {
-      setIsSubmittingAgent(false);
     }
   };
 
@@ -242,10 +205,10 @@ export const ClientDetailPage: React.FC = () => {
           <Button
             variant="primary"
             size="sm"
-            onClick={() => setIsCreateAgentOpen(true)}
+            onClick={openAgentWizard}
             leftIcon={<Plus className="h-3.5 w-3.5" />}
           >
-            + Create AI Employee
+            Create AI Employee
           </Button>
         </div>
       </div>
@@ -300,10 +263,10 @@ export const ClientDetailPage: React.FC = () => {
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => setIsCreateAgentOpen(true)}
+            onClick={openAgentWizard}
             leftIcon={<Plus className="h-3.5 w-3.5" />}
           >
-            + Create AI Employee
+            Create AI Employee
           </Button>
         </div>
 
@@ -322,9 +285,9 @@ export const ClientDetailPage: React.FC = () => {
                   <Button
                     size="sm"
                     variant="primary"
-                    onClick={() => setIsCreateAgentOpen(true)}
+                    onClick={openAgentWizard}
                   >
-                    + Create AI Employee
+                    Create AI Employee
                   </Button>
                 }
               />
@@ -334,82 +297,13 @@ export const ClientDetailPage: React.FC = () => {
       </div>
 
       {/* PROPERTY INVENTORY (synced from Google Sheet / CRM) */}
-      {id && <ClientPlanCard clientId={id} onChange={() => setBillingVersion((v) => v + 1)} />}
+      {id && client.business_type === 'COACHING' && <ClientCoursesCard clientId={id} />}
+      {id && <ClientKnowledgeCard clientId={id} />}
+
+      <ClientCallLimitCard client={client} onSaved={setClient} />
       {id && <ClientBillingCard key={billingVersion} clientId={id} />}
 
       {id && <PropertyInventoryCard clientId={id} />}
-
-      {/* CREATE AI EMPLOYEE MODAL */}
-      <Modal
-        isOpen={isCreateAgentOpen}
-        onClose={() => setIsCreateAgentOpen(false)}
-        title="Create AI Employee"
-        description={`Configure a new voice employee for ${client.name}.`}
-        maxWidth="md"
-      >
-        <form onSubmit={handleCreateAgentSubmit} className="space-y-4">
-          {agentError && (
-            <div className="rounded border border-rose-900/50 bg-rose-950/30 p-2.5 text-xs text-rose-300">
-              {agentError}
-            </div>
-          )}
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">Client</label>
-            <div className="text-xs font-semibold text-slate-200 bg-[#0d0e14] px-3 py-2 rounded border border-[#1e2330]">
-              {client.name}
-            </div>
-          </div>
-
-          <Input
-            label="Employee Name"
-            required
-            placeholder="e.g. Hospital Receptionist"
-            value={agentForm.name}
-            onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })}
-            helperText="Internal display name for this AI agent"
-          />
-
-          <Input
-            label="Role"
-            required
-            placeholder="e.g. AI Receptionist or Appointment Coordinator"
-            value={agentForm.role}
-            onChange={(e) => setAgentForm({ ...agentForm, role: e.target.value })}
-            helperText="The business persona this agent performs"
-          />
-
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-slate-300">
-              Description
-            </label>
-            <textarea
-              rows={3}
-              className="block w-full rounded-md border border-[#153945] bg-[#06141a] p-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-[#00df8f] focus:ring-1 focus:ring-[#00df8f]"
-              placeholder="Handles incoming patient calls, appointment inquiries, and doctor scheduling..."
-              value={agentForm.description || ''}
-              onChange={(e) => setAgentForm({ ...agentForm, description: e.target.value })}
-            />
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#102d38]">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => setIsCreateAgentOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              isLoading={isSubmittingAgent}
-            >
-              Create AI Employee
-            </Button>
-          </div>
-        </form>
-      </Modal>
 
       {/* EDIT CLIENT MODAL */}
       <Modal

@@ -21,6 +21,9 @@ from app.db.init_db import seed_catalogs
 
 # Ensure test mode
 object.__setattr__(settings, "ENVIRONMENT", "test")
+# Existing suites cover the plan and GST paths; pay-as-you-go without GST is tested by patching these back
+object.__setattr__(settings, "PAYG_ONLY", False)
+object.__setattr__(settings, "GST_REGISTERED", True)
 # Tests never reach real providers, whatever RUNTIME_MODE the developer's .env sets
 object.__setattr__(settings, "RUNTIME_MODE", "mock")
 for _override in ("STT_PROVIDER_OVERRIDE", "TTS_PROVIDER_OVERRIDE", "LLM_PROVIDER_OVERRIDE"):

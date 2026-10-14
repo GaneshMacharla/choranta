@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -14,6 +14,8 @@ router = APIRouter(prefix="/pricing", tags=["Pricing"])
 
 class UpdatePricingRequest(BaseModel):
     profit_percent: float = Field(..., description="Profit added on top of each call's real cost, in percent")
+    payg_max_concurrent_calls: Optional[int] = Field(
+        None, ge=1, description="Default simultaneous calls per client (clients without a plan); admins can override per client")
 
 
 def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
@@ -24,6 +26,7 @@ def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
 def _response(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
     return {
         "profit_percent": pricing.profit_percent,
+        "payg_max_concurrent_calls": pricing.payg_max_concurrent_calls,
         "updated_at": pricing.updated_at.isoformat() if pricing.updated_at else None,
         "updated_by": pricing.updated_by,
         "preview": _preview(db, pricing),
@@ -43,5 +46,5 @@ def update_pricing_settings(
     current_user: User = Depends(require_admin)
 ):
     """Sets the profit % added to every call's real cost (admin only)."""
-    pricing = update_pricing(db, req.profit_percent, current_user.id)
+    pricing = update_pricing(db, req.profit_percent, current_user.id, req.payg_max_concurrent_calls)
     return _response(db, pricing)

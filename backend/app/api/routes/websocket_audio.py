@@ -3,6 +3,7 @@ import json
 import logging
 from app.runtime.tools.catalog import describe_tools
 from app.runtime import call_rules
+from app.runtime.speech_style import apply_voice_style
 from app.runtime.knowledge import apply_knowledge
 import struct
 import time
@@ -223,7 +224,8 @@ async def runtime_audio_websocket(
             async for audio_chunk in tts_provider.synthesize_stream(
                 text=text,
                 voice_id=context.agent_spec.voice.voice_id,
-                speed=context.agent_spec.voice.speed
+                speed=context.agent_spec.voice.speed,
+                language=context.agent_spec.languages.primary
             ):
                 if not assistant_speaking:
                     logger.info(f"TTS stream aborted for session '{session_id}' due to barge-in.")
@@ -376,10 +378,10 @@ async def runtime_audio_websocket(
                 client_id=context.client_id
             )
 
-            call_rules.apply_rules(context.conversation, context.agent_spec)
+            apply_voice_style(context.conversation, context.agent_spec)
             available_tools_list = call_rules.with_end_call(describe_tools(db, context.active_tools))
             llm_result = await llm_provider.generate_async(
-                system_instruction=context.conversation.system_instruction,
+                system_instruction=context.instruction_for_turn(),
                 messages=context.conversation.to_llm_messages(),
                 available_tools=available_tools_list
             )
@@ -427,7 +429,7 @@ async def runtime_audio_websocket(
                     tool_res = runtime.tool_executor.execute_tool(
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
-                        arguments=tc.arguments,
+                        arguments=context.with_contact_details(tc.tool_name, tc.arguments),
                         enabled_tool_ids=context.active_tools,
                         client_id=context.client_id
                     )
@@ -450,7 +452,7 @@ async def runtime_audio_websocket(
 
                 t_tool_llm_start = time.perf_counter()
                 llm_result = await llm_provider.generate_async(
-                    system_instruction=context.conversation.system_instruction,
+                    system_instruction=context.instruction_for_turn(),
                     messages=context.conversation.to_llm_messages(),
                     available_tools=available_tools_list
                 )

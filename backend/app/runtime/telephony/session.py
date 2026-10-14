@@ -24,7 +24,10 @@ from app.runtime.call_limits import CallLimits, resolve_call_limits
 from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony import TelephonyProvider
 from app.runtime.telephony.endpointing import SpeechEndpointer, EndpointerConfig
-from app.runtime.telephony.speech_text import SentenceChunker, clean_for_speech, is_backchannel
+from app.runtime.telephony.speech_text import SentenceChunker, clean_for_speech, is_backchannel, pause_hint
+from app.runtime.telephony import phrases
+from app.runtime.speech_style import VOICE_STYLE_INSTRUCTIONS, VOICE_STYLE_MARKER, apply_voice_style
+from app.schemas.agent_spec import ConversationSpec
 from app.runtime.tools.catalog import describe_tools
 from app.runtime.telephony.recorder import CallRecorder
 from app.runtime.telephony import tts_cache
@@ -43,22 +46,22 @@ EVENT_FLUSH_INTERVAL_S = 0.5
 # Speaking-rate estimate used to work out how much of a sentence the caller heard before cutting in
 CHARS_PER_SECOND = 15.0
 # Transcription starts after 250 ms of silence and is reused if the caller stays quiet until the
-# turn ends at 600 ms, which hides most of the speech-to-text time
-CALL_ENDPOINTER_CONFIG = EndpointerConfig(end_silence_ms=600, early_transcribe_ms=250)
-# Appended to the agent's instructions on phone calls: short spoken replies are both more natural
-# and cheaper (TTS is billed per character).
-PHONE_STYLE_MARKER = "Live phone call style:"
-PHONE_STYLE_INSTRUCTIONS = (
-    "\n\n" + PHONE_STYLE_MARKER + "\n"
-    "- You are speaking on a live phone call. Reply in one or two short sentences (under 30 words).\n"
-    "- Ask only one question at a time. Never use lists, markdown, emojis, symbols or URLs.\n"
-    "- Say numbers and amounts the way people speak them, e.g. 'seventy-five lakh rupees'.\n"
-    "- When the conversation is complete or the caller wants to stop, say a brief goodbye and call the end_call tool."
-)
+# turn ends (VOICE_END_SILENCE_MS), which hides most of the speech-to-text time
+EARLY_TRANSCRIBE_MS = 250
+
+
+def _endpointer_config() -> EndpointerConfig:
+    return EndpointerConfig(end_silence_ms=settings.VOICE_END_SILENCE_MS, early_transcribe_ms=EARLY_TRANSCRIBE_MS)
+
+
+# Appended to the agent's instructions on phone calls (shared with browser test calls)
+PHONE_STYLE_MARKER = VOICE_STYLE_MARKER
+PHONE_STYLE_INSTRUCTIONS = VOICE_STYLE_INSTRUCTIONS
 END_CALL_TOOL = call_rules.END_CALL_TOOL
-DEFAULT_FAREWELL = "Thank you for your time. Have a great day!"
-SILENCE_REPROMPT_TEXT = "Are you still there?"
-SILENCE_GOODBYE_TEXT = "I'll let you go for now. Thank you, goodbye!"
+# The schema's stock fallback; agents that keep it get a natural, localized line instead
+STOCK_FALLBACK_RESPONSE = ConversationSpec.model_fields["fallback_response"].default
+# When the agent's voice provider fails mid-call (outage, out of credits), sentences are spoken with this one
+TTS_FALLBACK_PROVIDER = "sarvam"
 
 # During the greeting, short caller replies ("Hello?", "Haan", "Who is this?") don't cancel it
 GREETING_IGNORE_MAX_WORDS = 4
@@ -76,11 +79,22 @@ def _speech_provider_slot() -> asyncio.Semaphore:
     return slot
 
 
+class FillerText(str):
+    """A line said to fill a silence ("One moment, let me check."): played, never added to the conversation."""
+
+    def __new__(cls, text: str, kind: str):
+        obj = super().__new__(cls, text)
+        obj.kind = kind
+        return obj
+
+
 class _SpokenSentence:
     """One sentence of a reply: its synthesized carrier audio and when it was played."""
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, filler_kind: Optional[str] = None):
         self.text = text
+        self.filler_kind = filler_kind  # "tool_filler" / "slow_ack" for filler lines, else None
+        self.counted = False
         self.audio = bytearray()        # carrier-format audio, filled as TTS streams in
         self.done = False               # synthesis finished
         self.updated = asyncio.Event()
@@ -99,6 +113,10 @@ class _AssistantTurn:
         self.started_audio = False
         self.is_greeting = False
         self.t_reference: Optional[float] = None  # caller speech end, for latency logging
+        self.stt_ms: Optional[int] = None
+        self.first_token_ms: Optional[int] = None
+        self.queued_reply = False   # a sentence of the actual reply has been queued
+        self.tool_filler_said = False
 
 
 class TelephonyMediaSession:
@@ -141,7 +159,7 @@ class TelephonyMediaSession:
         self.t_call_start = time.perf_counter()
 
         # Caller speech endpointing: utterances are complete phrases, never silence or noise
-        self.endpointer = SpeechEndpointer(CALL_ENDPOINTER_CONFIG)
+        self.endpointer = SpeechEndpointer(_endpointer_config())
         self._utterance_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
         self._early_transcript: Optional[asyncio.Task] = None
         self._utterance_worker: Optional[asyncio.Task] = None
@@ -169,6 +187,13 @@ class TelephonyMediaSession:
         self._wrapping_up = False
         self._processing_utterance = False
         self._watchdog_task: Optional[asyncio.Task] = None
+
+        # Canned lines said on this call (so the next one differs) and conversation-quality counters
+        self._phrase_history: Dict[str, str] = {}
+        self._latencies_ms: List[int] = []
+        self._fillers_played: Dict[str, int] = {"tool_filler": 0, "slow_ack": 0}
+        self._barge_ins = 0
+        self._false_barge_ins = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -243,7 +268,8 @@ class TelephonyMediaSession:
             "reason": reason, "duration_seconds": self.call_record.duration_seconds
         })
         self._emit(RuntimeEventType.CALL_COMPLETED, {
-            "call_id": self.call_record.id, "duration_seconds": self.call_record.duration_seconds
+            "call_id": self.call_record.id, "duration_seconds": self.call_record.duration_seconds,
+            "conversation_quality": self.conversation_quality(),
         })
 
         if self._flush_task and not self._flush_task.done():
@@ -417,7 +443,26 @@ class TelephonyMediaSession:
             logger.info(f"Caller said end-call phrase '{user_text}'; hanging up.")
             self._say_then_hang_up(self._farewell(), "end_call_phrase")
             return
-        self._start_turn(self._respond(t_end))
+        self._start_turn(self._respond_when_done(t_end, user_text, stt_ms))
+
+    async def _respond_when_done(self, t_end: float, user_text: str, stt_ms: Optional[int] = None) -> None:
+        """
+        Replies once the caller has finished. If they trailed off mid-thought ("my budget is...", half a
+        phone number), waits a little first: if they carry on, their next words cancel this turn and are
+        merged into the same message, so the agent answers the whole thought once.
+        """
+        if self._turn:
+            self._turn.stt_ms = stt_ms
+        hint = pause_hint(user_text)
+        # A clear sign they'll carry on ("my budget is...") waits the full hold; a weak one (a Telugu/Hindi
+        # phrase ending on a case ending) waits half, so short complete answers stay quick
+        hold_ms = settings.VOICE_INCOMPLETE_HOLD_MS * (1.0 if hint == "strong" else 0.5 if hint == "weak" else 0.0)
+        if hold_ms > 0:
+            logger.info(f"Caller may not have finished ('{user_text[-40:]}', {hint}); waiting {hold_ms:.0f} ms.")
+            await asyncio.sleep(hold_ms / 1000.0)
+            while self.endpointer.in_speech:  # they carried on: their utterance will replace this turn
+                await asyncio.sleep(0.05)
+        await self._respond(t_end)
 
     # ------------------------------------------------------------------
     # Interruptions
@@ -431,6 +476,7 @@ class TelephonyMediaSession:
         if not self.assistant_speaking and not self._is_playing():
             return
         self._paused = True
+        self._barge_ins += 1
         self._resume_event.clear()
         self._pause_time = time.monotonic()
         self.assistant_speaking = False
@@ -443,6 +489,8 @@ class TelephonyMediaSession:
         self._emit(RuntimeEventType.ASSISTANT_INTERRUPTED, {"reason": "telephony_barge_in"})
 
     def _resume(self) -> None:
+        if self._paused:
+            self._false_barge_ins += 1  # noise or "haan": the reply carries on
         self._paused = False
         self._pause_time = None
         self._resume_event.set()
@@ -453,7 +501,12 @@ class TelephonyMediaSession:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                # The turn's cancellation is expected; our own (the call is closing) must propagate
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
+            except Exception:
                 pass
         if turn and not turn.committed:
             self._commit_turn(turn, interrupted=True)
@@ -517,6 +570,15 @@ class TelephonyMediaSession:
         sentences: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         player = asyncio.create_task(self._play_sentences(turn, sentences))
         chunker = SentenceChunker()
+
+        async def put(sentence: str) -> None:
+            turn.queued_reply = True
+            await sentences.put(sentence)
+
+        ack = (
+            asyncio.create_task(self._slow_reply_ack(turn, sentences))
+            if settings.VOICE_SLOW_REPLY_ACK_MS > 0 else None
+        )
         try:
             self._emit(RuntimeEventType.LLM_REQUEST_STARTED, {})
             t_llm = time.perf_counter()
@@ -527,7 +589,7 @@ class TelephonyMediaSession:
                 messages = self.context.conversation.to_llm_messages()
                 stream = _iterate_in_thread(
                     llm.generate_stream,
-                    system_instruction=self.context.conversation.system_instruction,
+                    system_instruction=self.context.instruction_for_turn(),
                     messages=messages,
                     available_tools=tools if rounds < limits.max_tool_rounds else None,
                 )
@@ -537,10 +599,11 @@ class TelephonyMediaSession:
                         if isinstance(item, str):
                             if first_token_ms is None:
                                 first_token_ms = round((time.perf_counter() - t_llm) * 1000)
+                                turn.first_token_ms = first_token_ms
                             streamed_text.append(item)
                             turn.full_text_parts.append(item)
                             for sentence in chunker.feed(item):
-                                await sentences.put(sentence)
+                                await put(sentence)
                                 queued_chars += len(sentence)
                             if max_chars and queued_chars >= max_chars:
                                 # Long-winded reply: stop after the sentence that crossed the cap
@@ -577,17 +640,21 @@ class TelephonyMediaSession:
                         )
                     self._emit(RuntimeEventType.TOOL_CALL_COMPLETED, {"tool_name": "end_call", "success": True})
                     for sentence in chunker.flush():
-                        await sentences.put(sentence)
+                        await put(sentence)
                         queued_chars += len(sentence)
                     if not queued_chars:
                         farewell = self._farewell()
                         turn.full_text_parts.append(farewell)
-                        await sentences.put(farewell)
+                        await put(farewell)
                     break
 
                 # Tool round: speak any lead-in text first, then run the tools
                 for sentence in chunker.flush():
-                    await sentences.put(sentence)
+                    await put(sentence)
+                if settings.VOICE_TOOL_FILLER and not turn.tool_filler_said and not "".join(streamed_text).strip():
+                    # Don't leave the caller in silence while the tool runs
+                    turn.tool_filler_said = True
+                    await sentences.put(FillerText(self._phrase("tool_filler"), "tool_filler"))
                 rounds += 1
                 self.context.conversation.add_assistant_message(
                     content=final.text,
@@ -597,16 +664,18 @@ class TelephonyMediaSession:
                     self._emit(RuntimeEventType.TOOL_CALL_STARTED, {
                         "call_id": tc.id, "tool_name": tc.tool_name, "arguments": tc.arguments
                     })
+                    t_tool = time.perf_counter()
                     result = await asyncio.to_thread(
                         self.runtime.tool_executor.execute_tool,
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
-                        arguments=tc.arguments,
+                        arguments=self.context.with_contact_details(tc.tool_name, tc.arguments),
                         enabled_tool_ids=self.context.active_tools,
                         client_id=self.context.client_id
                     )
                     self._emit(RuntimeEventType.TOOL_CALL_COMPLETED, {
-                        "call_id": tc.id, "success": result.success, "data": result.data, "error": result.error
+                        "call_id": tc.id, "success": result.success, "data": result.data, "error": result.error,
+                        "duration_ms": round((time.perf_counter() - t_tool) * 1000),
                     })
                     self.context.conversation.add_tool_result(
                         tool_call_id=tc.id,
@@ -618,21 +687,47 @@ class TelephonyMediaSession:
 
             if not capped:
                 for sentence in chunker.flush():
-                    await sentences.put(sentence)
+                    await put(sentence)
             if not "".join(turn.full_text_parts).strip():
-                fallback = self.context.agent_spec.conversation.fallback_response or "Sorry, could you say that again?"
+                fallback = self._fallback_text()
                 turn.full_text_parts.append(fallback)
-                await sentences.put(fallback)
+                await put(fallback)
             self._emit(RuntimeEventType.LLM_RESPONSE, {"first_token_ms": first_token_ms, "tool_rounds": rounds})
             await sentences.put(None)
             await player
         finally:
+            if ack and not ack.done():
+                ack.cancel()
             if not player.done():
                 player.cancel()
                 try:
                     await player
                 except (asyncio.CancelledError, Exception):
                     pass
+
+    async def _slow_reply_ack(self, turn: _AssistantTurn, sentences: "asyncio.Queue[Optional[str]]") -> None:
+        """Says a short "Okay." when the reply is slow to start, so the caller isn't left in silence."""
+        try:
+            await asyncio.sleep(settings.VOICE_SLOW_REPLY_ACK_MS / 1000.0)
+        except asyncio.CancelledError:
+            return
+        if turn.queued_reply or turn.sentences or self.endpointer.in_speech or self._paused:
+            return
+        await sentences.put(FillerText(self._phrase("slow_ack"), "slow_ack"))
+
+    def _language(self) -> str:
+        spec = self.context.agent_spec if self.context else None
+        return (spec.languages.primary if spec and spec.languages else None) or "en"
+
+    def _phrase(self, kind: str) -> str:
+        """A canned line in the agent's language, never the same variant twice in a row on this call."""
+        return phrases.pick(kind, self._language(), self._phrase_history)
+
+    def _fallback_text(self) -> str:
+        custom = (self.context.agent_spec.conversation.fallback_response or "").strip()
+        if custom and custom != STOCK_FALLBACK_RESPONSE:
+            return custom  # an operator wrote this agent's own fallback
+        return self._phrase("fallback")
 
     async def _play_sentences(self, turn: _AssistantTurn, sentences: "asyncio.Queue[Optional[str]]") -> None:
         """
@@ -650,10 +745,11 @@ class TelephonyMediaSession:
                 text = await sentences.get()
                 if text is None:
                     break
+                filler_kind = text.kind if isinstance(text, FillerText) else None
                 text = clean_for_speech(text)
                 if not text:
                     continue
-                turn.sentences.append(_SpokenSentence(text))
+                turn.sentences.append(_SpokenSentence(text, filler_kind))
                 new_sentence.set()
             all_queued.set()
             new_sentence.set()
@@ -712,9 +808,29 @@ class TelephonyMediaSession:
             raise
         except Exception as e:
             logger.error(f"TTS failed for sentence: {type(e).__name__}: {e}")
+            if not sentence.audio and spec.providers.tts != TTS_FALLBACK_PROVIDER:
+                # e.g. Cartesia out of credits: say it in a Sarvam voice rather than leave the caller in silence
+                await self._synthesize_fallback(sentence)
         finally:
             sentence.done = True
             sentence.updated.set()
+
+    async def _synthesize_fallback(self, sentence: _SpokenSentence) -> None:
+        spec = self.context.agent_spec
+        try:
+            fallback = default_registry.get_tts(TTS_FALLBACK_PROVIDER)
+            async with _speech_provider_slot():
+                async for chunk in fallback.synthesize_stream(
+                    text=sentence.text, voice_id=None, speed=spec.voice.speed, language=spec.languages.primary
+                ):
+                    if chunk:
+                        sentence.audio.extend(self.telephony_provider.normalize_audio_outbound(chunk))
+                        sentence.updated.set()
+            logger.warning(f"Spoke a sentence with the {TTS_FALLBACK_PROVIDER} voice after {spec.providers.tts} failed.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Fallback TTS failed too: {type(e).__name__}: {e}")
 
     async def _play_sentence(self, turn: _AssistantTurn, sentence: _SpokenSentence, on_wait=None) -> None:
         """Sends one sentence's audio paced to real time; restarts it after a false interruption."""
@@ -759,6 +875,9 @@ class TelephonyMediaSession:
         start = max(now, self._play_clock)
         if sentence.play_start is None:
             sentence.play_start = start
+        if sentence.filler_kind and not sentence.counted:
+            sentence.counted = True
+            self._fillers_played[sentence.filler_kind] = self._fillers_played.get(sentence.filler_kind, 0) + 1
         self._play_clock = start + frame_ms / 1000.0
         sentence.play_end = self._play_clock
 
@@ -767,7 +886,13 @@ class TelephonyMediaSession:
             if turn.t_reference:
                 latency = round((time.perf_counter() - turn.t_reference) * 1000)
                 logger.info(f"Agent started speaking {latency} ms after the caller finished.")
-                self._emit(RuntimeEventType.TTS_STARTED, {"response_latency_ms": latency})
+                self._latencies_ms.append(latency)
+                self._emit(RuntimeEventType.TTS_STARTED, {
+                    "response_latency_ms": latency,
+                    "stt_ms": turn.stt_ms,
+                    "llm_first_token_ms": turn.first_token_ms,
+                    "first_audio_filler": sentence.filler_kind or "none",
+                })
         self.assistant_speaking = True
 
         await self.websocket.send_text(self.telephony_provider.build_media_message(self.stream_sid, frame))
@@ -782,14 +907,8 @@ class TelephonyMediaSession:
     # ------------------------------------------------------------------
 
     def _apply_phone_style(self) -> None:
-        conversation = self.context.conversation
-        if PHONE_STYLE_MARKER in conversation.system_instruction:
-            return
-        conversation.system_instruction += PHONE_STYLE_INSTRUCTIONS
-        if conversation.messages and conversation.messages[0].role == ConversationRole.SYSTEM:
-            conversation.messages[0].content = conversation.system_instruction.strip()
-        # Stay on the business's topic; hang up straight away on unrelated talk
-        call_rules.apply_rules(conversation, self.context.agent_spec)
+        # Human speaking style, plus staying on the business's topic
+        apply_voice_style(self.context.conversation, self.context.agent_spec)
 
     @property
     def limits(self) -> CallLimits:
@@ -797,10 +916,9 @@ class TelephonyMediaSession:
         return resolve_call_limits(self.context.agent_spec if self.context else None)
 
     def _farewell(self) -> str:
-        farewell = (self.context.agent_spec.conversation.farewell or "").strip() if self.context else ""
-        if farewell:
-            farewell = self.context.fill_placeholders(farewell)
-        return farewell or DEFAULT_FAREWELL
+        # The agent's own farewell, already in the call's language; else a localized default
+        farewell = (getattr(self.context, "resolved_farewell", "") or "").strip() if self.context else ""
+        return farewell or self._phrase("default_farewell")
 
     def _mark_caller_activity(self) -> None:
         self._last_activity = time.monotonic()
@@ -817,6 +935,10 @@ class TelephonyMediaSession:
         """Lets the last words finish playing, then ends the call by closing the media stream."""
         self._end_reason = self._end_reason or reason
         await asyncio.sleep(max(0.0, self._play_clock - time.monotonic()) + 0.4)
+        # Don't cut off a caller who is still talking (e.g. saying goodbye back)
+        deadline = time.monotonic() + 3.0
+        while self.endpointer.in_speech and time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
         logger.info(f"Hanging up call {self.call_record.id} ({self._end_reason}).")
         try:
             await self.websocket.close()
@@ -846,12 +968,25 @@ class TelephonyMediaSession:
                 silent = time.monotonic() - self._last_activity
                 if not self._reprompted and silent >= limits.silence_reprompt_s:
                     self._reprompted = True
-                    self._start_turn(self._speak_text(SILENCE_REPROMPT_TEXT))
+                    self._start_turn(self._speak_text(self._phrase("reprompt")))
                 elif self._reprompted and silent >= limits.silence_hangup_s:
                     logger.info(f"Caller silent on call {self.call_record.id}; hanging up.")
-                    self._say_then_hang_up(SILENCE_GOODBYE_TEXT, "caller_silent")
+                    self._say_then_hang_up(self._phrase("silence_goodbye"), "caller_silent")
         except asyncio.CancelledError:
             pass
+
+    def conversation_quality(self) -> Dict[str, Any]:
+        """How human the call felt: reply latency, fillers used and interruptions."""
+        latencies = sorted(self._latencies_ms)
+        return {
+            "turns": len(latencies),
+            "avg_response_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
+            "p90_response_latency_ms": latencies[min(len(latencies) - 1, int(len(latencies) * 0.9))] if latencies else None,
+            "max_response_latency_ms": latencies[-1] if latencies else None,
+            "fillers_played": dict(self._fillers_played),
+            "barge_ins": self._barge_ins,
+            "false_barge_ins": self._false_barge_ins,
+        }
 
     # ------------------------------------------------------------------
     # Recording
@@ -886,11 +1021,13 @@ class TelephonyMediaSession:
     # ------------------------------------------------------------------
 
     def _heard_text(self, turn: _AssistantTurn, interrupted: bool) -> str:
+        # Fillers ("One moment, let me check.") were said, but aren't part of the agent's reply
+        reply = [s for s in turn.sentences if not s.filler_kind]
         if not interrupted:
-            return " ".join(s.text for s in turn.sentences) or "".join(turn.full_text_parts).strip()
+            return " ".join(s.text for s in reply) or "".join(turn.full_text_parts).strip()
         cutoff = self._pause_time or time.monotonic()
         heard: List[str] = []
-        for sentence in turn.sentences:
+        for sentence in reply:
             if sentence.play_start is None or sentence.play_start >= cutoff:
                 break
             if sentence.finished_sending and sentence.play_end and sentence.play_end <= cutoff:

@@ -31,6 +31,10 @@ class InstructionsSpec(BaseModel):
     rules: List[str] = Field(default_factory=list, description="Behavioral rules to strictly follow")
     restrictions: List[str] = Field(default_factory=list, description="Explicit boundaries and prohibitions")
     escalation_rules: List[str] = Field(default_factory=list, description="Conditions for escalating to human")
+    # Call script: what to ask, what to say, and the step to agree (used in order in the call flow)
+    discovery_questions: List[str] = Field(default_factory=list, description="Questions to ask the caller, in order")
+    offer_points: List[str] = Field(default_factory=list, description="Points to mention that match the caller's needs")
+    next_step: str = Field(default="", description="The concrete next step to propose (e.g. book a free demo)")
 
 
 class CallLimitsSpec(BaseModel):

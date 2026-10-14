@@ -78,7 +78,7 @@ export const OverviewPage: React.FC = () => {
             leftIcon={<Building2 className="h-3.5 w-3.5" />}
             onClick={() => navigate('/clients?action=create')}
           >
-            + Create Client
+            Create Client
           </Button>
           <Button
             variant="primary"
@@ -86,7 +86,7 @@ export const OverviewPage: React.FC = () => {
             leftIcon={<Bot className="h-3.5 w-3.5" />}
             onClick={() => navigate('/agents?action=create')}
           >
-            + Create AI Employee
+            Create AI Employee
           </Button>
         </div>
       </div>
@@ -178,7 +178,7 @@ export const OverviewPage: React.FC = () => {
                     variant="secondary"
                     onClick={() => navigate('/clients?action=create')}
                   >
-                    + Create Client
+                    Create Client
                   </Button>
                 }
               />
@@ -239,7 +239,7 @@ export const OverviewPage: React.FC = () => {
                     variant="secondary"
                     onClick={() => navigate('/agents?action=create')}
                   >
-                    + Create AI Employee
+                    Create AI Employee
                   </Button>
                 }
               />

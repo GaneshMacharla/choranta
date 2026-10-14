@@ -103,11 +103,17 @@ class Settings(BaseSettings):
     INVOICE_PREFIX: str = "CHR"
     INVOICE_SAC_CODE: str = "998319"          # confirm the correct SAC with your CA
     GST_RATE_PERCENT: float = 18.0
+    # Not GST-registered yet: no GST is charged and payments get a plain receipt, not a tax invoice.
+    # Once registered, set GST_REGISTERED=true and COMPANY_GSTIN in .env.
+    GST_REGISTERED: bool = False
+    # Monthly plans are retired: clients buy credits and pay per call (existing plans run out, then stop)
+    PAYG_ONLY: bool = True
+    DEFAULT_PAYG_MAX_CONCURRENT_CALLS: int = 3  # until an admin sets it in Settings
     PAYMENT_UPI_ID: str = ""
     PAYMENT_BANK_DETAILS: str = ""
     BILLING_ENFORCED: bool = True             # block new billable calls when the wallet balance is <= 0
     SUBSCRIPTION_GRACE_DAYS: int = 3          # calls keep working this long after a plan period ends unpaid
-    MIN_WALLET_TOPUP_INR: float = 500.0       # smallest online wallet top-up (GST included)
+    MIN_WALLET_TOPUP_INR: float = 500.0       # smallest online wallet top-up (GST included when registered)
     NUMBER_GRACE_DAYS: int = 3                # unpaid number rent: released back to Exotel after this
     NUMBER_RENTAL_CHECK_S: int = 900          # how often number rent is renewed / released
     CAMPAIGN_TICK_S: int = 5                  # how often the campaign dispatcher checks for calls to place
@@ -130,12 +136,18 @@ class Settings(BaseSettings):
     # --------------------------------------------------------
     # Phone call behaviour (cost control)
     # --------------------------------------------------------
-    VOICE_MAX_REPLY_CHARS: int = 220          # stop the agent's reply after the sentence that crosses this (TTS is billed per character)
+    VOICE_MAX_REPLY_CHARS: int = 130          # stop the agent's reply after the sentence that crosses this (~7 s of speech; people talk in short turns)
     VOICE_PREFETCH_SENTENCES: int = 1         # sentences synthesized ahead of playback (unheard audio is still billed)
     VOICE_TTS_CACHE_MB: int = 64              # repeated sentences (greeting, farewell, common replies) replay from memory; 0 = off
     CALL_SILENCE_REPROMPT_S: float = 8.0      # caller silent this long -> "Are you still there?"
     CALL_SILENCE_HANGUP_S: float = 8.0        # still silent after the reprompt -> goodbye and hang up
     CALL_MAX_DURATION_S: int = 600            # wrap up and hang up after this many seconds
+
+    # Human-like turn-taking
+    VOICE_END_SILENCE_MS: int = 550           # caller silence that ends their turn (unfinished sentences get VOICE_INCOMPLETE_HOLD_MS more)
+    VOICE_INCOMPLETE_HOLD_MS: int = 900       # extra wait when the caller trailed off mid-thought ("my budget is..."); 0 = off
+    VOICE_SLOW_REPLY_ACK_MS: int = 1800       # say a short "Okay." if the reply hasn't started by then; 0 = off
+    VOICE_TOOL_FILLER: bool = True            # say "One moment, let me check." while a tool runs (unless the agent already did)
 
     # Mock-only pricing estimates. These never contribute to production billing.
     MOCK_STT_PRICE_PER_MINUTE: float = 0.02
@@ -170,6 +182,11 @@ class Settings(BaseSettings):
     KYC_UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "kyc")
     RUN_REAL_TELEPHONY_TESTS: bool = False
 
+
+    @property
+    def EFFECTIVE_GST_RATE_PERCENT(self) -> float:
+        """GST charged on payments: the GST rate once registered, else 0."""
+        return self.GST_RATE_PERCENT if self.GST_REGISTERED else 0.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

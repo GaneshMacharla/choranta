@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, DateTime, event, text
+from sqlalchemy import Column, Integer, String, Text, DateTime, event, text
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
@@ -21,6 +21,7 @@ class Client(Base):
     contact_phone = Column(String(64), nullable=True)
     timezone = Column(String(64), nullable=False, default="UTC")
     status = Column(String(32), nullable=False, default="ACTIVE", index=True)
+    max_concurrent_calls = Column(Integer, nullable=True)  # admin override; None = the platform default
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 

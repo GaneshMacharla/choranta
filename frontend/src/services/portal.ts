@@ -21,6 +21,8 @@ export interface Wallet {
   low_balance: boolean;
   calls_blocked: boolean;
   calls_blocked_reason: string | null;
+  /** False until the company is GST-registered: no GST is charged and payments get a receipt */
+  gst_registered: boolean;
   subscription: Subscription | null;
   transactions: WalletTransaction[];
 }
@@ -158,6 +160,7 @@ export interface PaymentInstructions {
   upi_id: string | null;
   bank_details: string | null;
   gst_rate_percent: number;
+  gst_registered: boolean;
   note: string;
 }
 
@@ -233,6 +236,10 @@ export const portalService = {
       grace_days: number;
       min_topup_inr: number;
       gst_rate_percent: number;
+      gst_registered: boolean;
+      payg_only: boolean;
+      /** Typical credits one call minute costs (recent average) */
+      avg_credits_per_minute: number;
     }>('/portal/subscription'),
   usage: () => request<CallUsage[]>('/portal/usage'),
   numbers: () =>

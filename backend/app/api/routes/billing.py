@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin, require_operator
+from app.core.config import settings
 from app.core.security import generate_unique_id
 from app.models.billing import ClientBillingProfile, ClientUser, Invoice, WalletTransaction
 from app.models.client import Client
@@ -93,6 +94,7 @@ def wallet_out(db: Session, client_id: str, limit: int = 100) -> Dict[str, Any]:
         "low_balance": wallet.balance_inr <= wallet.low_balance_threshold_inr,
         "calls_blocked": not allowed,
         "calls_blocked_reason": reason,
+        "gst_registered": settings.GST_REGISTERED,
         "subscription": subscriptions.subscription_out(db, client_id),
         "transactions": [transaction_out(t) for t in txns],
     }

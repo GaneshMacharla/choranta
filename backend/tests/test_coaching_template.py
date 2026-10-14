@@ -76,3 +76,26 @@ def test_coaching_template_creates_valid_agent(db):
         assert "Priya" not in greeting and client.name in greeting
         assert "NEET 2027" in ctx.conversation.system_instruction
         assert "{{" not in greeting
+
+        # Nothing known about the caller: the template's example values are never presented as facts
+        unknown = RuntimeContext(
+            session_id="sess_coach_2",
+            client_id=client.id,
+            agent_id=agent.id,
+            agent_version_id="ver_draft",
+            agent_spec=spec,
+            metadata={"company_name": client.name},
+        )
+        prompt = unknown.conversation.system_instruction
+        assert "JEE Main" not in prompt and "Priya Reddy" not in prompt and "Rahul Sharma" not in prompt
+        assert "course_enquired: (not known" in prompt
+
+
+def test_batch_announcement_template_is_valid():
+    from app.schemas.agent_spec import AgentConfigurationData
+    tpl = get_agent_template_by_id("course_batch_announcement")
+    assert tpl is not None and tpl["call_direction"] == "outbound"
+    assert "Snowflake" in tpl["default_config"]["conversation"]["greeting"]
+    assert "19 October 2026" in tpl["default_config"]["instructions"]["primary_goal"]
+    assert tpl["preview"]["enabled_tools"] == tpl["default_config"]["tools"]
+    AgentConfigurationData(**tpl["default_config"])

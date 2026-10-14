@@ -11,12 +11,14 @@ const inr = (value: number | null | undefined) =>
 export const PricingSettingsCard: React.FC = () => {
   const [pricing, setPricing] = useState<PricingSettings | null>(null);
   const [profit, setProfit] = useState('');
+  const [concurrent, setConcurrent] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   const apply = (data: PricingSettings) => {
     setPricing(data);
     setProfit(String(data.profit_percent));
+    setConcurrent(String(data.payg_max_concurrent_calls));
   };
 
   useEffect(() => {
@@ -24,7 +26,9 @@ export const PricingSettingsCard: React.FC = () => {
   }, []);
 
   const profitValue = Number(profit);
-  const valid = profit !== '' && profitValue >= 0 && profitValue <= 1000;
+  const concurrentValue = Number(concurrent);
+  const valid =
+    profit !== '' && profitValue >= 0 && profitValue <= 1000 && Number.isInteger(concurrentValue) && concurrentValue >= 1 && concurrentValue <= 500;
 
   // Live estimate while typing: recent average real cost per minute, then the new profit %
   const preview = pricing?.preview;
@@ -35,7 +39,7 @@ export const PricingSettingsCard: React.FC = () => {
     setSaving(true);
     setMessage(null);
     try {
-      apply(await pricingService.update(profitValue));
+      apply(await pricingService.update(profitValue, concurrentValue));
       setMessage({ ok: true, text: 'Pricing saved. Calls ending from now on use these values.' });
     } catch (err: any) {
       setMessage({ ok: false, text: err.message || 'Could not save pricing.' });
@@ -60,11 +64,23 @@ export const PricingSettingsCard: React.FC = () => {
               className="w-full rounded border border-[#232736] bg-[#10121a] p-2 text-slate-100"
             />
           </label>
-
+          <label className="space-y-1">
+            <span className="block font-medium text-slate-300">Calls at a time (default)</span>
+            <input
+              type="number"
+              min={1}
+              max={500}
+              step="1"
+              value={concurrent}
+              onChange={(e) => setConcurrent(e.target.value)}
+              className="w-full rounded border border-[#232736] bg-[#10121a] p-2 text-slate-100"
+            />
+            <span className="block text-[10px] text-slate-500">Per client; override it on a client's page</span>
+          </label>
         </div>
         <p className="leading-relaxed text-slate-500">
           When a call ends, Choranta works out its real cost (Exotel minutes, speech-to-text, text-to-speech and LLM),
-          adds the profit %, and takes that many credits (₹1 = 1 credit): plan credits first, then bought credits.
+          adds the profit %, and takes that many credits (₹1 = 1 credit) from the client's wallet.
         </p>
 
         <div className="rounded border border-[#1b2030] bg-black/30 p-3">

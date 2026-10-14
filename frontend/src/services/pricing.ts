@@ -11,6 +11,8 @@ export interface PricingPreview {
 
 export interface PricingSettings {
   profit_percent: number;
+  /** Default simultaneous calls for pay-as-you-go clients (admins can override per client) */
+  payg_max_concurrent_calls: number;
   updated_at: string | null;
   updated_by: string | null;
   preview: PricingPreview;
@@ -18,9 +20,9 @@ export interface PricingSettings {
 
 export const pricingService = {
   get: () => request<PricingSettings>('/pricing'),
-  update: (profit_percent: number) =>
+  update: (profit_percent: number, payg_max_concurrent_calls?: number) =>
     request<PricingSettings>('/pricing', {
       method: 'PUT',
-      body: JSON.stringify({ profit_percent }),
+      body: JSON.stringify({ profit_percent, payg_max_concurrent_calls }),
     }),
 };

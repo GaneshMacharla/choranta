@@ -51,7 +51,7 @@ def get_pricing(db: Session) -> List[NumberPricing]:
 
 
 def pricing_out(p: NumberPricing) -> Dict[str, Any]:
-    gst = settings.GST_RATE_PERCENT / 100.0
+    gst = settings.EFFECTIVE_GST_RATE_PERCENT / 100.0
     setup = float(getattr(p, "setup_fee_inr", 0) or 0)
     return {"number_type": p.number_type, "monthly_rent_inr": p.monthly_rent_inr,
             "monthly_rent_with_gst_inr": _money(p.monthly_rent_inr * (1 + gst)), "setup_fee_inr": setup,

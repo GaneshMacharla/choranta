@@ -17,6 +17,8 @@ export interface GstSplit {
   total_inr: number;
   place_of_supply: string;
   intra_state: boolean;
+  /** False until the company is GST-registered: no GST, the whole amount becomes credits */
+  gst_registered: boolean;
 }
 
 export interface ClientLogin {

@@ -190,7 +190,7 @@ def subscription_out(db: Session, client_id: str) -> Optional[Dict[str, Any]]:
 
 
 def plan_out(plan: Plan, credits_per_minute_rate: float) -> Dict[str, Any]:
-    gst = settings.GST_RATE_PERCENT / 100.0
+    gst = settings.EFFECTIVE_GST_RATE_PERCENT / 100.0
     credits = plan_credits(plan)
     return {
         "id": plan.id,

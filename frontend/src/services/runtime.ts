@@ -10,6 +10,9 @@ import {
 export type MockCallOutcome = 'completed' | 'no-answer' | 'busy' | 'failed';
 
 export const runtimeService = {
+  /** How many test or live conversations an AI employee has had. */
+  sessionCount: (agentId: string) => request<{ sessions: number }>(`/runtime/agents/${agentId}/session-count`),
+
   simulateMockCall: async (
     agentId: string,
     agentVersionId: string,

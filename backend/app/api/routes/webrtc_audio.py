@@ -4,6 +4,7 @@ import json
 import logging
 from app.runtime.tools.catalog import describe_tools
 from app.runtime import call_rules
+from app.runtime.speech_style import apply_voice_style
 from app.runtime.knowledge import apply_knowledge
 import struct
 import time
@@ -359,7 +360,8 @@ async def handle_webrtc_offer(
             async for audio_chunk in tts_provider.synthesize_stream(
                 text=text,
                 voice_id=context.agent_spec.voice.voice_id,
-                speed=context.agent_spec.voice.speed
+                speed=context.agent_spec.voice.speed,
+                language=context.agent_spec.languages.primary
             ):
                 if not assistant_speaking:
                     logger.info(f"WebRTC TTS stream aborted for session '{session_id}' due to barge-in.")
@@ -499,10 +501,10 @@ async def handle_webrtc_offer(
                 client_id=context.client_id
             )
 
-            call_rules.apply_rules(context.conversation, context.agent_spec)
+            apply_voice_style(context.conversation, context.agent_spec)
             available_tools_list = call_rules.with_end_call(describe_tools(db, context.active_tools))
             llm_result = await llm_provider.generate_async(
-                system_instruction=context.conversation.system_instruction,
+                system_instruction=context.instruction_for_turn(),
                 messages=context.conversation.to_llm_messages(),
                 available_tools=available_tools_list
             )

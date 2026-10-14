@@ -22,6 +22,7 @@ const BUSINESS_TYPES: { value: BusinessType; label: string }[] = [
   { value: 'HOTEL', label: 'Hotel' },
   { value: 'RESTAURANT', label: 'Restaurant' },
   { value: 'CORPORATE', label: 'Corporate' },
+  { value: 'COACHING', label: 'Coaching centre' },
   { value: 'OTHER', label: 'Other' },
 ];
 
@@ -189,7 +190,7 @@ export const ClientsPage: React.FC = () => {
       render: (c) => (
         <span className="inline-flex items-center gap-1.5 font-mono text-xs text-slate-300">
           <span className="font-semibold text-[#00df8f]">{c.agent_count}</span>
-          <span className="text-slate-500">active</span>
+          <span className="text-slate-500">{c.agent_count === 1 ? 'employee' : 'employees'}</span>
         </span>
       ),
     },
@@ -252,7 +253,7 @@ export const ClientsPage: React.FC = () => {
           leftIcon={<Plus className="h-4 w-4" />}
           onClick={() => setIsCreateModalOpen(true)}
         >
-          + Create Client
+          Create Client
         </Button>
       </div>
 
@@ -308,7 +309,7 @@ export const ClientsPage: React.FC = () => {
                     variant="primary"
                     onClick={() => setIsCreateModalOpen(true)}
                   >
-                    + Create Client
+                    Create Client
                   </Button>
                 }
               />

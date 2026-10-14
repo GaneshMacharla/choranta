@@ -8,7 +8,6 @@ import {
   PhoneCall,
   Megaphone,
   Wrench,
-  BookOpen,
   Puzzle,
   Radio,
   Cpu,
@@ -52,7 +51,7 @@ export const Sidebar: React.FC = () => {
   }, [location.pathname]);
 
   const navItems: NavItem[] = [
-    { name: 'Overview', path: '/', icon: LayoutDashboard },
+    { name: 'Overview', path: '/overview', icon: LayoutDashboard },
     { name: 'Clients', path: '/clients', icon: Building2 },
     { name: 'AI Employees', path: '/agents', icon: Bot },
     { name: 'Employee Requests', path: '/agent-requests', icon: Inbox, count: pendingRequests },
@@ -64,10 +63,9 @@ export const Sidebar: React.FC = () => {
     { name: 'Telephony', path: '/telephony', icon: Radio },
     
     { name: 'Tools', path: '/tools', icon: Wrench },
-    { name: 'Knowledge', path: '/knowledge', icon: BookOpen },
     { name: 'Integrations', path: '/integrations', icon: Puzzle },
     { name: 'AI Providers', path: '/providers', icon: Cpu },
-    { name: 'Plans', path: '/plans', icon: Layers },
+    { name: 'Number Pricing', path: '/plans', icon: Layers },
     { name: 'Usage & Costs', path: '/usage', icon: DollarSign },
     { name: 'Errors / Logs', path: '/logs', icon: Terminal },
     

@@ -16,6 +16,7 @@ import {
   Scissors,
   Send,
   Stethoscope,
+  GraduationCap,
   Store,
   UtensilsCrossed,
 } from 'lucide-react';
@@ -37,6 +38,7 @@ const BUSINESS_ICONS: Record<string, React.ReactNode> = {
   HOTEL: <BedDouble className="h-5 w-5" />,
   RESTAURANT: <UtensilsCrossed className="h-5 w-5" />,
   CORPORATE: <Briefcase className="h-5 w-5" />,
+  COACHING: <GraduationCap className="h-5 w-5" />,
   OTHER: <Store className="h-5 w-5" />,
 };
 

@@ -22,6 +22,7 @@ from app.models.api_key import ApiKey
 from app.models.agent_request import AgentRequest
 from app.models.notification import ClientNotification
 from app.models.verification import ClientVerification
+from app.models.course import Course, CourseBatch, CourseChange
 
 __all__ = [
     "User",
@@ -66,4 +67,7 @@ __all__ = [
     "AgentRequest",
     "ClientNotification",
     "ClientVerification",
+    "Course",
+    "CourseBatch",
+    "CourseChange",
 ]

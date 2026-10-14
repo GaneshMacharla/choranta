@@ -73,7 +73,10 @@ class AgentSpecBuilder:
             responsibilities=[r.strip() for r in draft.instructions.responsibilities if r.strip()],
             rules=[r.strip() for r in draft.instructions.rules if r.strip()],
             restrictions=[r.strip() for r in draft.instructions.restrictions if r.strip()],
-            escalation_rules=[r.strip() for r in draft.instructions.escalation_rules if r.strip()]
+            escalation_rules=[r.strip() for r in draft.instructions.escalation_rules if r.strip()],
+            discovery_questions=[q.strip() for q in draft.instructions.discovery_questions if q.strip()],
+            offer_points=[p.strip() for p in draft.instructions.offer_points if p.strip()],
+            next_step=draft.instructions.next_step.strip(),
         )
 
         # 5. Conversation

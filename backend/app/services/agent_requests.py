@@ -40,6 +40,7 @@ BUSINESS_TYPES: Dict[str, str] = {
     "HOSPITAL": "Hospital",
     "SALON": "Salon / Spa",
     "REAL_ESTATE": "Real estate",
+    "COACHING": "Coaching centre",
     "HOTEL": "Hotel",
     "RESTAURANT": "Restaurant",
     "CORPORATE": "Company / Office",

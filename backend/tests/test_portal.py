@@ -100,3 +100,16 @@ def test_removed_client_login_is_deactivated(client: TestClient, auth_headers: d
     users = client.get(f"/api/clients/{portal['client_id']}/users", headers=auth_headers).json()
     assert client.delete(f"/api/clients/{portal['client_id']}/users/{users[0]['id']}", headers=auth_headers).status_code == 204
     assert db.get(User, users[0]["id"]).status == "INACTIVE"
+
+
+def test_client_can_rename_company(client: TestClient, portal, db: Session):
+    h = portal["headers"]
+    renamed = client.patch("/api/portal/me", headers=h, json={"client_name": "  Sunrise   Clinic Group "})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["client_name"] == "Sunrise Clinic Group"
+    assert client.get("/api/portal/me", headers=h).json()["client_name"] == "Sunrise Clinic Group"
+
+    db.add(Client(id=generate_unique_id("cli_"), name="Taken Name Ltd", business_type="CLINIC"))
+    db.commit()
+    assert client.patch("/api/portal/me", headers=h, json={"client_name": "taken name ltd"}).status_code == 409
+    assert client.patch("/api/portal/me", headers=h, json={"client_name": "   "}).status_code == 422

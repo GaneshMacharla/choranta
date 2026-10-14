@@ -242,12 +242,17 @@ FALLBACK_CARTESIA_VOICES: List[Dict[str, Any]] = [
 ]
 
 
+class CartesiaPreviewUnavailable(Exception):
+    pass
+
+
 class VoiceService:
     """
     Manages Cartesia voice catalog discovery, caching, and audio previews.
     """
     _cache: Optional[List[VoiceResponse]] = None
     _cache_time: float = 0.0
+    _previews: Dict[tuple, bytes] = {}  # (voice, language, text) -> WAV
     _CACHE_TTL_SECONDS: float = 3600.0  # 1 hour
 
     @classmethod
@@ -350,32 +355,30 @@ class VoiceService:
             cls._cache_time = time.time()
 
     @classmethod
-    def get_voice_preview_wav(cls, voice_id: str, sample_text: Optional[str] = None) -> bytes:
+    def get_voice_preview_wav(cls, voice_id: str, sample_text: Optional[str] = None, language: Optional[str] = None) -> bytes:
         """
-        Synthesizes a short preview audio sample for the requested voice and returns WAV bytes.
-        Gracefully generates fallback chime if Cartesia synthesis fails.
+        WAV preview of a Cartesia voice speaking the agent's language (the same sample sentences as the Sarvam
+        previews). Cached per voice and language. Raises CartesiaPreviewUnavailable when Cartesia can't make it,
+        e.g. the account is out of credits, instead of playing something that isn't the voice.
         """
-        text = sample_text or "Hello! This is a preview of this voice for your AI employee in Choranta Studio."
-        raw_pcm: bytes = b""
+        from app.services.sarvam_voices import PREVIEW_TEXTS, _preview_language
+
+        lang = _preview_language(language)
+        text = sample_text or PREVIEW_TEXTS[lang]
+        key = (voice_id, lang, text)
+        cached = cls._previews.get(key)
+        if cached is not None:
+            return cached
         try:
             tts = CartesiaTTSProvider(api_key=settings.CARTESIA_API_KEY)
-            result = tts.synthesize(text=text, voice_id=voice_id, speed=1.0)
-            raw_pcm = result.audio_bytes
+            raw_pcm = tts.synthesize(text=text, voice_id=voice_id, speed=1.0, language=lang).audio_bytes
         except Exception as e:
-            logger.warning(f"Cartesia preview synthesis failed for voice '{voice_id}' ({e}), generating fallback preview.")
-            import math
-            import struct
-            sample_rate = 16000
-            duration = 1.0
-            num_samples = int(sample_rate * duration)
-            samples = []
-            for i in range(num_samples):
-                t = i / sample_rate
-                freq = 523.25 if t < 0.5 else 659.25  # C5 to E5 harmonic chord
-                envelope = math.sin(math.pi * t / duration)
-                val = int(12000 * envelope * math.sin(2 * math.pi * freq * t))
-                samples.append(struct.pack("<h", val))
-            raw_pcm = b"".join(samples)
+            logger.warning(f"Cartesia preview failed for voice '{voice_id}': {type(e).__name__}: {e}")
+            if "quota" in str(e).lower() or "402" in str(e):
+                raise CartesiaPreviewUnavailable("The Cartesia account is out of credits; top it up to hear Cartesia voices.")
+            raise CartesiaPreviewUnavailable("Couldn't generate the Cartesia preview right now. Try again in a moment.")
+        if not raw_pcm:
+            raise CartesiaPreviewUnavailable("Couldn't generate the Cartesia preview right now. Try again in a moment.")
 
         # Convert raw 16-bit 16kHz PCM to standard WAV format
         buf = io.BytesIO()
@@ -384,4 +387,5 @@ class VoiceService:
             wf.setsampwidth(2)  # 16-bit
             wf.setframerate(16000)
             wf.writeframes(raw_pcm)
-        return buf.getvalue()
+        cls._previews[key] = buf.getvalue()
+        return cls._previews[key]

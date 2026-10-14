@@ -131,3 +131,39 @@ def test_sarvam_speech_costs_in_rupees(monkeypatch):
     assert cost["breakdown"]["speech_to_text"] == 30.0
     assert cost["breakdown"]["text_to_speech"] == 30.0
     assert (cost["stt_provider"], cost["tts_provider"]) == ("sarvam", "sarvam")
+
+
+def test_voice_preview_is_spoken_in_the_agent_language(monkeypatch):
+    from app.services import sarvam_voices
+
+    calls = []
+    monkeypatch.setattr(settings, "SARVAM_API_KEY", "test-key")
+    monkeypatch.setattr(sarvam_voices, "_previews", {})
+    monkeypatch.setattr(sarvam_voices, "_synthesize", lambda voice, lang: calls.append((voice, lang)) or b"\x01\x00" * 10)
+
+    sarvam_voices.preview_wav("ishita", "te")
+    sarvam_voices.preview_wav("ishita", "te-IN")   # same language: served from the cache
+    sarvam_voices.preview_wav("ishita")            # no language: English
+    sarvam_voices.preview_wav("ishita", "xx")      # no sample sentence for it: English (cached)
+    assert calls == [("ishita", "te"), ("ishita", "en")]
+
+
+def test_browser_test_calls_send_the_agent_language_to_tts():
+    import inspect
+    from app.api.routes import webrtc_audio, websocket_audio
+
+    for module in (webrtc_audio, websocket_audio):
+        assert "language=context.agent_spec.languages.primary" in inspect.getsource(module), module.__name__
+
+
+def test_voices_carry_gender_and_put_sarvam_language_picks_first():
+    from app.services import sarvam_voices
+
+    voices = sarvam_voices.list_voices("te-IN")
+    assert len(voices) == len(sarvam_voices.SARVAM_VOICES)
+    by_id = {v["id"]: v for v in voices}
+    assert by_id["priya"]["gender"] == "female" and by_id["shubh"]["gender"] == "male"
+    assert by_id["ishita"]["tier"] == 1 and "te" in by_id["neha"]["recommended_languages"]
+    assert [v["id"] for v in voices[:4]] == ["priya", "shubh", "ratan", "neha"]  # Sarvam's Telugu picks, best tier first
+    assert voices[4]["id"] == "ishita"                                           # then the top-rated voices
+    assert sarvam_voices.list_voices()[0]["tier"] == 1 and sarvam_voices.list_voices()[0]["id"] != "varun"

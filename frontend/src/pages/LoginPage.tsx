@@ -30,7 +30,7 @@ const loadGoogleScript = () =>
     }
   });
 
-const homeFor = (user: User) => (user.role === 'CLIENT' ? '/portal' : '/');
+const homeFor = (user: User) => (user.role === 'CLIENT' ? '/portal' : '/overview');
 
 export const LoginPage: React.FC = () => {
   const { login, loginWithGoogle, isAuthenticated, user } = useAuth();

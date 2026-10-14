@@ -261,3 +261,9 @@ def get_session_events(
         )
         for e in events
     ]
+
+
+@router.get("/agents/{agent_id}/session-count")
+def agent_session_count(agent_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_operator)):
+    """How many test or live conversations this AI employee has had (the workspace's "tested" check)."""
+    return {"sessions": db.query(RuntimeSession).filter(RuntimeSession.agent_id == agent_id).count()}

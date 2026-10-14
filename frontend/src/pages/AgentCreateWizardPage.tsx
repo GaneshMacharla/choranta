@@ -1,63 +1,23 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  Info,
-  PhoneIncoming,
-  PhoneOutgoing,
-  Phone,
-  Sparkles,
-  Volume2,
-  Trash2,
-  LayoutTemplate,
-  PenLine,
-} from 'lucide-react';
+import { ArrowLeft, BookOpen, Check, LayoutTemplate, Phone, PhoneIncoming, PhoneOutgoing, PenLine, Volume2 } from 'lucide-react';
 import { agentsService } from '../services/agents';
 import { clientsService } from '../services/clients';
 import { catalogsService } from '../services/catalogs';
 import { configurationService } from '../services/configuration';
 import { AgentRequest, agentRequestsService } from '../services/agentRequests';
-import {
-  AgentConfigurationData,
-  AgentTemplate,
-  CallDirection,
-  EMPTY_CALL_LIMITS,
-  CartesiaVoice,
-  Client,
-  KnowledgeSource,
-  Tool,
-} from '../types';
+import { AgentConfigurationData, AgentTemplate, CallDirection, CartesiaVoice, Client, EMPTY_CALL_LIMITS, KnowledgeSource } from '../types';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Input } from '../components/common/Input';
 import { Select } from '../components/common/Select';
-// Cartesia voice picker is kept in components/voice/VoicePickerModal.tsx but not used: voices come from Sarvam
-// import { VoicePickerModal } from '../components/voice/VoicePickerModal';
+import { NameSuggestions } from '../components/common/NameSuggestions';
 import { SarvamVoicePickerModal as VoicePickerModal } from '../components/voice/SarvamVoicePickerModal';
-import { StringListEditor } from '../components/agents/StringListEditor';
-import { CallLimitsEditor, callLimitsValid } from '../components/agents/CallLimitsEditor';
-import {
-  AVAILABLE_LANGUAGES,
-  LLM_PROVIDER_OPTIONS,
-  STT_PROVIDER_OPTIONS,
-  TTS_PROVIDER_OPTIONS,
-} from '../constants/agentOptions';
-
-const STEPS = [
-  { id: 'basics', title: 'Basics', hint: 'Who it works for' },
-  { id: 'describe', title: 'Describe', hint: 'What it should do' },
-  { id: 'review', title: 'Review draft', hint: 'Edit the instructions' },
-  { id: 'voice', title: 'Voice', hint: 'How it sounds' },
-  { id: 'resources', title: 'Knowledge & tools', hint: 'Optional' },
-  { id: 'limits', title: 'Call limits', hint: 'Control cost' },
-  { id: 'create', title: 'Review & create', hint: 'Final check' },
-] as const;
+import { AVAILABLE_LANGUAGES } from '../constants/agentOptions';
 
 const DIRECTIONS: { value: CallDirection; label: string; hint: string; icon: React.ReactNode }[] = [
   { value: 'inbound', label: 'Inbound', hint: 'Customers call the business', icon: <PhoneIncoming className="h-4 w-4" /> },
-  { value: 'outbound', label: 'Outbound', hint: 'The agent calls leads or customers', icon: <PhoneOutgoing className="h-4 w-4" /> },
+  { value: 'outbound', label: 'Outbound', hint: 'It calls leads or customers', icon: <PhoneOutgoing className="h-4 w-4" /> },
   { value: 'both', label: 'Both', hint: 'Answers and places calls', icon: <Phone className="h-4 w-4" /> },
 ];
 
@@ -67,44 +27,11 @@ const ROLE_OPTIONS = [
   'Lead Qualification Specialist',
   'Sales Follow-up Caller',
   'Customer Support Agent',
-  'Order & Delivery Status Agent',
   'Payment Reminder Agent',
   'Feedback & Survey Caller',
-  'Site Visit Coordinator',
-  'Recruitment Screening Caller',
 ].map((r) => ({ value: r, label: r }));
-const CUSTOM_ROLE = '__custom__';
 
-const TONE_OPTIONS = ['professional', 'friendly', 'warm', 'casual'].map((t) => ({
-  value: t,
-  label: t.charAt(0).toUpperCase() + t.slice(1),
-}));
-
-const TEXTAREA =
-  'block w-full rounded-md border border-[#232736] bg-[#10121a] p-2.5 text-xs text-slate-100 placeholder-slate-500 focus:border-[#00df8f] focus:ring-1 focus:ring-[#00df8f]';
-
-interface BasicsForm {
-  client_id: string;
-  name: string;
-  role: string;
-  call_direction: CallDirection;
-  primary_language: string;
-  supported_languages: string[];
-  description: string;
-  business_notes: string;
-}
-
-/** A client's request (name + Sarvam voice) applied to a generated draft. */
-const withRequestedVoice = (config: AgentConfigurationData, request: AgentRequest | null): AgentConfigurationData =>
-  request?.voice_id
-    ? {
-        ...config,
-        voice: { ...config.voice, provider: 'sarvam', voice_id: request.voice_id },
-        providers: { ...config.providers, tts: 'sarvam' },
-      }
-    : config;
-
-// Client's plain-language jobs -> wizard role and call direction
+// Client request jobs -> role and call direction
 const TASK_ROLES: Record<string, string> = {
   answer_calls: 'Receptionist',
   answer_questions: 'Customer Support Agent',
@@ -113,19 +40,16 @@ const TASK_ROLES: Record<string, string> = {
   send_reminders: 'Payment Reminder Agent',
   collect_feedback: 'Feedback & Survey Caller',
 };
-const INBOUND_TASKS = ['answer_calls', 'answer_questions'];
 const OUTBOUND_TASKS = ['call_leads', 'send_reminders', 'collect_feedback'];
-
 const directionFor = (tasks: string[]): CallDirection => {
-  const inbound = tasks.some((t) => INBOUND_TASKS.includes(t));
   const outbound = tasks.some((t) => OUTBOUND_TASKS.includes(t));
+  const inbound = tasks.some((t) => !OUTBOUND_TASKS.includes(t));
   return inbound && outbound ? 'both' : outbound ? 'outbound' : 'inbound';
 };
 
-/**
- * A template's ready-made configuration, made specific to this employee: its name, the client's company,
- * and the template's tools. {{company_name}} in greetings is filled per call, so it stays.
- */
+const BLANK = '__blank__';
+
+/** A template's ready-made setup made specific to this employee (no AI involved). */
 const configFromTemplate = (tpl: AgentTemplate, employeeName: string, companyName: string): AgentConfigurationData => {
   const config = JSON.parse(JSON.stringify(tpl.default_config || {})) as AgentConfigurationData;
   const company = companyName || config.business_context?.business_name || '';
@@ -134,799 +58,414 @@ const configFromTemplate = (tpl: AgentTemplate, employeeName: string, companyNam
   config.conversation = { ...config.conversation, limits: { ...EMPTY_CALL_LIMITS, ...(config.conversation?.limits || {}) } };
   config.variables = {
     ...config.variables,
-    inputs: (config.variables?.inputs || []).map((v: any) =>
-      v.name === 'company_name' && company ? { ...v, default_value: company } : v
-    ),
+    inputs: (config.variables?.inputs || []).map((v: any) => (v.name === 'company_name' && company ? { ...v, default_value: company } : v)),
   };
   return config;
 };
 
+/** Start blank: the platform's default setup, given a plain greeting, goal and call flow for this business. */
+const blankSetup = (base: AgentConfigurationData, name: string, role: string, company: string, direction: CallDirection): AgentConfigurationData => ({
+  ...base,
+  identity: { ...base.identity, name, organization: company, persona: `friendly, helpful ${role.toLowerCase()} at ${company}` },
+  business_context: { ...base.business_context, business_name: company },
+  instructions: {
+    ...base.instructions,
+    primary_goal:
+      direction === 'outbound'
+        ? `Call the customer on behalf of ${company}, understand their need and agree a clear next step.`
+        : `Help every caller to ${company} quickly and agree a clear next step.`,
+    responsibilities: base.instructions?.responsibilities?.length
+      ? base.instructions.responsibilities
+      : ['Understand what the caller needs.', "Answer from the business's information only.", 'Agree a next step and confirm it.'],
+    discovery_questions: ['How can I help you today?'],
+    offer_points: [],
+    next_step: 'Book an appointment or a callback from the team',
+  },
+  conversation: {
+    ...base.conversation,
+    greeting:
+      direction === 'outbound'
+        ? `Hello, this is ${name} from {{company_name}}. Is this a good time to talk?`
+        : `Hello, thank you for calling {{company_name}}. This is ${name}, how can I help you?`,
+    farewell: base.conversation?.farewell || 'Thank you for your time. Have a great day!',
+    limits: { ...EMPTY_CALL_LIMITS, ...(base.conversation?.limits || {}) },
+  },
+});
+
+/**
+ * Create an AI employee on one screen: pick a template (recommended for the client's business), name it, choose
+ * languages, direction, voice and knowledge, and create. The setup comes from the template - no AI drafting.
+ * The first version is published so it can be tested straight away in the employee's workspace.
+ */
 export const AgentCreateWizardPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const requestId = searchParams.get('request');
   const [fromRequest, setFromRequest] = useState<AgentRequest | null>(null);
-  const [templates, setTemplates] = useState<AgentTemplate[]>([]);
-  const [templateId, setTemplateId] = useState('');
-  const [appliedTemplateKey, setAppliedTemplateKey] = useState('');
-  const [step, setStep] = useState(0);
   const [clients, setClients] = useState<Client[]>([]);
+  const [templates, setTemplates] = useState<AgentTemplate[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeSource[]>([]);
-  const [tools, setTools] = useState<Tool[]>([]);
+  const [clientAgentNames, setClientAgentNames] = useState<string[]>([]);
 
-  const [form, setForm] = useState<BasicsForm>({
-    client_id: '',
-    name: '',
-    role: '',
-    call_direction: 'inbound',
-    primary_language: 'en',
-    supported_languages: [],
-    description: '',
-    business_notes: '',
-  });
-  const [isCustomRole, setIsCustomRole] = useState(false);
-  const [config, setConfig] = useState<AgentConfigurationData | null>(null);
-  const [draftNotice, setDraftNotice] = useState<string | null>(null);
-  const [isDrafting, setIsDrafting] = useState(false);
-  const [voiceName, setVoiceName] = useState<string | null>(null);
+  const [clientId, setClientId] = useState(searchParams.get('client') || '');
+  const [templateId, setTemplateId] = useState('');
+  const [templateTouched, setTemplateTouched] = useState(false);
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('');
+  const [direction, setDirection] = useState<CallDirection>('inbound');
+  const [primaryLanguage, setPrimaryLanguage] = useState('en-IN');
+  const [otherLanguages, setOtherLanguages] = useState<string[]>([]);
+  const [voice, setVoice] = useState<{ id: string; name: string; provider: string } | null>(null);
+  const [voiceTouched, setVoiceTouched] = useState(false);
   const [isVoicePickerOpen, setIsVoicePickerOpen] = useState(false);
   const [knowledgeIds, setKnowledgeIds] = useState<string[]>([]);
-  const [toolIds, setToolIds] = useState<string[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [createdAgentId, setCreatedAgentId] = useState<string | null>(null);
 
   useEffect(() => {
     clientsService.list({ limit: 100 }).then((res) => setClients(res.items)).catch(() => setClients([]));
-    catalogsService.listKnowledge().then(setKnowledge).catch(() => setKnowledge([]));
-    catalogsService.listTools().then(setTools).catch(() => setTools([]));
     catalogsService.listTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, []);
 
-  // Opened from Employee Requests: start with the client, name and voice the client chose
+  // Opened from Employee Requests ("Build agent"): start with what the client asked for
   useEffect(() => {
     if (!requestId) return;
     agentRequestsService
       .get(requestId)
       .then((r) => {
         setFromRequest(r);
+        setClientId(r.client_id);
+        setName(r.name);
+        if (r.tasks[0] && TASK_ROLES[r.tasks[0]]) setRole(TASK_ROLES[r.tasks[0]]);
+        if (r.tasks.length) setDirection(directionFor(r.tasks));
         const [primary, ...others] = r.languages;
-        setForm((f) => ({
-          ...f,
-          client_id: r.client_id,
-          name: r.name,
-          role: (r.tasks[0] && TASK_ROLES[r.tasks[0]]) || f.role,
-          call_direction: r.tasks.length ? directionFor(r.tasks) : f.call_direction,
-          primary_language: primary || f.primary_language,
-          supported_languages: others.length ? others : f.supported_languages,
-          description:
-            f.description ||
-            [
-              r.company_name
-                ? `AI employee for ${r.company_name}${r.business_type_label ? `, a ${r.business_type_label.toLowerCase()} business` : ''}.`
-                : '',
-              r.task_labels.length ? `${r.name} should: ${r.task_labels.join('; ')}.` : '',
-              r.language_labels.length ? `Callers speak ${r.language_labels.join(', ')}.` : '',
-            ]
-              .filter(Boolean)
-              .join(' '),
-          business_notes: f.business_notes || r.notes || '',
-        }));
-        if (r.voice_name) setVoiceName(r.voice_name);
+        if (primary) setPrimaryLanguage(primary);
+        setOtherLanguages(others);
+        if (r.voice_id) {
+          setVoice({ id: r.voice_id, name: r.voice_name || r.voice_id, provider: 'sarvam' });
+          setVoiceTouched(true);
+        }
       })
       .catch((err) => setError(`Could not load the request: ${err?.message || 'unknown error'}`));
   }, [requestId]);
 
-  const selectedClient = clients.find((c) => c.id === form.client_id);
-  const businessType = fromRequest?.business_type || selectedClient?.business_type || '';
-  const isRecommended = (t: AgentTemplate) => !!businessType && (t.business_types || []).includes(businessType);
-  const sortedTemplates = [...templates].sort((a, b) => Number(isRecommended(b)) - Number(isRecommended(a)));
-  const selectedTemplate = templates.find((t) => t.id === templateId) || null;
-
-  const chooseTemplate = (tpl: AgentTemplate | null) => {
-    setTemplateId(tpl?.id || '');
-    if (!tpl) return;
-    const role = tpl.role || form.role;
-    setIsCustomRole(!ROLE_OPTIONS.some((o) => o.value === role));
-    setForm((f) => ({
-      ...f,
-      role,
-      call_direction: tpl.call_direction || f.call_direction,
-      description: f.description || tpl.description,
-    }));
-  };
-
-  // Opened from a client request: pre-pick the template that fits their business
+  // The client's knowledge base (all ticked) and the names its employees already use
   useEffect(() => {
-    if (!fromRequest || templateId || appliedTemplateKey || templates.length === 0) return;
-    const match = templates.find(isRecommended);
-    if (match) chooseTemplate(match);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromRequest, templates]);
-
-  const updateConfig = (fn: (prev: AgentConfigurationData) => AgentConfigurationData) =>
-    setConfig((prev) => (prev ? fn(prev) : prev));
-
-  const stepError = useMemo((): string | null => {
-    switch (STEPS[step].id) {
-      case 'basics':
-        if (!form.client_id) return 'Choose the client this employee works for.';
-        if (form.name.trim().length < 2) return 'Enter an employee name.';
-        if (form.role.trim().length < 2) return 'Enter a role.';
-        return null;
-      case 'describe':
-        if (form.description.trim().length < 10) return 'Describe what the employee should do (at least a sentence).';
-        if (!config) return 'Generate a draft to continue.';
-        return null;
-      case 'review':
-        if (!config) return 'Generate a draft first.';
-        if (config.instructions.primary_goal.trim().length < 5) return 'Add a primary goal.';
-        if (config.instructions.responsibilities.length === 0) return 'Add at least one responsibility.';
-        return null;
-      case 'limits':
-        return config && !callLimitsValid(config.conversation.limits) ? 'Fix the call limits that are out of range.' : null;
-      default:
-        return null;
+    if (!clientId) {
+      setKnowledge([]);
+      setClientAgentNames([]);
+      return;
     }
-  }, [step, form, config]);
+    catalogsService
+      .listClientKnowledge(clientId)
+      .then((list) => {
+        setKnowledge(list);
+        setKnowledgeIds(list.map((k) => k.id));
+      })
+      .catch(() => setKnowledge([]));
+    agentsService
+      .list({ client_id: clientId })
+      .then((res) => setClientAgentNames(res.items.map((a) => a.name)))
+      .catch(() => setClientAgentNames([]));
+  }, [clientId]);
 
-  const generateDraft = async () => {
-    setError(null);
-    setIsDrafting(true);
-    try {
-      const res = await agentsService.draftConfiguration({
-        ...form,
-        supported_languages: form.supported_languages.filter((l) => l !== form.primary_language),
-      });
-      setConfig(withRequestedVoice(res.configuration, fromRequest));
-      setDraftNotice(res.draft_source === 'fallback' ? res.message || 'A starter draft was created.' : null);
-      setStep(STEPS.findIndex((s) => s.id === 'review'));
-    } catch (err: any) {
-      setError(err?.message || 'Could not generate a draft.');
-    } finally {
-      setIsDrafting(false);
+  const client = clients.find((c) => c.id === clientId);
+  const businessType = fromRequest?.business_type || client?.business_type || '';
+  const isRecommended = (t: AgentTemplate) => !!businessType && (t.business_types || []).includes(businessType);
+  const sortedTemplates = useMemo(
+    () => [...templates].sort((a, b) => Number(isRecommended(b)) - Number(isRecommended(a))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [templates, businessType]
+  );
+  const template = templates.find((t) => t.id === templateId) || null;
+
+  const applyTemplate = (tpl: AgentTemplate | null) => {
+    setTemplateId(tpl ? tpl.id : BLANK);
+    if (tpl) {
+      setRole(tpl.role || role);
+      if (tpl.call_direction) setDirection(tpl.call_direction);
     }
   };
 
-  const handleCreate = async () => {
-    if (!config) return;
+  // Pre-pick the template recommended for the client's business, until the admin picks one
+  useEffect(() => {
+    if (templateTouched || !templates.length || !businessType) return;
+    const match = templates.find(isRecommended);
+    if (match) applyTemplate(match);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templates, businessType, templateTouched]);
+
+  // Voice: the name's own Sarvam voice if there is one, else Sarvam's top pick for the language
+  useEffect(() => {
+    if (voiceTouched) return;
+    let cancelled = false;
+    catalogsService
+      .rankedSarvamVoices(primaryLanguage)
+      .then((ranked) => {
+        if (cancelled || !ranked.length) return;
+        const byName = ranked.find((v) => v.id === name.trim().toLowerCase());
+        const pick = byName || ranked[0];
+        setVoice({ id: pick.id, name: pick.name, provider: 'sarvam' });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [primaryLanguage, name, voiceTouched]);
+
+  const languages = [primaryLanguage, ...otherLanguages.filter((l) => l !== primaryLanguage)];
+  const missing = !clientId
+    ? 'Choose the client.'
+    : !templateId
+    ? 'Choose a template or Start blank.'
+    : name.trim().length < 2
+    ? 'Enter a name.'
+    : templateId === BLANK && role.trim().length < 2
+    ? 'Choose a role.'
+    : null;
+
+  const finish = (config: AgentConfigurationData): AgentConfigurationData => ({
+    ...config,
+    languages: { ...config.languages, primary: primaryLanguage, supported: languages },
+    voice: voice
+      ? { ...config.voice, provider: voice.provider, voice_id: voice.id, language: primaryLanguage }
+      : { ...config.voice, language: primaryLanguage },
+    providers: voice ? { ...config.providers, tts: voice.provider } : config.providers,
+    // Only this client's knowledge base is used; the template's sample knowledge is dropped
+    knowledge_sources: knowledgeIds,
+  });
+
+  const create = async () => {
+    if (missing || !client) return;
     setError(null);
     setIsCreating(true);
-    let agentId = createdAgentId;
     try {
-      if (!agentId) {
-        const created = await agentsService.create({
-          client_id: form.client_id,
-          name: form.name.trim(),
-          role: form.role.trim(),
-          description: form.description.trim(),
-        });
-        agentId = created.id;
-        setCreatedAgentId(agentId);
+      const created = await agentsService.create({
+        client_id: clientId,
+        name: name.trim(),
+        role: (template?.role || role).trim(),
+        description: template?.description || `${role} for ${client.name}.`,
+      });
+      let config: AgentConfigurationData;
+      if (template) {
+        config = configFromTemplate(template, name.trim(), client.name);
+      } else {
+        const base = (await configurationService.getConfiguration(created.id)).configuration;
+        config = blankSetup(base, name.trim(), role, client.name, direction);
       }
-      await configurationService.updateConfiguration(agentId, config);
-      for (const id of knowledgeIds) await catalogsService.attachKnowledge(agentId, id);
-      for (const id of toolIds) await catalogsService.attachTool(agentId, id);
-      if (fromRequest) await agentRequestsService.complete(fromRequest.id, agentId);
-      navigate(`/agents/${agentId}?tab=tests`);
+      config = finish(config);
+      await configurationService.updateConfiguration(created.id, config);
+      for (const id of knowledgeIds) await catalogsService.attachKnowledge(created.id, id);
+      for (const id of config.tools || []) await catalogsService.attachTool(created.id, id).catch(() => {});
+      if (fromRequest) await agentRequestsService.complete(fromRequest.id, created.id);
+      // Publish v1 so it can be tested right away in the workspace
+      const published = await agentsService.publishVersion(created.id).then(() => true).catch(() => false);
+      navigate(`/agents/${created.id}${published ? '' : '?unpublished=1'}`);
     } catch (err: any) {
-      setError(
-        agentId
-          ? `The employee was created, but saving its setup failed: ${err?.message || 'unknown error'}. Retry, or open the employee to finish.`
-          : err?.message || 'Could not create the employee.'
-      );
-    } finally {
+      setError(err?.message || 'Could not create the employee.');
       setIsCreating(false);
     }
   };
 
-  const next = () => {
-    if (stepError) return;
-    setError(null);
-    if (STEPS[step].id === 'basics' && selectedTemplate) {
-      // Template: its ready-made setup becomes the draft (rebuilt only if the template, name or client changed)
-      const key = `${selectedTemplate.id}|${form.name.trim()}|${form.client_id}`;
-      if (!config || key !== appliedTemplateKey) {
-        const draft = configFromTemplate(selectedTemplate, form.name.trim(), selectedClient?.name || fromRequest?.company_name || '');
-        if (fromRequest?.languages.length) {
-          // The client picked these; the first is the main language
-          draft.languages = { ...draft.languages, primary: fromRequest.languages[0], supported: fromRequest.languages };
-          draft.voice = { ...draft.voice, language: fromRequest.languages[0] };
-        }
-        setConfig(withRequestedVoice(draft, fromRequest));
-        setToolIds(draft.tools || []);
-        setKnowledgeIds((draft.knowledge_sources || []).filter((id) => knowledge.some((k) => k.id === id)));
-        if (!fromRequest?.voice_name && draft.voice?.voice_id) {
-          const v = draft.voice.voice_id;
-          setVoiceName(v.charAt(0).toUpperCase() + v.slice(1));
-        }
-        setDraftNotice(`Started from the "${selectedTemplate.name}" template. Review and adjust anything below.`);
-        setAppliedTemplateKey(key);
-      }
-      setStep(STEPS.findIndex((s) => s.id === 'review'));
-      return;
-    }
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
-  };
-
-  const back = () => {
-    if (step === 0) return navigate('/agents');
-    // Template drafts skip Describe, so Back from Review returns to Basics
-    if (STEPS[step].id === 'review' && selectedTemplate) return setStep(0);
-    setStep(step - 1);
-  };
-
-  const toggle = (list: string[], id: string) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
-
-  // ------------------------------------------------------------------ steps
-
-  const renderBasics = () => (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-slate-300">Start from</span>
-          <span className="text-[11px] text-slate-500">
-            {selectedTemplate ? 'Ready-made setup: you go straight to reviewing it.' : 'Describe the job and AI drafts the setup.'}
-          </span>
-        </div>
-        <div className="grid max-h-72 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3">
-          <button
-            type="button"
-            onClick={() => chooseTemplate(null)}
-            className={`flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors ${
-              !templateId ? 'border-[#00df8f] bg-[#00df8f]/10' : 'border-[#232736] hover:border-slate-500'
-            }`}
-          >
-            <PenLine className={`mt-0.5 h-4 w-4 shrink-0 ${!templateId ? 'text-[#00df8f]' : 'text-slate-400'}`} />
-            <span>
-              <span className="block text-xs font-semibold text-slate-100">Start from scratch</span>
-              <span className="block text-[11px] text-slate-400">Describe what it should do; AI drafts the instructions.</span>
-            </span>
-          </button>
-          {sortedTemplates.map((t) => {
-            const on = templateId === t.id;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => chooseTemplate(t)}
-                className={`flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors ${
-                  on ? 'border-[#00df8f] bg-[#00df8f]/10' : 'border-[#232736] hover:border-slate-500'
-                }`}
-              >
-                <LayoutTemplate className={`mt-0.5 h-4 w-4 shrink-0 ${on ? 'text-[#00df8f]' : 'text-slate-400'}`} />
-                <span className="min-w-0">
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-xs font-semibold text-slate-100">{t.name}</span>
-                    {isRecommended(t) && (
-                      <span className="rounded bg-[#00df8f]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#00df8f]">
-                        Recommended
-                      </span>
-                    )}
-                  </span>
-                  <span className="mt-0.5 block text-[11px] text-slate-400 line-clamp-2">{t.description}</span>
-                  <span className="mt-1 block text-[10px] text-slate-500">
-                    {t.category}
-                    {t.call_direction ? ` · ${t.call_direction === 'both' ? 'inbound & outbound' : t.call_direction}` : ''}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Select
-          label="Client business"
-          placeholder="Select a client"
-          options={clients.map((c) => ({ value: c.id, label: c.client_code ? `${c.name} · ${c.client_code}` : c.name }))}
-          value={form.client_id}
-          onChange={(e) => setForm({ ...form, client_id: e.target.value })}
-        />
-        <Input
-          label="Employee name"
-          placeholder="e.g. Priya – Front Desk"
-          value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
-        />
-        <div className="space-y-2">
-          <Select
-            label="Role"
-            placeholder="Select a role"
-            options={[...ROLE_OPTIONS, { value: CUSTOM_ROLE, label: 'Other (type your own)' }]}
-            value={isCustomRole ? CUSTOM_ROLE : form.role}
-            onChange={(e) => {
-              const custom = e.target.value === CUSTOM_ROLE;
-              setIsCustomRole(custom);
-              setForm({ ...form, role: custom ? '' : e.target.value });
-            }}
-          />
-          {isCustomRole && (
-            <Input
-              placeholder="e.g. Insurance Renewal Caller"
-              value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value })}
-              autoFocus
-            />
-          )}
-        </div>
-        <Select
-          label="Primary spoken language"
-          options={AVAILABLE_LANGUAGES}
-          value={form.primary_language}
-          onChange={(e) => setForm({ ...form, primary_language: e.target.value })}
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="block text-xs font-medium text-slate-300">Call direction</span>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {DIRECTIONS.map((d) => (
-            <button
-              key={d.value}
-              type="button"
-              onClick={() => setForm({ ...form, call_direction: d.value })}
-              className={`flex items-start gap-2 rounded-lg border p-3 text-left transition-colors ${
-                form.call_direction === d.value
-                  ? 'border-[#00df8f] bg-[#00df8f]/10 text-slate-100'
-                  : 'border-[#232736] bg-[#10121a] text-slate-300 hover:border-slate-500'
-              }`}
-            >
-              <span className="mt-0.5">{d.icon}</span>
-              <span>
-                <span className="block text-xs font-semibold">{d.label}</span>
-                <span className="block text-[11px] text-slate-400">{d.hint}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-1.5">
-        <span className="block text-xs font-medium text-slate-300">Also speaks (optional)</span>
-        <div className="flex flex-wrap gap-1.5">
-          {AVAILABLE_LANGUAGES.filter((l) => l.value !== form.primary_language).map((l) => (
-            <button
-              key={l.value}
-              type="button"
-              onClick={() => setForm({ ...form, supported_languages: toggle(form.supported_languages, l.value) })}
-              className={`rounded-full border px-2.5 py-1 text-[11px] ${
-                form.supported_languages.includes(l.value)
-                  ? 'border-[#00df8f] bg-[#00df8f]/15 text-emerald-200'
-                  : 'border-[#232736] text-slate-400 hover:border-slate-500'
-              }`}
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderDescribe = () => (
-    <div className="space-y-5">
-      <div className="space-y-1.5">
-        <label className="block text-xs font-medium text-slate-300">What should this employee do on calls?</label>
-        <textarea
-          rows={5}
-          className={TEXTAREA}
-          value={form.description}
-          onChange={(e) => setForm({ ...form, description: e.target.value })}
-          placeholder="e.g. Answer calls for Smile Dental, help patients book, reschedule or cancel appointments, and collect their name and preferred time. Hand over to the front desk for emergencies."
-        />
-        <p className="text-[11px] text-slate-500">
-          Plain words are fine. Mention the goal, what to collect from the caller, and when to hand over to a person.
-        </p>
-      </div>
-      <div className="space-y-1.5">
-        <label className="block text-xs font-medium text-slate-300">Business notes (optional)</label>
-        <textarea
-          rows={3}
-          className={TEXTAREA}
-          value={form.business_notes}
-          onChange={(e) => setForm({ ...form, business_notes: e.target.value })}
-          placeholder="Opening hours, location, prices, offers, policies the agent should know."
-        />
-      </div>
-      <div className="flex items-center gap-3">
-        <Button
-          type="button"
-          onClick={generateDraft}
-          isLoading={isDrafting}
-          disabled={form.description.trim().length < 10}
-          leftIcon={<Sparkles className="h-4 w-4" />}
-        >
-          {config ? 'Regenerate draft' : 'Generate draft with AI'}
-        </Button>
-        {config && <span className="text-[11px] text-emerald-300">Draft ready. Regenerating replaces your edits.</span>}
-      </div>
-    </div>
-  );
-
-  const renderReview = () =>
-    config && (
-      <div className="space-y-6">
-        {draftNotice && (
-          <div className="flex items-start gap-2 rounded-md border border-amber-800/60 bg-amber-950/30 p-3 text-[11px] text-amber-200">
-            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-            <span>{draftNotice} Review and complete the fields below.</span>
-          </div>
-        )}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Input
-            label="Persona name"
-            value={config.identity.name}
-            onChange={(e) => updateConfig((p) => ({ ...p, identity: { ...p.identity, name: e.target.value } }))}
-          />
-          <Input
-            label="Persona"
-            value={config.identity.persona}
-            onChange={(e) => updateConfig((p) => ({ ...p, identity: { ...p.identity, persona: e.target.value } }))}
-          />
-          <Select
-            label="Tone"
-            options={TONE_OPTIONS}
-            value={config.conversation.tone}
-            onChange={(e) => updateConfig((p) => ({ ...p, conversation: { ...p.conversation, tone: e.target.value } }))}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-slate-300">Primary goal</label>
-          <textarea
-            rows={2}
-            className={TEXTAREA}
-            value={config.instructions.primary_goal}
-            onChange={(e) =>
-              updateConfig((p) => ({ ...p, instructions: { ...p.instructions, primary_goal: e.target.value } }))
-            }
-          />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-slate-300">Greeting (first sentence spoken)</label>
-            <textarea
-              rows={2}
-              className={`${TEXTAREA} font-mono`}
-              value={config.conversation.greeting}
-              onChange={(e) =>
-                updateConfig((p) => ({ ...p, conversation: { ...p.conversation, greeting: e.target.value } }))
-              }
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-slate-300">Farewell</label>
-            <textarea
-              rows={2}
-              className={`${TEXTAREA} font-mono`}
-              value={config.conversation.farewell}
-              onChange={(e) =>
-                updateConfig((p) => ({ ...p, conversation: { ...p.conversation, farewell: e.target.value } }))
-              }
-            />
-          </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {(
-            [
-              ['responsibilities', 'Responsibilities', 'e.g. Find a convenient appointment slot'],
-              ['rules', 'Rules to follow', 'e.g. Ask one question at a time'],
-              ['restrictions', 'Never do', 'e.g. Never give medical advice'],
-              ['escalation_rules', 'Hand over to a human when', 'e.g. The caller reports an emergency'],
-            ] as const
-          ).map(([key, label, placeholder]) => (
-            <StringListEditor
-              key={key}
-              label={label}
-              placeholder={placeholder}
-              items={config.instructions[key]}
-              onChange={(items) => updateConfig((p) => ({ ...p, instructions: { ...p.instructions, [key]: items } }))}
-            />
-          ))}
-        </div>
-        <div className="space-y-1.5">
-          <span className="block text-xs font-medium text-slate-300">Details collected from the caller</span>
-          {config.variables.outputs.length === 0 ? (
-            <p className="text-[11px] text-slate-500">None. You can add variables later in the Variables tab.</p>
-          ) : (
-            <div className="divide-y divide-[#1b1f2d] rounded-md border border-[#1b1f2d] bg-[#0c0e14]">
-              {config.variables.outputs.map((v, idx) => (
-                <div key={v.name} className="flex items-center justify-between gap-2 p-2.5 text-xs">
-                  <div className="min-w-0">
-                    <span className="font-mono text-emerald-300">{v.name}</span>
-                    <span className="text-slate-400"> · {v.description}</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="text-slate-500 hover:text-rose-400 p-1"
-                    title="Remove"
-                    onClick={() =>
-                      updateConfig((p) => ({
-                        ...p,
-                        variables: { ...p.variables, outputs: p.variables.outputs.filter((_, i) => i !== idx) },
-                      }))
-                    }
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-
-  const renderVoice = () =>
-    config && (
-      <div className="space-y-5">
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[#232736] bg-[#10121a] p-4">
-          <Volume2 className="h-5 w-5 text-[#00df8f]" />
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-semibold text-slate-100">{voiceName || config.voice.voice_id || 'Default voice'}</div>
-            <div className="text-[11px] text-slate-400">
-              {config.voice.voice_id ? `${config.voice.provider} · ${config.voice.language}` : 'The provider default voice is used until you pick one.'}
-            </div>
-          </div>
-          <Button type="button" variant="secondary" size="sm" onClick={() => setIsVoicePickerOpen(true)}>
-            Choose voice
-          </Button>
-        </div>
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-slate-300">Speaking speed: {config.voice.speed.toFixed(2)}×</label>
-          <input
-            type="range"
-            min={0.5}
-            max={2}
-            step={0.05}
-            value={config.voice.speed}
-            onChange={(e) => updateConfig((p) => ({ ...p, voice: { ...p.voice, speed: Number(e.target.value) } }))}
-            className="w-full accent-[#00df8f]"
-          />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Select
-            label="Speech-to-text"
-            options={STT_PROVIDER_OPTIONS}
-            value={config.providers.stt}
-            onChange={(e) => updateConfig((p) => ({ ...p, providers: { ...p.providers, stt: e.target.value } }))}
-          />
-          <Select
-            label="AI model"
-            options={LLM_PROVIDER_OPTIONS}
-            value={config.providers.llm}
-            onChange={(e) => updateConfig((p) => ({ ...p, providers: { ...p.providers, llm: e.target.value } }))}
-          />
-          <Select
-            label="Text-to-speech"
-            options={TTS_PROVIDER_OPTIONS}
-            value={config.providers.tts}
-            onChange={(e) => updateConfig((p) => ({ ...p, providers: { ...p.providers, tts: e.target.value } }))}
-          />
-        </div>
-      </div>
-    );
-
-  const renderChecklist = <T extends { id: string; name: string; description?: string | null }>(
-    title: string,
-    items: T[],
-    selected: string[],
-    setSelected: (ids: string[]) => void,
-    empty: string
-  ) => (
-    <div className="space-y-2">
-      <span className="block text-xs font-medium text-slate-300">{title}</span>
-      {items.length === 0 ? (
-        <p className="text-[11px] text-slate-500">{empty}</p>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          {items.map((item) => (
-            <label
-              key={item.id}
-              className={`flex cursor-pointer items-start gap-2 rounded-md border p-3 text-xs ${
-                selected.includes(item.id) ? 'border-[#00df8f] bg-[#00df8f]/10' : 'border-[#232736] bg-[#10121a]'
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="mt-0.5 accent-[#00df8f]"
-                checked={selected.includes(item.id)}
-                onChange={() => setSelected(toggle(selected, item.id))}
-              />
-              <span>
-                <span className="block font-semibold text-slate-100">{item.name}</span>
-                {item.description && <span className="block text-[11px] text-slate-400">{item.description}</span>}
-              </span>
-            </label>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-
-  const renderResources = () => (
-    <div className="space-y-6">
-      <p className="text-[11px] text-slate-400">
-        Optional. Attach what the agent needs to look things up or take actions during a call. You can change this later.
-      </p>
-      {renderChecklist('Knowledge sources', knowledge, knowledgeIds, setKnowledgeIds, 'No knowledge sources in the catalog yet.')}
-      {renderChecklist('Tools', tools.filter((t) => t.enabled), toolIds, setToolIds, 'No tools in the catalog yet.')}
-    </div>
-  );
-
-  const renderLimits = () =>
-    config && (
-      <CallLimitsEditor
-        limits={config.conversation.limits}
-        onChange={(limits) => updateConfig((p) => ({ ...p, conversation: { ...p.conversation, limits } }))}
-      />
-    );
-
-  const renderSummary = () => {
-    if (!config) return null;
-    const limits = config.conversation.limits;
-    const rows: [string, React.ReactNode][] = [
-      ['Client', selectedClient?.name || '—'],
-      ['Employee', `${form.name} · ${form.role}`],
-      ['Calls', DIRECTIONS.find((d) => d.value === form.call_direction)?.label],
-      ['Languages', [form.primary_language, ...form.supported_languages].join(', ')],
-      ['Goal', config.instructions.primary_goal],
-      ['Greeting', config.conversation.greeting],
-      ['Instructions', `${config.instructions.responsibilities.length} responsibilities · ${config.instructions.rules.length} rules · ${config.instructions.restrictions.length} restrictions`],
-      ['Voice', `${voiceName || config.voice.voice_id || 'Default'} · ${config.voice.speed.toFixed(2)}×`],
-      ['Providers', `${config.providers.stt} → ${config.providers.llm} → ${config.providers.tts}`],
-      ['Knowledge & tools', `${knowledgeIds.length} knowledge · ${toolIds.length} tools`],
-      [
-        'Call limits',
-        [
-          limits.max_call_duration_s ? `max ${limits.max_call_duration_s}s` : 'default duration',
-          limits.end_call_phrases.length ? `${limits.end_call_phrases.length} end-call phrases` : null,
-        ]
-          .filter(Boolean)
-          .join(' · '),
-      ],
-    ];
-    return (
-      <div className="space-y-4">
-        <dl className="divide-y divide-[#1b1f2d] rounded-md border border-[#1b1f2d] bg-[#0c0e14] text-xs">
-          {rows.map(([label, value]) => (
-            <div key={label} className="grid grid-cols-3 gap-3 p-3">
-              <dt className="text-slate-400">{label}</dt>
-              <dd className="col-span-2 text-slate-100 break-words">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        <p className="text-[11px] text-slate-400">
-          After creating, you'll land on the Tests tab to try the employee. Every setting stays editable on its page.
-        </p>
-      </div>
-    );
-  };
-
-  const body = [renderBasics, renderDescribe, renderReview, renderVoice, renderResources, renderLimits, renderSummary][step]();
-  const isLast = step === STEPS.length - 1;
-  const isDescribe = STEPS[step].id === 'describe';
+  const pill = (active: boolean) =>
+    `rounded-lg border p-3 text-left transition-colors ${active ? 'border-[#00df8f] bg-[#00df8f]/10' : 'border-[#1b3a46] hover:border-slate-500'}`;
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Link to="/agents" className="text-slate-400 hover:text-slate-200">
-          <ArrowLeft className="h-4 w-4" />
-        </Link>
+    <div className="mx-auto max-w-4xl space-y-5">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100">Create AI Employee</h1>
-          <p className="text-xs text-slate-400">Set up a voice agent from scratch in a few guided steps.</p>
+          <Link to="/agents" className="mb-2 inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
+            <ArrowLeft className="h-3.5 w-3.5" /> AI Employees
+          </Link>
+          <h1 className="text-xl font-bold text-slate-100">Create AI Employee</h1>
+          <p className="text-xs text-slate-400">One screen. It's ready to test as soon as you create it; fine-tune everything in its workspace.</p>
         </div>
       </div>
 
       {fromRequest && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-[#0a4d39] bg-[#052b20]/60 px-3 py-2 text-xs text-slate-200">
-          <Info className="h-3.5 w-3.5 text-[#00df8f]" />
-          Building <strong>{fromRequest.name}</strong> for {fromRequest.client_name}
-          <span className="font-mono text-[#00df8f]">{fromRequest.client_code}</span>
-          {fromRequest.voice_name ? ` · Sarvam voice ${fromRequest.voice_name}.` : ' · choose a voice in the Voice step.'}
-          The request is marked done when you create the employee.
+        <div className="rounded-lg border border-[#0a4d39] bg-[#052b20] p-3 text-xs text-slate-200">
+          Building <strong>{fromRequest.name}</strong> requested by {fromRequest.client_name}
+          {fromRequest.notes ? ` · "${fromRequest.notes}"` : ''}
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6">
-        <ol className="flex lg:flex-col gap-1 overflow-x-auto">
-          {STEPS.map((s, idx) => {
-            return (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  disabled={idx > step}
-                  onClick={() => setStep(idx)}
-                  className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs whitespace-nowrap ${
-                    idx === step ? 'bg-[#00df8f]/10 text-slate-100' : 'text-slate-400 hover:text-slate-200 disabled:hover:text-slate-400'
-                  }`}
-                >
-                  <span
-                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] ${
-                      idx < step ? 'border-[#00df8f] bg-[#00df8f] text-black' : idx === step ? 'border-[#00df8f] text-[#00df8f]' : 'border-slate-600'
-                    }`}
-                  >
-                    {idx < step ? <Check className="h-3 w-3" /> : idx + 1}
-                  </span>
-                  <span>
-                    <span className="block font-medium">{s.title}</span>
-                    <span className="hidden lg:block text-[10px] text-slate-500">{s.hint}</span>
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
+      <Card title="1. Who it works for">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Select
+            label="Client"
+            placeholder="Select a client"
+            options={clients.map((c) => ({ value: c.id, label: c.client_code ? `${c.name} · ${c.client_code}` : c.name }))}
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+          />
+          <div className="space-y-2">
+            <Input label="Employee name" placeholder="e.g. Priya" value={name} onChange={(e) => setName(e.target.value)} />
+            <NameSuggestions current={name} exclude={clientAgentNames} onPick={setName} />
+          </div>
+        </div>
+      </Card>
 
-        <Card title={STEPS[step].title} subtitle={STEPS[step].hint}>
-          <div className="space-y-6">
-            {body}
+      <Card title="2. What it does" subtitle={businessType ? `Templates for ${businessType.toLowerCase().replace('_', ' ')} businesses come first.` : undefined}>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {sortedTemplates.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                setTemplateTouched(true);
+                applyTemplate(t);
+              }}
+              className={pill(templateId === t.id)}
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                <LayoutTemplate className="h-4 w-4 text-[#00df8f]" /> {t.name}
+                {isRecommended(t) && <span className="rounded bg-[#00df8f]/15 px-1.5 text-[10px] font-semibold text-[#00df8f]">Recommended</span>}
+              </span>
+              <span className="mt-1 block text-[11px] text-slate-400 line-clamp-2">{t.description}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => {
+              setTemplateTouched(true);
+              applyTemplate(null);
+            }}
+            className={pill(templateId === BLANK)}
+          >
+            <span className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+              <PenLine className="h-4 w-4 text-slate-300" /> Start blank
+            </span>
+            <span className="mt-1 block text-[11px] text-slate-400">A plain setup you fill in yourself in the workspace.</span>
+          </button>
+        </div>
+        {templateId === BLANK && (
+          <div className="mt-4 max-w-sm">
+            <Select label="Role" placeholder="Select a role" options={ROLE_OPTIONS} value={role} onChange={(e) => setRole(e.target.value)} />
+          </div>
+        )}
+        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {DIRECTIONS.map((d) => (
+            <button key={d.value} type="button" onClick={() => setDirection(d.value)} className={pill(direction === d.value)}>
+              <span className="flex items-center gap-2 text-xs font-semibold text-slate-100">
+                {d.icon} {d.label}
+              </span>
+              <span className="mt-0.5 block text-[11px] text-slate-400">{d.hint}</span>
+            </button>
+          ))}
+        </div>
+      </Card>
 
-            {error && (
-              <div className="rounded-md border border-rose-800/60 bg-rose-950/30 p-3 text-xs text-rose-200">
-                {error}
-                {createdAgentId && (
-                  <Link to={`/agents/${createdAgentId}`} className="ml-2 underline">
-                    Open employee
-                  </Link>
-                )}
-              </div>
-            )}
-
-            <div className="flex items-center justify-between border-t border-[#1b1f2d] pt-4">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={back}
-                leftIcon={<ArrowLeft className="h-4 w-4" />}
-              >
-                {step === 0 ? 'Cancel' : 'Back'}
-              </Button>
-              <div className="flex items-center gap-3">
-                {stepError && !isDescribe && <span className="text-[11px] text-amber-300">{stepError}</span>}
-                {isLast ? (
-                  <Button type="button" onClick={handleCreate} isLoading={isCreating} leftIcon={<Check className="h-4 w-4" />}>
-                    {createdAgentId ? 'Retry saving' : 'Create employee'}
-                  </Button>
-                ) : isDescribe && !config ? null : (
-                  <Button
-                    type="button"
-                    onClick={next}
-                    disabled={!!stepError}
-                    rightIcon={<ArrowRight className="h-4 w-4" />}
-                  >
-                    Next
-                  </Button>
-                )}
+      <Card title="3. How it sounds">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="space-y-3">
+            <Select label="Main language" options={AVAILABLE_LANGUAGES} value={primaryLanguage} onChange={(e) => setPrimaryLanguage(e.target.value)} />
+            <div>
+              <span className="mb-1.5 block text-xs font-medium text-slate-300">Also speaks (optional)</span>
+              <div className="flex flex-wrap gap-1.5">
+                {AVAILABLE_LANGUAGES.filter((l) => l.value !== primaryLanguage && l.value !== 'en').map((l) => {
+                  const on = otherLanguages.includes(l.value);
+                  return (
+                    <button
+                      key={l.value}
+                      type="button"
+                      onClick={() => setOtherLanguages(on ? otherLanguages.filter((x) => x !== l.value) : [...otherLanguages, l.value])}
+                      className={`rounded-full border px-2.5 py-0.5 text-[11px] ${on ? 'border-[#00df8f] bg-[#00df8f]/15 text-[#00df8f]' : 'border-[#1b3a46] text-slate-300'}`}
+                    >
+                      {l.label.split(' (')[0].split(' - ')[0]}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
-        </Card>
+          <div>
+            <span className="mb-1.5 block text-xs font-medium text-slate-300">Voice</span>
+            <div className="flex items-center justify-between rounded-lg border border-[#1b3a46] p-3">
+              <span className="flex items-center gap-2 text-sm text-slate-100">
+                <Volume2 className="h-4 w-4 text-[#00df8f]" />
+                {voice ? (
+                  <>
+                    {voice.name} <span className="text-[11px] capitalize text-slate-500">· {voice.provider}</span>
+                  </>
+                ) : (
+                  'Picking a voice...'
+                )}
+              </span>
+              <Button variant="secondary" size="sm" onClick={() => setIsVoicePickerOpen(true)}>
+                Change
+              </Button>
+            </div>
+            {!voiceTouched && voice && <p className="mt-1 text-[11px] text-slate-500">Recommended for this language. Press Change to listen to others.</p>}
+          </div>
+        </div>
+      </Card>
+
+      <Card
+        title={
+          <span className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+            <BookOpen className="h-4 w-4 text-[#00df8f]" /> 4. What it knows
+          </span>
+        }
+        subtitle={client ? `${client.name}'s knowledge base` : 'Choose a client first'}
+      >
+        {knowledge.length === 0 ? (
+          <p className="text-xs text-slate-500">
+            {clientId ? (
+              <>
+                This client has no knowledge yet. You can add it later on{' '}
+                <Link to={`/clients/${clientId}`} className="text-[#00df8f] hover:underline">
+                  the client's page
+                </Link>
+                ; until then the employee offers a callback for questions it can't answer.
+              </>
+            ) : (
+              'Pick a client to see its knowledge base.'
+            )}
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {knowledge.map((k) => {
+              const on = knowledgeIds.includes(k.id);
+              return (
+                <button
+                  key={k.id}
+                  type="button"
+                  onClick={() => setKnowledgeIds(on ? knowledgeIds.filter((x) => x !== k.id) : [...knowledgeIds, k.id])}
+                  className="flex w-full items-center gap-2 rounded border border-[#102d38] px-3 py-2 text-left text-xs hover:border-slate-600"
+                >
+                  <span className={`flex h-4 w-4 items-center justify-center rounded border ${on ? 'border-[#00df8f] bg-[#00df8f] text-[#04130d]' : 'border-slate-600'}`}>
+                    {on && <Check className="h-3 w-3" />}
+                  </span>
+                  <span className="text-slate-200">{k.name}</span>
+                  <span className="ml-auto text-[10px] text-slate-500">{(k.content || '').length.toLocaleString()} chars</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {error && <p className="rounded border border-rose-800/50 bg-rose-950/40 p-3 text-xs text-rose-300">{error}</p>}
+
+      <div className="flex items-center justify-between border-t border-[#102d38] pt-4">
+        <span className="text-xs text-slate-500">{missing || 'Ready. You can test it right after creating.'}</span>
+        <Button variant="primary" disabled={!!missing} isLoading={isCreating} onClick={create}>
+          Create &amp; open workspace
+        </Button>
       </div>
 
       <VoicePickerModal
         isOpen={isVoicePickerOpen}
         onClose={() => setIsVoicePickerOpen(false)}
-        selectedVoiceId={config?.voice.voice_id}
-        onSelectVoice={(voice: CartesiaVoice) => {
-          updateConfig((p) => ({
-            ...p,
-            voice: {
-              ...p.voice,
-              provider: voice.provider || 'sarvam',
-              voice_id: voice.id,
-              language: voice.language || p.voice.language || 'en-IN',
-            },
-            providers: { ...p.providers, tts: voice.provider || 'sarvam' },
-          }));
-          setVoiceName(voice.name);
+        selectedVoiceId={voice?.id}
+        language={primaryLanguage}
+        provider={voice?.provider}
+        onSelectVoice={(v: CartesiaVoice) => {
+          setVoice({ id: v.id, name: v.name, provider: v.provider || 'sarvam' });
+          setVoiceTouched(true);
           setIsVoicePickerOpen(false);
         }}
       />
     </div>
   );
 };
-
-export default AgentCreateWizardPage;

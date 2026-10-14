@@ -319,3 +319,16 @@ def test_campaign_api_admin_and_portal_scoping(client: TestClient, auth_headers:
 
     exported = client.get(f"/api/portal/campaigns/{campaign_id}/export.csv", headers=portal_headers)
     assert exported.status_code == 200 and "course_enquired" in exported.text
+
+
+def test_deleting_an_agent_removes_its_campaigns(db: Session, telephony_setup):
+    from app.models.agent import Agent
+    from app.services.agent_service import AgentService
+
+    campaign = _running(db, telephony_setup)
+    agent_id, campaign_id = campaign.agent_id, campaign.id
+    assert _recipients(db, campaign)
+    AgentService(db).delete_agent(agent_id)  # used to fail: campaigns still referenced the agent's version
+    assert db.get(Agent, agent_id) is None
+    assert db.query(Campaign).filter(Campaign.agent_id == agent_id).count() == 0
+    assert db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == campaign_id).count() == 0

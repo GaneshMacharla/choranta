@@ -51,10 +51,29 @@ def seed_plans(db: Session) -> None:
     db.commit()
 
 
+def retire_plans(db: Session) -> None:
+    """
+    Pay-as-you-go only: plans are no longer offered, and current subscriptions run to the end of their
+    period without renewing (they end CANCELLED rather than PAST_DUE). Safe to run on every startup.
+    """
+    from app.models.subscription import ClientSubscription, Plan
+    plans = db.query(Plan).filter(Plan.is_active.is_(True)).update({Plan.is_active: False}, synchronize_session=False)
+    subs = (
+        db.query(ClientSubscription)
+        .filter(ClientSubscription.cancel_at_period_end.is_(False), ClientSubscription.status != "CANCELLED")
+        .update({ClientSubscription.cancel_at_period_end: True}, synchronize_session=False)
+    )
+    db.commit()
+    if plans or subs:
+        logger.info(f"Pay-as-you-go: retired {plans} plan(s); {subs} subscription(s) end at period end")
+
+
 def seed_catalogs(db: Session) -> None:
     """Seed default system tools, integrations, and sample knowledge sources if empty."""
     seed_number_pricing(db)
     seed_plans(db)
+    if settings.PAYG_ONLY:
+        retire_plans(db)
     # 1. Tools
     initial_tools = [
         {
@@ -410,6 +429,9 @@ _ADDED_COLUMNS = [
     ("knowledge_sources", "content", "TEXT"),
     ("number_pricing", "setup_fee_inr", "FLOAT NOT NULL DEFAULT 0"),
     ("knowledge_sources", "owner_agent_id", "VARCHAR(64) REFERENCES agents(id) ON DELETE CASCADE"),
+    ("pricing_settings", "payg_max_concurrent_calls", "INTEGER"),
+    ("clients", "max_concurrent_calls", "INTEGER"),
+    ("knowledge_sources", "client_id", "VARCHAR(64) REFERENCES clients(id) ON DELETE CASCADE"),
 ]
 
 

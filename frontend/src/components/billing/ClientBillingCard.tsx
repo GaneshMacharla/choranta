@@ -88,7 +88,10 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
   }
 
   return (
-    <Card title="Billing & Wallet" subtitle="Prepaid wallet: payments issue GST invoices, calls are charged automatically">
+    <Card
+      title="Billing & Wallet"
+      subtitle={`Prepaid wallet: payments issue ${wallet.gst_registered ? 'GST invoices' : 'receipts (no GST)'}, calls are charged automatically`}
+    >
       <div className="space-y-4 text-xs">
         {error && (
           <div className="flex items-start gap-2 rounded border border-rose-800/50 bg-rose-950/40 p-2.5 text-rose-300">
@@ -99,7 +102,7 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <span className="flex items-center gap-1.5 text-slate-400">
-              <WalletIcon className="h-4 w-4 text-[#00df8f]" /> Wallet balance (excl. GST)
+              <WalletIcon className="h-4 w-4 text-[#00df8f]" /> Wallet balance{wallet.gst_registered ? ' (excl. GST)' : ''}
             </span>
             <span className={`font-mono text-2xl font-bold ${wallet.calls_blocked ? 'text-rose-300' : wallet.low_balance ? 'text-amber-300' : 'text-slate-100'}`}>
               {inr(wallet.balance_inr)}
@@ -175,10 +178,19 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
         )}
       </div>
 
-      <Modal isOpen={modal === 'payment'} onClose={() => setModal(null)} title="Record payment" description="Amount received from the client, including GST. A GST invoice is issued and the wallet is credited with the taxable value.">
+      <Modal
+        isOpen={modal === 'payment'}
+        onClose={() => setModal(null)}
+        title="Record payment"
+        description={
+          wallet.gst_registered
+            ? 'Amount received from the client, including GST. A GST invoice is issued and the wallet is credited with the taxable value.'
+            : 'Amount received from the client. A payment receipt is issued and the wallet is credited with the full amount (no GST).'
+        }
+      >
         <div className="space-y-3 text-xs">
           <label className="block space-y-1">
-            <span className="text-slate-300">Amount received (₹, incl. GST)</span>
+            <span className="text-slate-300">Amount received (₹{wallet.gst_registered ? ', incl. GST' : ''})</span>
             <input type="number" min={1} className={inputClass} value={amount} onChange={(e) => setAmount(e.target.value)} />
           </label>
           <label className="block space-y-1">
@@ -187,8 +199,8 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
           </label>
           {split && (
             <div className="space-y-1 rounded border border-[#1b2030] bg-black/30 p-3 font-mono text-slate-300">
-              <div className="flex justify-between"><span>Wallet credit (taxable)</span><span className="text-[#00df8f]">{inr(split.taxable_inr)}</span></div>
-              {split.intra_state ? (
+              <div className="flex justify-between"><span>Wallet credit{split.gst_registered ? ' (taxable)' : ''}</span><span className="text-[#00df8f]">{inr(split.taxable_inr)}</span></div>
+              {!split.gst_registered ? null : split.intra_state ? (
                 <>
                   <div className="flex justify-between"><span>CGST</span><span>{inr(split.cgst_inr)}</span></div>
                   <div className="flex justify-between"><span>SGST</span><span>{inr(split.sgst_inr)}</span></div>
@@ -196,7 +208,7 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
               ) : (
                 <div className="flex justify-between"><span>IGST</span><span>{inr(split.igst_inr)}</span></div>
               )}
-              <div className="flex justify-between border-t border-[#1b2030] pt-1 font-semibold"><span>Invoice total</span><span>{inr(split.total_inr)}</span></div>
+              <div className="flex justify-between border-t border-[#1b2030] pt-1 font-semibold"><span>{split.gst_registered ? 'Invoice total' : 'Receipt total'}</span><span>{inr(split.total_inr)}</span></div>
             </div>
           )}
           <div className="flex justify-end gap-2">

@@ -13,6 +13,7 @@ class BusinessTypeEnum(str, Enum):
     HOTEL = "HOTEL"
     RESTAURANT = "RESTAURANT"
     CORPORATE = "CORPORATE"
+    COACHING = "COACHING"
     OTHER = "OTHER"
 
     @classmethod
@@ -95,6 +96,8 @@ class ClientUpdate(BaseModel):
     contact_phone: Optional[str] = Field(None, max_length=64)
     timezone: Optional[str] = Field(None, max_length=64)
     status: Optional[ClientStatusEnum] = None
+    max_concurrent_calls: Optional[int] = Field(
+        None, ge=0, le=500, description="Simultaneous call limit for this client; 0 = use the platform default")
 
     @field_validator("name")
     @classmethod
@@ -133,6 +136,7 @@ class ClientResponse(ClientBase):
     id: str
     client_code: Optional[str] = None
     status: ClientStatusEnum
+    max_concurrent_calls: Optional[int] = None
     agent_count: int = 0
     created_at: datetime
     updated_at: datetime

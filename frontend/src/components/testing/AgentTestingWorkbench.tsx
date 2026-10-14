@@ -131,7 +131,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
   const webrtcAudioElRef = useRef<HTMLAudioElement | null>(null);
 
   // Turn Simulator State (HTTP)
-  const [userInput, setUserInput] = useState('I want to see 3 BHK apartments in Whitefield under 1.2 Cr');
+  const [userInput, setUserInput] = useState('');
   const [lastTurnResult, setLastTurnResult] = useState<SimulateTurnResult | null>(null);
   const [isSimulatingTurn, setIsSimulatingTurn] = useState(false);
   const [chatMessages, setChatMessages] = useState<LiveChatMessage[]>([]);
@@ -146,7 +146,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
   }, [chatMessages]);
 
   // Mock Lead & Company Source for Test Calls
-  const [mockCallerName, setMockCallerName] = useState('Rahul Sharma');
+  const [mockCallerName, setMockCallerName] = useState('');
   const [mockCompanyName, setMockCompanyName] = useState('Apex Realty Bangalore');
 
   // Realtime WebSocket Audio State (Phase 3B)
@@ -291,13 +291,12 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
     try {
       const selectedAgent = agents.find((a) => a.id === selectedAgentId);
       const effectiveCompany = mockCompanyName.trim() || selectedAgent?.client_name || 'Apex Realty Bangalore';
-      const effectiveCaller = mockCallerName.trim() || 'Rahul Sharma';
+      const effectiveCaller = mockCallerName.trim();
 
       const sess = await runtimeService.startSession(selectedAgentId, selectedVersionId, {
         origin: 'internal_test_lab',
-        user_name: effectiveCaller,
+        ...(effectiveCaller ? { user_name: effectiveCaller } : {}),
         company_name: effectiveCompany,
-        lead_id: 'lead_re_101',
       });
       setActiveSession(sess);
       setLastTurnResult(null);
@@ -945,13 +944,12 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
       if (!currentSession || currentSession.status !== 'ACTIVE' || callWasEnded) {
         const selectedAgent = agents.find((a) => a.id === selectedAgentId);
         const effectiveCompany = mockCompanyName.trim() || selectedAgent?.client_name || 'Apex Realty Bangalore';
-        const effectiveCaller = mockCallerName.trim() || 'Rahul Sharma';
+        const effectiveCaller = mockCallerName.trim();
 
         currentSession = await runtimeService.startSession(selectedAgentId, selectedVersionId, {
           origin: 'internal_test_lab',
-          user_name: effectiveCaller,
+          ...(effectiveCaller ? { user_name: effectiveCaller } : {}),
           company_name: effectiveCompany,
-          lead_id: 'lead_re_101',
         });
         setActiveSession(currentSession);
 
@@ -1127,13 +1125,11 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
             <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" /> Mock Lead Active:
             </span>
-            <span className="font-semibold text-slate-100">{mockCallerName}</span>
+            <span className="font-semibold text-slate-100">{mockCallerName || 'Not given'}</span>
             <span className="text-slate-600">•</span>
             <span className="text-slate-400">Company:</span>
             <span className="font-medium text-slate-200">{mockCompanyName || agents.find((a) => a.id === selectedAgentId)?.client_name || 'Apex Realty Bangalore'}</span>
-            <span className="text-slate-600">•</span>
-            <span className="text-[11px] text-slate-400 font-mono">lead_re_101</span>
-            <span className="rounded bg-emerald-950/60 border border-emerald-800/50 px-1.5 py-0.5 text-[10px] text-emerald-300">Mock Data Loaded</span>
+            <span className="rounded bg-emerald-950/60 border border-emerald-800/50 px-1.5 py-0.5 text-[10px] text-emerald-300">Test call</span>
           </div>
           <button
             type="button"

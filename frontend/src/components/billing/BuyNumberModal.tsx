@@ -94,7 +94,7 @@ export const BuyNumberModal: React.FC<BuyNumberModalProps> = ({
             <select className={inputClass} value={numberType} onChange={(e) => { setNumberType(e.target.value as NumberType); setResults(null); setSelected(null); }}>
               {available.map((p) => (
                 <option key={p.number_type} value={p.number_type}>
-                  {NUMBER_TYPE_LABELS[p.number_type]} · {inr(p.monthly_rent_inr, 0)}/month + GST
+                  {NUMBER_TYPE_LABELS[p.number_type]} · {inr(p.monthly_rent_inr, 0)}/month{p.monthly_rent_with_gst_inr > p.monthly_rent_inr ? ' + GST' : ''}
                 </option>
               ))}
             </select>
@@ -143,7 +143,7 @@ export const BuyNumberModal: React.FC<BuyNumberModalProps> = ({
             <div className="flex justify-between border-t border-[#143c49] pt-1.5 font-semibold text-slate-100">
               <span>Due now (from bought credits)</span><span className="font-mono">{inr(dueNow)}</span>
             </div>
-            <p className="text-[11px] text-slate-500">After this, {inr(price.monthly_rent_inr)} is taken each month. Prices exclude GST, which you paid when buying credits.</p>
+            <p className="text-[11px] text-slate-500">After this, {inr(price.monthly_rent_inr)} is taken each month.{price.monthly_rent_with_gst_inr > price.monthly_rent_inr ? ' Prices exclude GST, which you paid when buying credits.' : ''}</p>
             {walletBalance !== undefined && (
               <p className={`mt-1 ${short ? 'text-rose-300' : 'text-slate-500'}`}>
                 Bought credits: {inr(walletBalance)}

@@ -5,7 +5,7 @@ Contains production-grade blueprints such as the Sarvam-inspired Real Estate Lea
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from app.schemas.agent_spec import AgentConfigurationData
-from app.services.agent_templates_business import BUSINESS_TEMPLATES
+from app.services.agent_templates_business import BUSINESS_TEMPLATES, CALL_SCRIPTS
 
 
 class TemplatePreview(BaseModel):
@@ -378,7 +378,7 @@ COACHING_ADMISSION_COUNSELLOR_TEMPLATE: Dict[str, Any] = {
 # Business types each template suits (used to recommend one) and the calls it handles
 REAL_ESTATE_LEAD_QUALIFICATION_TEMPLATE.setdefault("business_types", ["REAL_ESTATE"])
 REAL_ESTATE_LEAD_QUALIFICATION_TEMPLATE.setdefault("call_direction", "both")
-COACHING_ADMISSION_COUNSELLOR_TEMPLATE.setdefault("business_types", ["OTHER"])
+COACHING_ADMISSION_COUNSELLOR_TEMPLATE.setdefault("business_types", ["COACHING"])
 COACHING_ADMISSION_COUNSELLOR_TEMPLATE.setdefault("call_direction", "both")
 
 AVAILABLE_AGENT_TEMPLATES = [
@@ -386,6 +386,10 @@ AVAILABLE_AGENT_TEMPLATES = [
     COACHING_ADMISSION_COUNSELLOR_TEMPLATE,
     *BUSINESS_TEMPLATES,
 ]
+
+# Every template carries a call script (questions to ask, points to mention, the next step to agree)
+for _tpl in AVAILABLE_AGENT_TEMPLATES:
+    _tpl["default_config"]["instructions"].update(CALL_SCRIPTS.get(_tpl["id"], {}))
 
 
 def _complete(tpl: Dict[str, Any]) -> Dict[str, Any]:

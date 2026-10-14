@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, Bot, PhoneCall, Clock, IndianRupee, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, Check, PhoneCall, Clock, IndianRupee, Pencil, Wallet, X } from 'lucide-react';
 import { portalAgentRequestsService } from '../../services/agentRequests';
 import { Card } from '../../components/common/Card';
 import { Stat } from '../../components/portal/Stat';
@@ -40,6 +40,81 @@ const DailyBars: React.FC<{ data: PortalSummary['daily']; metric: 'minutes' | 's
   );
 };
 
+/** Company / organization name with an inline rename control. */
+const CompanyName: React.FC<{ name: string; onRenamed: (name: string) => void }> = ({ name, onRenamed }) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const cancel = () => {
+    setEditing(false);
+    setDraft(name);
+    setError(null);
+  };
+  const save = async () => {
+    const next = draft.trim().replace(/\s+/g, ' ');
+    if (!next) return setError('Company name cannot be empty.');
+    if (next === name) return cancel();
+    setSaving(true);
+    setError(null);
+    try {
+      const me = await portalAgentRequestsService.updateCompanyName(next);
+      onRenamed(me.client_name);
+      window.dispatchEvent(new CustomEvent('portal:company-renamed', { detail: me.client_name }));
+      setEditing(false);
+    } catch (err) {
+      setError((err as Error).message || 'Could not rename your company.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div className="group flex items-center gap-2">
+        <h1 className="text-xl font-bold">{name}</h1>
+        <button
+          onClick={() => {
+            setDraft(name);
+            setEditing(true);
+          }}
+          title="Rename company"
+          className="rounded p-1 text-slate-500 hover:bg-[#0c2129] hover:text-slate-200"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          value={draft}
+          maxLength={255}
+          disabled={saving}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') cancel();
+          }}
+          placeholder="Company or organization name"
+          className="w-72 max-w-full rounded-md border border-[#102d38] bg-[#071419] px-3 py-1.5 text-base font-semibold text-slate-100 outline-none focus:border-[#00df8f]"
+        />
+        <button onClick={save} disabled={saving} title="Save" className="rounded p-1.5 text-[#00df8f] hover:bg-[#0c2129] disabled:opacity-50">
+          <Check className="h-4 w-4" />
+        </button>
+        <button onClick={cancel} disabled={saving} title="Cancel" className="rounded p-1.5 text-slate-400 hover:bg-[#0c2129] disabled:opacity-50">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+    </div>
+  );
+};
+
 export const PortalDashboardPage: React.FC = () => {
   const { user } = useAuth();
   const [summary, setSummary] = useState<PortalSummary | null>(null);
@@ -71,7 +146,7 @@ export const PortalDashboardPage: React.FC = () => {
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div>
-        <h1 className="text-xl font-bold">{summary.client_name}</h1>
+        <CompanyName name={summary.client_name} onRenamed={(n) => setSummary((s) => (s ? { ...s, client_name: n } : s))} />
         <p className="text-xs text-slate-400">Welcome back, {summary.user_name}</p>
       </div>
 
@@ -103,8 +178,8 @@ export const PortalDashboardPage: React.FC = () => {
               ? wallet.calls_blocked_reason || 'Your AI employee can’t take or make calls right now.'
               : `Low on credits: ${creditsLabel(wallet.balance_inr)} left (alert below ${creditsLabel(wallet.low_balance_threshold_inr)}). Buy credits soon to avoid interruptions.`}
           </span>
-          <Link to={plan ? '/portal/billing' : '/portal/plans'} className="ml-auto shrink-0 font-semibold underline-offset-2 hover:underline">
-            {plan ? 'Buy credits' : 'Choose a plan'}
+          <Link to={plan || planCount === 0 ? '/portal/billing' : '/portal/plans'} className="ml-auto shrink-0 font-semibold underline-offset-2 hover:underline">
+            {plan || planCount === 0 ? 'Buy credits' : 'Choose a plan'}
           </Link>
         </div>
       )}
@@ -147,7 +222,7 @@ export const PortalDashboardPage: React.FC = () => {
       <OutboundInsights />
 
       {payment && (payment.upi_id || payment.bank_details) && (
-        <Card title="How to recharge" subtitle={`Pay by UPI or bank transfer; GST @ ${payment.gst_rate_percent}% applies`}>
+        <Card title="How to recharge" subtitle={payment.gst_registered ? `Pay by UPI or bank transfer; GST @ ${payment.gst_rate_percent}% applies` : 'Pay by UPI or bank transfer; 1 credit per ₹1'}>
           <div className="space-y-2 text-xs text-slate-300">
             {payment.upi_id && (
               <p>

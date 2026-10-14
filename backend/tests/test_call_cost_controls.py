@@ -107,7 +107,8 @@ async def test_silent_caller_is_reprompted_then_hung_up(db: Session, telephony_s
     watchdog = asyncio.create_task(s._watchdog())
     try:
         await _until(lambda: s.websocket.closed, timeout=10)
-        assert fakes["tts"].spoken[0] == session_module.SILENCE_REPROMPT_TEXT
+        from app.runtime.telephony import phrases
+        assert fakes["tts"].spoken[0] in phrases.variants("reprompt", s._language())
         assert s._end_reason == "caller_silent"
     finally:
         watchdog.cancel()
@@ -254,6 +255,10 @@ async def test_agent_max_tool_rounds_limits_llm_calls(db: Session, telephony_set
         await s.execute_turn(b"\x00\x00" * 320)
         await _until(lambda: s._turn_task is not None and s._turn_task.done(), timeout=10)
         assert len(llm.calls) == 2  # one tool round, then a final answer without tools
-        assert fakes["tts"].spoken == ["Here is what I found."]
+        # A filler covers the silence while the tool runs, then the answer
+        from app.runtime.telephony import phrases
+        filler, answer = fakes["tts"].spoken
+        assert filler in phrases.variants("tool_filler", s._language()) and answer == "Here is what I found."
+        assert filler not in " ".join(_assistant_messages(s))  # fillers never enter the conversation history
     finally:
         await _shutdown(s)

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
  * Plays one voice preview at a time. Previews are fetched with the user's token (an <audio> tag can't send it)
  * and kept as object URLs, so replaying a voice doesn't download it again.
  */
-export function useVoicePreview(fetchPreview: (voiceId: string) => Promise<Blob>) {
+export function useVoicePreview(fetchPreview: (voiceId: string) => Promise<Blob>, cacheTag = '') {
   const audio = useRef<HTMLAudioElement | null>(null);
   const urls = useRef<Record<string, string>>({});
   const [playing, setPlaying] = useState<string | null>(null);
@@ -29,11 +29,13 @@ export function useVoicePreview(fetchPreview: (voiceId: string) => Promise<Blob>
     stop();
     setError(null);
     try {
-      let url = urls.current[voiceId];
+      // Previews differ per language, so cache them per language too
+      const key = `${cacheTag}:${voiceId}`;
+      let url = urls.current[key];
       if (!url) {
         setLoading(voiceId);
         url = URL.createObjectURL(await fetchPreview(voiceId));
-        urls.current[voiceId] = url;
+        urls.current[key] = url;
       }
       if (!audio.current) audio.current = new Audio();
       audio.current.src = url;

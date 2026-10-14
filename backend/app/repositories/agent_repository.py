@@ -69,6 +69,11 @@ class AgentRepository:
         self.db.execute(text("DELETE FROM test_scenarios WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("DELETE FROM runtime_events WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("DELETE FROM runtime_sessions WHERE agent_id = :aid"), {"aid": agent_id})
+        # Campaigns point at an agent version (RESTRICT), so they go before the versions, children first
+        campaigns = "SELECT id FROM campaigns WHERE agent_id = :aid"
+        for table in ("webhook_deliveries", "campaign_attempts", "campaign_recipients"):
+            self.db.execute(text(f"DELETE FROM {table} WHERE campaign_id IN ({campaigns})"), {"aid": agent_id})
+        self.db.execute(text("DELETE FROM campaigns WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("DELETE FROM calls WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("DELETE FROM agent_tools WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("DELETE FROM agent_integrations WHERE agent_id = :aid"), {"aid": agent_id})

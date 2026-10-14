@@ -10,9 +10,9 @@ from app.core.exceptions import ChorantaException
 from app.db.init_db import init_db
 from app.api.routes import (
     auth, clients, agents, dashboard,
-    agent_configuration, catalogs, runtime,
+    agent_configuration, catalogs, client_knowledge, runtime,
     websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing, inventory, billing, portal, plans,
-    campaigns, api_keys, public_leads, agent_requests, verifications, demo_leads
+    campaigns, api_keys, public_leads, agent_requests, verifications, demo_leads, courses
 )
 
 logging.basicConfig(
@@ -149,6 +149,7 @@ app.include_router(clients.router, prefix=settings.API_V1_PREFIX)
 app.include_router(agents.router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_configuration.router, prefix=settings.API_V1_PREFIX)
 app.include_router(catalogs.router, prefix=settings.API_V1_PREFIX)
+app.include_router(client_knowledge.router, prefix=settings.API_V1_PREFIX)
 app.include_router(dashboard.router, prefix=settings.API_V1_PREFIX)
 app.include_router(runtime.router, prefix=settings.API_V1_PREFIX)
 app.include_router(mock_environment.router, prefix=settings.API_V1_PREFIX)
@@ -167,6 +168,8 @@ app.include_router(public_leads.router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_requests.portal_router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_requests.admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(verifications.router, prefix=settings.API_V1_PREFIX)
+app.include_router(courses.portal_router, prefix=settings.API_V1_PREFIX)
+app.include_router(courses.admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)

@@ -66,8 +66,8 @@ import {
 // Cartesia voice picker is kept in components/voice/VoicePickerModal.tsx but not used: voices come from Sarvam
 // import { VoicePickerModal } from '../components/voice/VoicePickerModal';
 import { SarvamVoicePickerModal as VoicePickerModal } from '../components/voice/SarvamVoicePickerModal';
+import { AgentBuildView } from '../components/agents/AgentBuildView';
 import { AgentKnowledgePanel } from '../components/agents/AgentKnowledgePanel';
-import { AgentTestingWorkbench } from '../components/testing/AgentTestingWorkbench';
 import { CallLimitsEditor } from '../components/agents/CallLimitsEditor';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
@@ -188,6 +188,7 @@ export const AgentDetailPage: React.FC = () => {
   // Navigation tab (?tab=tests opens the testing step directly)
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<
+    | 'build'
     | 'instructions'
     | 'variables'
     | 'knowledge'
@@ -195,7 +196,7 @@ export const AgentDetailPage: React.FC = () => {
     | 'settings'
     | 'tests'
     | 'versions'
-  >(searchParams.get('tab') === 'tests' ? 'tests' : 'instructions');
+  >(searchParams.get('tab') && searchParams.get('tab') !== 'tests' ? (searchParams.get('tab') as any) : 'build');
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -205,7 +206,6 @@ export const AgentDetailPage: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [isSimulatingMockCall, setIsSimulatingMockCall] = useState(false);
 
   // Validation Modal
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
@@ -250,33 +250,33 @@ export const AgentDetailPage: React.FC = () => {
       return;
     }
 
-    const effectiveId = voiceId || 'a0e99841-438c-4a64-b679-ae501e7d6091';
+    // Agents speak with Sarvam voices: preview the chosen one in the agent's own language
+    const effectiveId = voiceId || voicesList.find((v) => v.is_default)?.id || 'shubh';
     setIsPreviewLoading(true);
-    const voiceObj = voicesList.find((v) => v.id === effectiveId);
-    const previewUrl = voiceObj?.preview_url || catalogsService.getVoicePreviewUrl(effectiveId, token);
-    const audio = new Audio(previewUrl);
-    previewAudioRef.current = audio;
-
-    audio.oncanplay = () => {
-      setIsPreviewLoading(false);
-      setIsPlayingPreview(true);
-    };
-
-    audio.onended = () => {
-      setIsPlayingPreview(false);
-      previewAudioRef.current = null;
-    };
-
-    audio.onerror = () => {
-      setIsPlayingPreview(false);
-      setIsPreviewLoading(false);
-      previewAudioRef.current = null;
-    };
-
-    audio.play().catch(() => {
-      setIsPlayingPreview(false);
-      setIsPreviewLoading(false);
-    });
+    const fetchPreview = config?.voice?.provider === 'cartesia' ? catalogsService.fetchCartesiaPreview : catalogsService.fetchSarvamPreview;
+    fetchPreview(effectiveId, config?.languages?.primary)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        previewAudioRef.current = audio;
+        const done = () => {
+          setIsPlayingPreview(false);
+          setIsPreviewLoading(false);
+          previewAudioRef.current = null;
+          URL.revokeObjectURL(url);
+        };
+        audio.oncanplay = () => {
+          setIsPreviewLoading(false);
+          setIsPlayingPreview(true);
+        };
+        audio.onended = done;
+        audio.onerror = done;
+        return audio.play();
+      })
+      .catch(() => {
+        setIsPlayingPreview(false);
+        setIsPreviewLoading(false);
+      });
   };
 
   // Edit Metadata Modal State
@@ -323,11 +323,10 @@ export const AgentDetailPage: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [agentData, versionsData, configData, knwData, toolsData, intsData, voicesData] = await Promise.all([
+      const [agentData, versionsData, configData, toolsData, intsData, voicesData] = await Promise.all([
         agentsService.get(id),
         agentsService.getVersions(id),
         configurationService.getConfiguration(id),
-        catalogsService.listKnowledge(),
         catalogsService.listTools(),
         catalogsService.listIntegrations(),
         // Cartesia: catalogsService.listVoices() — voices now come from Sarvam
@@ -337,7 +336,8 @@ export const AgentDetailPage: React.FC = () => {
       setAgent(agentData);
       setVersions(versionsData);
       setConfig(normalizeConfig(configData.configuration));
-      setKnowledgeList(knwData);
+      // Only this client's knowledge base can be given to the employee
+      setKnowledgeList(await catalogsService.listClientKnowledge(agentData.client_id).catch(() => []));
       setToolsList(toolsData);
       setIntegrationsList(intsData);
       setVoicesList(voicesData);
@@ -441,22 +441,42 @@ export const AgentDetailPage: React.FC = () => {
     }
   };
 
-  const handleSimulateMockCall = async () => {
-    if (!id || versions.length === 0) return;
-    setIsSimulatingMockCall(true);
+  // Workspace: save the draft and publish it as a new version so the test panel uses it
+  const handlePublishAndTest = async () => {
+    if (!id || !config) return;
+    setIsPublishing(true);
     try {
-      const result = await runtimeService.simulateMockCall(id, versions[0].id, [
-        'I am looking for a 3 BHK apartment in Whitefield under 1.2 Cr.',
-        'Yes, please schedule a site visit for this Saturday.',
-      ]);
-      setActionSuccess(`Simulated call ${result.call_id} completed with ${result.event_count} runtime events.`);
-      setTimeout(() => setActionSuccess(null), 5000);
+      if (isDirty) {
+        const saved = await configurationService.updateConfiguration(id, config);
+        setConfig(normalizeConfig(saved.configuration));
+        setIsDirty(false);
+      }
+      await configurationService.createVersion(id);
+      setVersions(await agentsService.getVersions(id));
     } catch (err: any) {
-      setActionSuccess(null);
-      alert(`Mock call failed: ${err.message || 'Runtime simulation failed.'}`);
+      alert(`Publish failed: ${err.message || 'Validation error prevented publishing.'}`);
     } finally {
-      setIsSimulatingMockCall(false);
+      setIsPublishing(false);
     }
+  };
+
+  // Go live: step through the allowed statuses up to DEPLOYED
+  const handleGoLive = async () => {
+    if (!id || !agent) return;
+    const path: Record<string, string[]> = {
+      DRAFT: ['TESTING', 'READY', 'DEPLOYED'],
+      TESTING: ['READY', 'DEPLOYED'],
+      READY: ['DEPLOYED'],
+      PAUSED: ['DEPLOYED'],
+      ARCHIVED: ['DRAFT', 'TESTING', 'READY', 'DEPLOYED'],
+    };
+    let updated = agent;
+    for (const status of path[agent.status] || []) {
+      updated = await agentsService.update(id, { status: status as any });
+    }
+    setAgent(updated);
+    setActionSuccess(`${updated.name} is live.`);
+    setTimeout(() => setActionSuccess(null), 4000);
   };
 
   // Compare Versions
@@ -682,7 +702,7 @@ export const AgentDetailPage: React.FC = () => {
           <Button
             variant="primary"
             size="sm"
-            onClick={() => setActiveTab('tests')}
+            onClick={() => setActiveTab('build')}
             className="bg-emerald-600 hover:bg-emerald-500 text-white border-none shadow-md"
             title="Switch to Tests tab to run deterministic voice scenarios"
           >
@@ -713,12 +733,12 @@ export const AgentDetailPage: React.FC = () => {
       {/* CANVAS SECTION NAVIGATION (STRICT ORDER: INSTRUCTIONS, VARIABLES, TOOLS, SETTINGS, TESTS) */}
       <div className="flex overflow-x-auto rounded-xl border border-[#1b1f2d] bg-[#0c0e14] p-1 no-scrollbar">
         {[
+          { id: 'build', label: 'Build & test', icon: Bot },
           { id: 'instructions', label: '1. Instructions', icon: FileCode },
           { id: 'variables', label: `2. Variables (${config.variables.inputs.length + config.variables.outputs.length})`, icon: Sliders },
           { id: 'tools', label: `3. Tools (${config.tools.length})`, icon: Wrench },
           { id: 'knowledge', label: `4. Knowledge (${config.knowledge_sources.length})`, icon: BookOpen },
           { id: 'settings', label: '5. Settings', icon: Volume2 },
-          { id: 'tests', label: '6. Tests', icon: FlaskConical },
           { id: 'versions', label: `Versions (${versions.length})`, icon: History },
         ].map((tab) => {
           const Icon = tab.icon;
@@ -739,6 +759,26 @@ export const AgentDetailPage: React.FC = () => {
           );
         })}
       </div>
+
+      {activeTab === 'build' && (
+        <AgentBuildView
+          agent={agent}
+          config={config}
+          updateDraft={updateDraft}
+          isDirty={isDirty}
+          versions={versions}
+          onPublish={handlePublishAndTest}
+          isPublishing={isPublishing}
+          knowledgeList={knowledgeList}
+          onToggleKnowledge={handleToggleKnowledge}
+          voiceLabel={
+            voicesList.find((v) => v.id === config.voice.voice_id)?.name ||
+            (config.voice.voice_id ? `${config.voice.voice_id} (${config.voice.provider})` : 'Default voice')
+          }
+          onChangeVoice={() => setIsVoicePickerOpen(true)}
+          onGoLive={handleGoLive}
+        />
+      )}
 
       {/* ========================================================= */}
       {/* TAB 1: OVERVIEW */}
@@ -1636,14 +1676,21 @@ export const AgentDetailPage: React.FC = () => {
                 .catch(() => {})
             }
           />
-          {/* SHARED KNOWLEDGE LIBRARY */}
+          {/* CLIENT KNOWLEDGE BASE */}
           <Card
-            title="Shared knowledge library"
-            subtitle="Optional: reusable entries from the Knowledge page. Most AI employees only need their own knowledge above."
+            title="Client knowledge base"
+            subtitle="Entries from this client's knowledge base (managed on the client's page). Attach the ones this employee should answer from."
           >
             <div className="divide-y divide-[#1b1f2d]">
               {knowledgeList.length === 0 ? (
-                <div className="py-6 text-center text-xs text-slate-500">The shared library is empty.</div>
+                <div className="py-6 text-center text-xs text-slate-500">
+                  This client's knowledge base is empty.{' '}
+                  {agent && (
+                    <Link to={`/clients/${agent.client_id}`} className="text-[#00df8f] hover:underline">
+                      Add knowledge on the client's page
+                    </Link>
+                  )}
+                </div>
               ) : (
                 knowledgeList.map((knw) => {
                   const isAttached = config.knowledge_sources.includes(knw.id);
@@ -1657,8 +1704,7 @@ export const AgentDetailPage: React.FC = () => {
                           </span>
                           <StatusBadge status={knw.status} />
                         </div>
-                        <p className="text-xs text-slate-400 mt-1 max-w-xl">{knw.description}</p>
-                        <span className="text-[10px] font-mono text-slate-500">{knw.id}</span>
+                        <p className="text-xs text-slate-400 mt-1 max-w-xl line-clamp-2">{knw.content || knw.description}</p>
                       </div>
 
                       <div>
@@ -1992,37 +2038,6 @@ export const AgentDetailPage: React.FC = () => {
               )}
             </div>
           </Card>
-        </div>
-      )}
-
-      {/* ========================================================= */}
-      {/* TAB 5: TESTS (final step: test the published AI Employee before deploying) */}
-      {/* ========================================================= */}
-      {activeTab === 'tests' && (
-        <div className="space-y-6">
-          <Card
-            title="Test your AI Employee"
-            subtitle="Final step before deploying: talk to the published version by voice, phone or chat, and run scenario regressions"
-          >
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                {versions.length === 0
-                  ? 'Publish a version first (Versions tab); tests always run against an immutable published version.'
-                  : 'Pick the version to test below, then start a browser voice call, call your phone, chat, or run the scenario suite.'}
-              </p>
-              <Button
-                variant="secondary"
-                onClick={handleSimulateMockCall}
-                isLoading={isSimulatingMockCall}
-                disabled={versions.length === 0}
-                className="shrink-0"
-              >
-                <PhoneCall className="mr-1.5 h-3.5 w-3.5" /> Simulate Mock Call
-              </Button>
-            </div>
-          </Card>
-
-          <AgentTestingWorkbench agentId={agent.id} />
         </div>
       )}
 
@@ -2970,6 +2985,8 @@ export const AgentDetailPage: React.FC = () => {
         isOpen={isVoicePickerOpen}
         onClose={() => setIsVoicePickerOpen(false)}
         selectedVoiceId={config.voice.voice_id}
+        language={config.languages?.primary}
+        provider={config.voice.provider}
         onSelectVoice={(voice) => {
           updateDraft((prev) => ({
             ...prev,

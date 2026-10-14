@@ -3,7 +3,8 @@ Prepaid credits.
 
 1 credit = Rs 1 (pre-GST). Clients buy credits by recharging (online, bank transfer or UPI); the payment
 issues a GST tax invoice (tax on the advance) and adds the taxable value to the wallet as bought credits,
-which never expire. As soon as a call ends it costs its real cost + the admin's profit %, so tax is never
+which never expire. Until the company is GST-registered (settings.GST_REGISTERED) no GST is charged:
+the full amount becomes credits and the document is a payment receipt. As soon as a call ends it costs its real cost + the admin's profit %, so tax is never
 charged twice.
 
 Clients on a monthly plan (services/subscriptions.py) use the period's plan credits first; only the rest
@@ -68,6 +69,23 @@ def live_call_count(db: Session, client_id: str) -> int:
     )
 
 
+def client_concurrency_limit(db: Session, client_id: str) -> Optional[int]:
+    """
+    Most calls a client may have live at once: their usable plan's limit, else the admin's per-client
+    override, else the platform default for pay-as-you-go clients. None = unlimited.
+    """
+    sub = subscriptions.get_subscription(db, client_id)
+    plan = db.get(Plan, sub.plan_id) if sub else None
+    if sub and plan and subscriptions.is_usable(sub):
+        return plan.max_concurrent_calls or None
+    if not settings.PAYG_ONLY:
+        return None  # with plans on sale, clients without one aren't limited
+    client = db.get(Client, client_id)
+    if client and client.max_concurrent_calls:
+        return client.max_concurrent_calls
+    return get_pricing(db).payg_max_concurrent_calls
+
+
 def check_call_allowed(db: Session, client_id: Optional[str]) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Whether a new billable call may start, as (allowed, reason, code). Codes: PLAN_EXPIRED, NO_BALANCE,
@@ -79,19 +97,23 @@ def check_call_allowed(db: Session, client_id: Optional[str]) -> Tuple[bool, Opt
     has_balance = bool(wallet and wallet.balance_inr > 0)
     sub = subscriptions.get_subscription(db, client_id)
     plan = db.get(Plan, sub.plan_id) if sub else None
+    limit = client_concurrency_limit(db, client_id)
 
     if sub and plan and subscriptions.is_usable(sub):
         if subscriptions.remaining_credits(sub, plan) <= 0 and not has_balance:
             return False, "This month's plan credits are used up. Buy credits to keep calling.", "NO_BALANCE"
-        if plan.max_concurrent_calls and live_call_count(db, client_id) >= plan.max_concurrent_calls:
-            return False, (f"The {plan.name} plan allows {plan.max_concurrent_calls} call(s) at a time. "
+        if limit and live_call_count(db, client_id) >= limit:
+            return False, (f"The {plan.name} plan allows {limit} call(s) at a time. "
                            "Wait for a call to finish or upgrade the plan."), "CONCURRENCY"
         return True, None, None
-    if sub and plan and sub.status == "PAST_DUE":
+    if sub and plan and sub.status == "PAST_DUE" and not settings.PAYG_ONLY:
         return False, f"The {plan.name} plan has expired. Renew it to resume calls.", "PLAN_EXPIRED"
-    # No plan, or a cancelled one: bought credits only
+    # No plan, or one that has ended: bought credits only
     if not has_balance:
-        return False, "You're out of credits. Choose a plan or buy credits to resume calls.", "NO_BALANCE"
+        hint = "Buy credits" if settings.PAYG_ONLY else "Choose a plan or buy credits"
+        return False, f"You're out of credits. {hint} to resume calls.", "NO_BALANCE"
+    if limit and live_call_count(db, client_id) >= limit:
+        return False, f"Your account allows {limit} call(s) at a time. Wait for a call to finish.", "CONCURRENCY"
     return True, None, None
 
 
@@ -102,7 +124,7 @@ def can_place_call(db: Session, client_id: Optional[str]) -> bool:
 
 def gst_split(total_received: float, client_state_code: Optional[str]) -> Dict[str, Any]:
     """Splits a GST-inclusive amount into taxable value and CGST+SGST (same state) or IGST."""
-    rate = settings.GST_RATE_PERCENT / 100.0
+    rate = settings.EFFECTIVE_GST_RATE_PERCENT / 100.0
     taxable = _money(total_received / (1 + rate))
     tax = _money(total_received - taxable)
     place_of_supply = (client_state_code or settings.COMPANY_STATE_CODE or "").strip()
@@ -118,6 +140,7 @@ def gst_split(total_received: float, client_state_code: Optional[str]) -> Dict[s
         "total_inr": _money(total_received),
         "place_of_supply": place_of_supply,
         "intra_state": intra_state,
+        "gst_registered": settings.GST_REGISTERED,
     }
 
 
@@ -208,7 +231,7 @@ def record_payment(
 
 
 def plan_price_with_gst(plan: Plan) -> float:
-    return _money(plan.monthly_price_inr * (1 + settings.GST_RATE_PERCENT / 100.0))
+    return _money(plan.monthly_price_inr * (1 + settings.EFFECTIVE_GST_RATE_PERCENT / 100.0))
 
 
 def pay_for_plan(

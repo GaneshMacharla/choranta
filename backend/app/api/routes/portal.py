@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_client_user
@@ -13,6 +14,7 @@ from app.api.routes.billing import invoice_out, invoice_pdf_response, wallet_out
 from app.api.routes.plans import usage_out
 from app.api.routes.telephony import _format_call_response, _recording_path, get_call_detail
 from app.core.config import settings
+from app.services.pricing import estimated_credits_per_minute
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 from app.models.billing import Invoice, WalletTransaction
@@ -78,12 +80,36 @@ def read_notification(notification_id: str, account: ClientAccount = Depends(req
 
 @router.get("/me")
 def me(account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """The signed-in client's business name and Choranta client code."""
+    """The signed-in client's business name, type and Choranta client code."""
     _, client_id = account
     client = db.get(Client, client_id)
     return {"client_id": client_id, "client_name": client.name if client else "",
             "client_code": client.client_code if client else None,
+            "business_type": client.business_type if client else None,
             "has_ai_employee": notifications.has_ai_employee(db, client_id)}
+
+
+class CompanyNameUpdate(BaseModel):
+    client_name: str = Field(..., min_length=1, max_length=255)
+
+
+@router.patch("/me")
+def update_me(req: CompanyNameUpdate, account: ClientAccount = Depends(require_client_user),
+              db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Let the client rename their company / organization."""
+    _, client_id = account
+    client = db.get(Client, client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    name = " ".join(req.client_name.split())
+    if not name:
+        raise HTTPException(status_code=422, detail="Company name cannot be empty.")
+    taken = db.query(Client).filter(func.lower(Client.name) == name.lower(), Client.id != client_id).first()
+    if taken:
+        raise HTTPException(status_code=409, detail="That company name is already in use. Try a slightly different name.")
+    client.name = name
+    db.commit()
+    return me(account, db)
 
 
 @router.get("/summary")
@@ -218,9 +244,11 @@ def payment_instructions(account: ClientAccount = Depends(require_client_user)):
     return {
         "upi_id": settings.PAYMENT_UPI_ID or None,
         "bank_details": settings.PAYMENT_BANK_DETAILS or None,
-        "gst_rate_percent": settings.GST_RATE_PERCENT,
+        "gst_rate_percent": settings.EFFECTIVE_GST_RATE_PERCENT,
+        "gst_registered": settings.GST_REGISTERED,
         "note": "After paying, share the UTR / UPI reference with your Choranta contact. Your wallet is credited "
-                "with the amount excluding GST, and a GST invoice is issued.",
+                + ("with the amount excluding GST, and a GST invoice is issued." if settings.GST_REGISTERED
+                   else "with the full amount (1 credit per Rs 1), and a payment receipt is issued."),
     }
 
 
@@ -248,7 +276,10 @@ def subscription(account: ClientAccount = Depends(require_client_user), db: Sess
         "simulated_payments": razorpay_gateway.is_simulated(),
         "grace_days": settings.SUBSCRIPTION_GRACE_DAYS,
         "min_topup_inr": settings.MIN_WALLET_TOPUP_INR,
-        "gst_rate_percent": settings.GST_RATE_PERCENT,
+        "gst_rate_percent": settings.EFFECTIVE_GST_RATE_PERCENT,
+        "gst_registered": settings.GST_REGISTERED,
+        "payg_only": settings.PAYG_ONLY,
+        "avg_credits_per_minute": estimated_credits_per_minute(db),
     }
 
 

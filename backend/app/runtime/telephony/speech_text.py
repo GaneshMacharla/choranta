@@ -1,5 +1,5 @@
 import re
-from typing import List
+from typing import List, Optional
 
 # Words followed by a period that do not end a sentence
 _ABBREVIATIONS = {
@@ -32,7 +32,7 @@ class SentenceChunker:
     agent starts talking sooner.
     """
 
-    def __init__(self, first_clause_min_chars: int = 40):
+    def __init__(self, first_clause_min_chars: int = 20):
         self.first_clause_min_chars = first_clause_min_chars
         self._buffer = ""
         self._emitted_any = False
@@ -93,6 +93,125 @@ def clean_for_speech(text: str) -> str:
     text = _LIST_MARKER.sub("", text)
     text = _MARKDOWN.sub("", text)
     text = _EMOJI.sub("", text)
+    text = normalize_for_speech(text)
     text = re.sub(r"\s+", " ", text).strip()
     # Sentences made only of punctuation (e.g. a stray "...") aren't worth synthesizing
     return text if re.search(r"\w", text) else ""
+
+
+# ---------------------------------------------------------------------------
+# Has the caller finished their thought?
+# ---------------------------------------------------------------------------
+
+# Words a caller trails off on when they are about to say more ("my budget is...", "ante...", "aur...")
+_TRAILING_WORDS = {
+    # English
+    "and", "but", "so", "because", "or", "like", "the", "a", "an", "my", "our", "is", "are", "was", "to", "of",
+    "for", "with", "in", "at", "um", "umm", "uh", "uhh", "er", "erm", "then", "also", "about", "around", "maybe",
+    # Hindi (roman)
+    "aur", "lekin", "par", "toh", "to", "ki", "ke", "ka", "matlab", "ya", "jaise", "phir", "mera", "meri",
+    # Telugu (roman)
+    "ante", "inka", "kani", "mari", "leda", "aithe", "kuda", "ani",
+    # Native script
+    "और", "लेकिन", "तो", "कि", "मतलब", "या", "फिर", "मेरा", "मेरी",
+    "అంటే", "ఇంకా", "కానీ", "మరి", "లేదా", "అయితే", "కూడా", "నా", "మా",
+}
+_TRAILING_PUNCT = re.compile(r"(,|\.\.\.|…|-|–|—)\s*$")
+# Telugu and Hindi put the verb last: a phrase ending on a case ending or postposition ("కౌన్సిలర్ని",
+# "ఇంటికి", "office ko") usually has its verb still to come. A weaker signal than a linking word.
+_CASE_ENDINGS_NATIVE = ("కి", "కు", "తో", "లో", "ని", "ను", "నుండి", "నుంచి", "వరకు", "గురించి", "కోసం",
+                        "को", "से", "में", "पर", "लिए", "तक")
+_CASE_WORDS_ROMAN = {"ko", "se", "mein", "par", "liye", "tak", "gurinchi", "kosam", "varaku", "nunchi"}
+_EDGE_PUNCT = ".,!?;:\"'()[]…-–—।"
+
+
+def _last_word(text: str) -> str:
+    words = [w.strip(_EDGE_PUNCT) for w in text.split()]
+    words = [w for w in words if w]
+    return words[-1].lower() if words else ""
+
+
+def pause_hint(text: str) -> Optional[str]:
+    """
+    Whether the caller probably paused mid-thought rather than finished:
+    "strong" - trailing comma/ellipsis/dash, a linking or hesitation word, or a phone number cut off partway;
+    "weak"   - a Telugu/Hindi phrase ending on a case ending, with its verb probably still to come;
+    None     - looks finished.
+    Speech-to-text ends every fragment with a full stop, so a final "." (or "।") is ignored.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    if _TRAILING_PUNCT.search(text):
+        return "strong"
+    text = re.sub(r"[.।]+$", "", text).strip()
+    # A phone number being read out: ends in digits and has 5-9 of them so far (a year like 2026 has 4)
+    if re.search(r"\d\W*$", text):
+        digits = len(re.findall(r"\d", text))
+        return "strong" if 5 <= digits <= 9 else None
+    word = _last_word(text)
+    if not word:
+        return None
+    if word in _TRAILING_WORDS:
+        return "strong"
+    if word in _CASE_WORDS_ROMAN or (len(word) > 2 and word.endswith(_CASE_ENDINGS_NATIVE)):
+        return "weak"
+    return None
+
+
+def looks_incomplete(text: str) -> bool:
+    return pause_hint(text) is not None
+
+
+# ---------------------------------------------------------------------------
+# Speakable numbers, amounts, phone numbers and dates
+# ---------------------------------------------------------------------------
+
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+           "November", "December"]
+_RUPEES = re.compile(r"(?:₹|\bRs\.?|\bINR)\s*(\d[\d,]*(?:\.\d+)?)(\s*(?:lakhs?|lacs?|crores?|cr|k)\b)?", re.IGNORECASE)
+_PHONE = re.compile(r"(?<![\d])(?:\+91[\s-]?|0)?([6-9]\d{4})[\s-]?(\d{5})(?![\d])")
+_DMY = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b")
+_YMD = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
+
+
+def _plain(number: float) -> str:
+    return f"{number:.2f}".rstrip("0").rstrip(".")
+
+
+def _rupees(match: "re.Match[str]") -> str:
+    raw, unit = match.group(1), (match.group(2) or "").strip().lower()
+    if unit:
+        unit = {"lac": "lakh", "lacs": "lakh", "lakhs": "lakh", "cr": "crore", "crores": "crore",
+                "k": "thousand"}.get(unit, unit)
+        return f"{raw} {unit} rupees"
+    try:
+        value = float(raw.replace(",", ""))
+    except ValueError:
+        return match.group(0)
+    if value >= 1_00_00_000:
+        return f"{_plain(value / 1_00_00_000)} crore rupees"
+    if value >= 1_00_000:
+        return f"{_plain(value / 1_00_000)} lakh rupees"
+    return f"{raw} rupees"
+
+
+def _date(day: str, month: str, year: str) -> Optional[str]:
+    d, m = int(day), int(month)
+    if 1 <= m <= 12 and 1 <= d <= 31:
+        return f"{d} {_MONTHS[m - 1]} {year}"
+    return None
+
+
+def normalize_for_speech(text: str) -> str:
+    """
+    Rewrites things TTS reads badly into how people say them: ₹ amounts ("75 lakh rupees"), phone
+    numbers in digit groups with pauses, numeric dates, % and &. Anything unrecognised is left alone.
+    """
+    text = _RUPEES.sub(_rupees, text)
+    text = _PHONE.sub(lambda m: f"{' '.join(m.group(1))}, {' '.join(m.group(2))}", text)
+    text = _YMD.sub(lambda m: _date(m.group(3), m.group(2), m.group(1)) or m.group(0), text)
+    text = _DMY.sub(lambda m: _date(m.group(1), m.group(2), m.group(3)) or m.group(0), text)
+    text = re.sub(r"(\d)\s*%", r"\1 percent", text)
+    text = re.sub(r"\s*&\s*", " and ", text)
+    return text

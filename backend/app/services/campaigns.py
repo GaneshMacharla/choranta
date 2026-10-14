@@ -34,7 +34,6 @@ from app.models.client import Client
 from app.models.lead import Lead
 from app.models.phone_number import PhoneNumber
 from app.models.runtime_event import RuntimeEvent
-from app.models.subscription import Plan
 from app.services import billing, phone_numbers, subscriptions
 from app.services.outbound_calls import OutboundCallError, place_outbound_call
 
@@ -253,12 +252,11 @@ def _zone(name: Optional[str]) -> ZoneInfo:
 
 
 def concurrency_cap(db: Session, client_id: str) -> Optional[int]:
-    """Most simultaneous campaign calls allowed: the plan limit, keeping one line free for inbound calls."""
-    sub = subscriptions.get_subscription(db, client_id)
-    plan = db.get(Plan, sub.plan_id) if sub else None
-    if not plan or not plan.max_concurrent_calls:
+    """Most simultaneous campaign calls allowed: the client's call limit, keeping one line free for inbound calls."""
+    limit = billing.client_concurrency_limit(db, client_id)
+    if not limit:
         return None
-    return max(1, plan.max_concurrent_calls - 1)
+    return max(1, limit - 1)
 
 
 def validate_config(db: Session, campaign: Campaign) -> None:
@@ -310,7 +308,7 @@ def validate_config(db: Session, campaign: Campaign) -> None:
         raise CampaignError("Concurrent calls must be at least 1.")
     cap = concurrency_cap(db, campaign.client_id)
     if cap is not None and campaign.max_concurrent > cap:
-        raise CampaignError(f"This client's plan allows at most {cap} concurrent campaign call(s) "
+        raise CampaignError(f"This client's call limit allows at most {cap} concurrent campaign call(s) "
                             "(one line is kept free for incoming calls).")
     if not 0 <= campaign.retry_max <= MAX_RETRIES:
         raise CampaignError(f"Retries must be between 0 and {MAX_RETRIES}.")
@@ -820,11 +818,10 @@ def _bulk_headroom(db: Session, campaign: Campaign) -> int:
     ).first()
     if not has_trigger:
         return campaign.max_concurrent
-    sub = subscriptions.get_subscription(db, campaign.client_id)
-    plan = db.get(Plan, sub.plan_id) if sub else None
-    if not plan or not plan.max_concurrent_calls:
+    limit = billing.client_concurrency_limit(db, campaign.client_id)
+    if not limit:
         return campaign.max_concurrent
-    return plan.max_concurrent_calls - billing.live_call_count(db, campaign.client_id) - 1
+    return limit - billing.live_call_count(db, campaign.client_id) - 1
 
 
 def run_campaign_tick(db: Session, now: Optional[datetime] = None,

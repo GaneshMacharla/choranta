@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Navigate, Outlet } from 'react-router-dom';
-import { LayoutDashboard, PhoneCall, Megaphone, KeyRound, Phone, Wallet, Building, LogOut, Layers, Zap, Bot } from 'lucide-react';
+import { LayoutDashboard, PhoneCall, Megaphone, KeyRound, Phone, Wallet, Building, LogOut, Layers, Zap, Bot, GraduationCap } from 'lucide-react';
 import { portalAgentRequestsService } from '../../services/agentRequests';
+import { plansService } from '../../services/plans';
 import { NotificationBell } from './NotificationBell';
 import { useAuth } from '../../context/AuthContext';
 import { LoadingState } from '../common/LoadingState';
@@ -17,16 +18,32 @@ const NAV = [
   { to: '/portal/numbers', label: 'Phone numbers', icon: Phone, end: false },
   { to: '/portal/billing', label: 'Billing', icon: Wallet, end: false },
   { to: '/portal/inventory', label: 'Properties', icon: Building, end: false },
+  { to: '/portal/courses', label: 'Courses', icon: GraduationCap, end: false },
 ];
 
 /** Shell for client accounts: only their own calls, billing and inventory. */
 export const PortalLayout: React.FC = () => {
   const { isAuthenticated, isLoading, user, logout } = useAuth();
-  const [account, setAccount] = useState<{ client_name: string; client_code: string | null } | null>(null);
+  const [account, setAccount] = useState<{ client_name: string; client_code: string | null; business_type?: string | null } | null>(null);
+  // Plans are hidden when none are offered (pay-as-you-go)
+  const [hasPlans, setHasPlans] = useState(false);
 
   useEffect(() => {
-    if (isAuthenticated && user?.role === 'CLIENT') portalAgentRequestsService.me().then(setAccount).catch(() => setAccount(null));
+    if (isAuthenticated && user?.role === 'CLIENT') {
+      portalAgentRequestsService.me().then(setAccount).catch(() => setAccount(null));
+      plansService.list().then((plans) => setHasPlans(plans.length > 0)).catch(() => setHasPlans(false));
+    }
   }, [isAuthenticated, user?.role]);
+
+  // Company renamed elsewhere in the portal (dashboard heading)
+  useEffect(() => {
+    const onRename = (e: Event) => {
+      const name = (e as CustomEvent<string>).detail;
+      setAccount((prev) => (prev ? { ...prev, client_name: name } : prev));
+    };
+    window.addEventListener('portal:company-renamed', onRename);
+    return () => window.removeEventListener('portal:company-renamed', onRename);
+  }, []);
 
   if (isLoading) {
     return (
@@ -36,7 +53,7 @@ export const PortalLayout: React.FC = () => {
     );
   }
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (user?.role !== 'CLIENT') return <Navigate to="/" replace />;
+  if (user?.role !== 'CLIENT') return <Navigate to="/overview" replace />;
 
   return (
     <div className="flex min-h-screen flex-col bg-[#040d12] text-slate-100 md:flex-row">
@@ -52,7 +69,10 @@ export const PortalLayout: React.FC = () => {
           </div>
         </div>
         <nav className="flex flex-1 gap-1 overflow-x-auto md:flex-col">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+          {NAV.filter((item) => hasPlans || item.to !== '/portal/plans')
+            // Courses are for coaching and training centres
+            .filter((item) => item.to !== '/portal/courses' || account?.business_type === 'COACHING')
+            .map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}

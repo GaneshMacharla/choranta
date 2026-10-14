@@ -86,6 +86,15 @@ export const PortalBillingPage: React.FC = () => {
   const sub: Subscription | null = info.subscription;
   const online = info.online_payments;
   const gstRate = info.gst_rate_percent;
+  const gst = info.gst_registered;
+  const perMinute = info.avg_credits_per_minute;
+  const creditsFor = (paid: number) => Math.floor((paid / (1 + gstRate / 100)) * 100) / 100;
+  // Top-up shortcuts in credits; with GST the amount to pay includes it
+  const presets = [1000, 2500, 5000, 14999].map((credits) => ({
+    credits,
+    pay: gst ? Math.round(credits * (1 + gstRate / 100) * 100) / 100 : credits,
+  }));
+  const docName = gst ? 'invoice' : 'receipt';
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-2">
@@ -125,12 +134,21 @@ export const PortalBillingPage: React.FC = () => {
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <Card title="Your plan" className="lg:col-span-7" bodyClassName="flex flex-col justify-center">
+        <Card title={sub && sub.status !== 'CANCELLED' ? 'Your plan' : 'Pay-as-you-go'} className="lg:col-span-7" bodyClassName="flex flex-col justify-center">
           {sub && sub.status !== 'CANCELLED' ? (
-            <PlanUsageBar subscription={sub} />
+            <>
+              <PlanUsageBar subscription={sub} />
+              {info.payg_only && (
+                <p className="mt-3 text-xs text-slate-400">
+                  Your {sub.plan?.name} plan ends on {fmtDate(sub.current_period_end)}. After that you're on pay-as-you-go: calls are
+                  paid from your bought credits.
+                </p>
+              )}
+            </>
           ) : (
             <p className="text-xs text-slate-400">
-              You're on pay-as-you-go: each call uses your bought credits. Pick a monthly plan below to get bonus credits every month.
+              You're on pay-as-you-go: each call is paid from your credits, about {inr(perMinute)} per minute (1 credit = ₹1).
+              {plans.length > 0 && ' Pick a monthly plan below to get bonus credits every month.'}
             </p>
           )}
         </Card>
@@ -147,7 +165,7 @@ export const PortalBillingPage: React.FC = () => {
             </div>
             <div>
               <span className="block font-mono text-2xl font-bold text-slate-100">{creditsLabel(wallet.balance_inr)}</span>
-              <span className="text-xs text-slate-500">1 credit = ₹1 (excl. GST)</span>
+              <span className="text-xs text-slate-500">1 credit = ₹1{gst ? ' (excl. GST)' : ''} · about {inr(perMinute)} per call minute</span>
             </div>
           </div>
           <Button
@@ -178,22 +196,26 @@ export const PortalBillingPage: React.FC = () => {
             gstRate={gstRate}
             busyPlanId={busy?.startsWith('plan-') ? busy.slice(5) : null}
             onChoose={(plan) =>
-              pay('plan-' + plan.id, { purpose: 'SUBSCRIPTION', plan_id: plan.id }, `Payment received. Your ${plan.name} plan is set, and the GST invoice is below.`)
+              pay('plan-' + plan.id, { purpose: 'SUBSCRIPTION', plan_id: plan.id }, `Payment received. Your ${plan.name} plan is set, and the ${gst ? 'GST invoice' : 'receipt'} is below.`)
             }
           />
         </div>
       )}
 
-      <Card title="Invoices" subtitle="GST tax invoices for your plans and credit purchases" noPadding>
+      <Card
+        title={gst ? 'Invoices' : 'Receipts'}
+        subtitle={gst ? 'GST tax invoices for your plans and credit purchases' : 'Payment receipts for your credit purchases'}
+        noPadding
+      >
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="border-b border-[#1f2433] text-slate-400">
               <tr>
-                <th className="px-4 py-3">Invoice</th>
+                <th className="px-4 py-3">{gst ? 'Invoice' : 'Receipt'}</th>
                 <th className="px-4 py-3">Date</th>
                 <th className="px-4 py-3">For</th>
-                <th className="px-4 py-3">Taxable</th>
-                <th className="px-4 py-3">GST</th>
+                {gst && <th className="px-4 py-3">Taxable</th>}
+                {gst && <th className="px-4 py-3">GST</th>}
                 <th className="px-4 py-3">Total</th>
                 <th className="px-4 py-3" />
               </tr>
@@ -201,7 +223,7 @@ export const PortalBillingPage: React.FC = () => {
             <tbody>
               {invoices.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-slate-500">No invoices yet.</td>
+                  <td colSpan={gst ? 7 : 5} className="px-4 py-6 text-center text-slate-500">No {docName}s yet.</td>
                 </tr>
               )}
               {invoices.map((inv) => (
@@ -211,8 +233,8 @@ export const PortalBillingPage: React.FC = () => {
                   <td className="max-w-[16rem] truncate px-4 py-3 text-slate-400" title={inv.description}>
                     {inv.description.replace('AI voice agent services - ', '')}
                   </td>
-                  <td className="px-4 py-3 font-mono">{inr(inv.taxable_inr)}</td>
-                  <td className="px-4 py-3 font-mono">{inr(inv.cgst_inr + inv.sgst_inr + inv.igst_inr)}</td>
+                  {gst && <td className="px-4 py-3 font-mono">{inr(inv.taxable_inr)}</td>}
+                  {gst && <td className="px-4 py-3 font-mono">{inr(inv.cgst_inr + inv.sgst_inr + inv.igst_inr)}</td>}
                   <td className="px-4 py-3 font-mono font-semibold">{inr(inv.total_inr)}</td>
                   <td className="px-4 py-3 text-right">
                     <Button size="sm" variant="secondary" isLoading={busy === 'pdf-' + inv.id} onClick={() => download(inv)}>
@@ -234,23 +256,27 @@ export const PortalBillingPage: React.FC = () => {
         isOpen={topupOpen}
         onClose={() => setTopupOpen(false)}
         title="Buy credits"
-        description={`Pay any amount from ${inr(info.min_topup_inr, 0)}, GST included. You get 1 credit per ₹1 excluding GST, and a GST invoice is issued. Bought credits never expire.`}
+        description={
+          gst
+            ? `Pay any amount from ${inr(info.min_topup_inr, 0)}, GST included. You get 1 credit per ₹1 excluding GST, and a GST invoice is issued. Bought credits never expire.`
+            : `Pay any amount from ${inr(info.min_topup_inr, 0)}. You get 1 credit per ₹1 and a payment receipt. Bought credits never expire.`
+        }
       >
         <div className="space-y-3 text-xs">
           <div className="flex flex-wrap gap-2">
-            {[1180, 2950, 5900, 11800].map((value) => (
+            {presets.map(({ credits, pay: amount }) => (
               <button
-                key={value}
+                key={credits}
                 type="button"
-                onClick={() => setTopupAmount(String(value))}
-                className={`rounded border px-3 py-1.5 font-mono ${topupAmount === String(value) ? 'border-[#00df8f] text-[#00df8f]' : 'border-[#232736] text-slate-300 hover:border-slate-500'}`}
+                onClick={() => setTopupAmount(String(amount))}
+                className={`rounded border px-3 py-1.5 font-mono ${topupAmount === String(amount) ? 'border-[#00df8f] text-[#00df8f]' : 'border-[#232736] text-slate-300 hover:border-slate-500'}`}
               >
-                {inr(value, 0)}
+                {credits === 14999 ? `₹14,999 pack${gst ? ' + GST' : ''}` : inr(amount, 0)}
               </button>
             ))}
           </div>
           <label className="block space-y-1">
-            <span className="text-slate-300">Amount (₹, incl. GST)</span>
+            <span className="text-slate-300">Amount (₹{gst ? ', incl. GST' : ''})</span>
             <input
               type="number"
               min={info.min_topup_inr}
@@ -262,7 +288,8 @@ export const PortalBillingPage: React.FC = () => {
           {Number(topupAmount) > 0 && (
             <p className="text-slate-400">
               You get:{' '}
-              <span className="font-mono text-[#00df8f]">{creditsLabel(Math.floor((Number(topupAmount) / (1 + gstRate / 100)) * 100) / 100)}</span>
+              <span className="font-mono text-[#00df8f]">{creditsLabel(creditsFor(Number(topupAmount)))}</span>
+              {perMinute > 0 && <span> · about {Math.floor(creditsFor(Number(topupAmount)) / perMinute).toLocaleString('en-IN')} call minutes</span>}
             </p>
           )}
           <div className="flex justify-end gap-2">

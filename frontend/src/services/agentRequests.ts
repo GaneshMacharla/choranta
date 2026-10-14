@@ -69,7 +69,12 @@ export const portalAgentRequestsService = {
     request<AgentRequest>('/portal/agent-requests', { method: 'POST', body: JSON.stringify(body) }),
   cancel: (id: string) => request<AgentRequest>(`/portal/agent-requests/${id}`, { method: 'DELETE' }),
   me: () =>
-    request<{ client_id: string; client_name: string; client_code: string | null; has_ai_employee: boolean }>('/portal/me'),
+    request<{ client_id: string; client_name: string; client_code: string | null; business_type: string | null; has_ai_employee: boolean }>('/portal/me'),
+  updateCompanyName: (client_name: string) =>
+    request<{ client_id: string; client_name: string; client_code: string | null; business_type: string | null; has_ai_employee: boolean }>('/portal/me', {
+      method: 'PATCH',
+      body: JSON.stringify({ client_name }),
+    }),
 };
 
 /** Choranta admins: the queue of AI employees clients asked for. */

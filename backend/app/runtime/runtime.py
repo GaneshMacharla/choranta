@@ -138,29 +138,19 @@ class AgentRuntime:
             company_name = "Apex Realty Bangalore"
         session_metadata["company_name"] = str(company_name).strip()
 
-        if not session_metadata.get("user_name") or str(session_metadata.get("user_name")).strip().lower() in ("", "none", "null", "there"):
+        # Lead details come only from the lead this session is about (its lead_id), and only if it
+        # belongs to this agent's client. Nothing is guessed: unknown details are asked for on the call.
+        lead_id = session_metadata.get("lead_id")
+        if lead_id:
             from app.models.lead import Lead
-            lead = self.db.query(Lead).filter(Lead.client_id == agent.client_id).first()
-            if not lead:
-                lead = self.db.query(Lead).first()
-            if lead and lead.name and str(lead.name).strip().lower() not in ("there", ""):
-                session_metadata["user_name"] = lead.name
-                session_metadata.setdefault("lead_id", lead.id)
-                if hasattr(lead, "property_viewed") and lead.property_viewed:
-                    session_metadata.setdefault("property_viewed", lead.property_viewed)
-                if hasattr(lead, "enquiry_location") and lead.enquiry_location:
-                    session_metadata.setdefault("enquiry_location", lead.enquiry_location)
-                if hasattr(lead, "enquiry_budget") and lead.enquiry_budget:
-                    session_metadata.setdefault("enquiry_budget", lead.enquiry_budget)
-                if hasattr(lead, "enquiry_bhk") and lead.enquiry_bhk:
-                    session_metadata.setdefault("enquiry_bhk", lead.enquiry_bhk)
-            else:
-                session_metadata["user_name"] = "Rahul Sharma"
-                session_metadata.setdefault("lead_id", "lead_re_101")
-                session_metadata.setdefault("property_viewed", "Prestige Highline Residences")
-                session_metadata.setdefault("enquiry_location", "Whitefield")
-                session_metadata.setdefault("enquiry_budget", "₹90 Lakhs - ₹1.1 Cr")
-                session_metadata.setdefault("enquiry_bhk", "3 BHK")
+            lead = self.db.get(Lead, lead_id)
+            if lead and lead.client_id == agent.client_id:
+                if lead.name and not session_metadata.get("user_name"):
+                    session_metadata["user_name"] = lead.name
+                for field in ("property_viewed", "enquiry_location", "enquiry_budget", "enquiry_bhk"):
+                    value = getattr(lead, field, None)
+                    if value:
+                        session_metadata.setdefault(field, value)
 
         # 4. Build the session record. The lifecycle (CREATED -> INITIALIZING -> ACTIVE) runs in
         # memory and is saved with its events in a single commit: each commit is a database
@@ -349,7 +339,7 @@ class AgentRuntime:
             def run_llm(tools):
                 final = None
                 for item in llm_p.generate_stream(
-                    system_instruction=context.conversation.system_instruction,
+                    system_instruction=context.instruction_for_turn(),
                     messages=context.conversation.to_llm_messages(),
                     available_tools=tools
                 ):
@@ -401,7 +391,7 @@ class AgentRuntime:
                     tool_result = self.tool_executor.execute_tool(
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
-                        arguments=tc.arguments,
+                        arguments=context.with_contact_details(tc.tool_name, tc.arguments),
                         enabled_tool_ids=context.active_tools,
                         client_id=context.client_id
                     )
@@ -507,7 +497,7 @@ class AgentRuntime:
             available_tools_list = call_rules.with_end_call(describe_tools(self.db, context.active_tools))
             call_ended = False
             llm_result = llm_p.generate(
-                system_instruction=context.conversation.system_instruction,
+                system_instruction=context.instruction_for_turn(),
                 messages=context.conversation.to_llm_messages(),
                 available_tools=available_tools_list
             )
@@ -563,7 +553,7 @@ class AgentRuntime:
                     tool_result = self.tool_executor.execute_tool(
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
-                        arguments=tc.arguments,
+                        arguments=context.with_contact_details(tc.tool_name, tc.arguments),
                         enabled_tool_ids=context.active_tools,
                         client_id=context.client_id
                     )
@@ -593,7 +583,7 @@ class AgentRuntime:
 
                 # LLM Continuation after tool results
                 llm_result = llm_p.generate(
-                    system_instruction=context.conversation.system_instruction,
+                    system_instruction=context.instruction_for_turn(),
                     messages=context.conversation.to_llm_messages(),
                     available_tools=available_tools_list if tool_rounds < max_tool_rounds else None
                 )

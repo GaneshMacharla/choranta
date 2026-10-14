@@ -10,6 +10,8 @@ import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Input } from '../components/common/Input';
 import { Select } from '../components/common/Select';
+import { NameSuggestions } from '../components/common/NameSuggestions';
+import { AGENT_ROLE_OPTIONS } from '../constants/agentOptions';
 import { Modal } from '../components/common/Modal';
 import { StatusBadge, Badge } from '../components/common/Badge';
 import { LoadingState } from '../components/common/LoadingState';
@@ -23,17 +25,6 @@ const AGENT_STATUSES: { value: AgentStatus; label: string }[] = [
   { value: 'DEPLOYED', label: 'Deployed' },
   { value: 'PAUSED', label: 'Paused' },
   { value: 'ARCHIVED', label: 'Archived' },
-];
-
-const AGENT_ROLE_OPTIONS = [
-  { value: 'Receptionist', label: 'Receptionist' },
-  { value: 'Appointment Coordinator', label: 'Appointment Coordinator' },
-  { value: 'Customer Support Specialist', label: 'Customer Support Specialist' },
-  { value: 'Sales Assistant', label: 'Sales Assistant' },
-  { value: 'Lead Qualification Specialist', label: 'Lead Qualification Specialist' },
-  { value: 'Scheduling Coordinator', label: 'Scheduling Coordinator' },
-  { value: 'Information Desk Assistant', label: 'Information Desk Assistant' },
-  { value: 'Other', label: 'Other' },
 ];
 
 export const AgentsPage: React.FC = () => {
@@ -109,17 +100,9 @@ export const AgentsPage: React.FC = () => {
   }, [statusFilter, clientFilter]);
 
   const handleOpenCreateModal = () => {
-    setCreationStep('select_template');
-    setSelectedTemplate(null);
-    setCreateError(null);
-    setCreateForm({
-      client_id: '',
-      name: '',
-      role: '',
-      description: '',
-      template_id: undefined,
-    });
-    setIsCreateModalOpen(true);
+    // Every new AI employee goes through the guided wizard (templates for the client's business, language,
+    // voice, instructions and call limits), keeping the client filter if one is set
+    navigate(clientFilter ? `/agents/new?client=${clientFilter}` : '/agents/new');
   };
 
   const handleSelectTemplate = (tpl: AgentTemplate) => {
@@ -357,7 +340,7 @@ export const AgentsPage: React.FC = () => {
             leftIcon={<Plus className="h-4 w-4" />}
             onClick={handleOpenCreateModal}
           >
-            + Create AI Employee
+            Create AI Employee
           </Button>
         </div>
       </div>
@@ -422,7 +405,7 @@ export const AgentsPage: React.FC = () => {
                     variant="primary"
                     onClick={handleOpenCreateModal}
                   >
-                    + Create AI Employee
+                    Create AI Employee
                   </Button>
                 }
               />
@@ -641,9 +624,14 @@ export const AgentsPage: React.FC = () => {
             <Input
               label="Employee Name"
               required
-              placeholder="e.g. Real Estate Lead Qualification Assistant"
+              placeholder="e.g. Priya"
               value={createForm.name}
               onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+            />
+            <NameSuggestions
+              current={createForm.name}
+              exclude={agents.filter((a) => a.client_id === createForm.client_id).map((a) => a.name)}
+              onPick={(name) => setCreateForm({ ...createForm, name })}
             />
 
             <Select

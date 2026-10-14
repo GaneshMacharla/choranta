@@ -2,6 +2,22 @@ import pytest
 from app.services.voice_service import VoiceService, FALLBACK_CARTESIA_VOICES
 
 
+@pytest.fixture(autouse=True)
+def offline_cartesia(monkeypatch):
+    """Previews never call the real Cartesia API in tests."""
+    from app.services import voice_service
+
+    class FakeTTS:
+        def __init__(self, api_key=None):
+            pass
+
+        def synthesize(self, text, voice_id=None, speed=1.0, language=None):
+            return type("R", (), {"audio_bytes": bytes(200)})()
+
+    monkeypatch.setattr(voice_service, "CartesiaTTSProvider", FakeTTS)
+    monkeypatch.setattr(VoiceService, "_previews", {})
+
+
 def test_list_cartesia_voices_endpoint(client, auth_headers):
     """Verify listing Cartesia voices catalog with authentication."""
     res = client.get("/api/catalogs/voices", headers=auth_headers)
@@ -60,9 +76,29 @@ def test_voice_preview_unauthorized(client):
     assert res.status_code == 401
 
 
-def test_voice_service_resilient_fallback():
-    """Verify VoiceService generates fallback audio without crashing on arbitrary/invalid voice id."""
-    wav = VoiceService.get_voice_preview_wav("non-existent-voice-id-999")
-    assert isinstance(wav, bytes)
-    assert len(wav) > 44
-    assert wav[:4] == b"RIFF"
+def test_cartesia_preview_speaks_the_agent_language_and_reports_failures(monkeypatch):
+    """Previews use the agent's language; a failed preview is an error, never a chime posing as the voice."""
+    import pytest
+    from app.services import voice_service
+    from app.services.sarvam_voices import PREVIEW_TEXTS
+
+    calls = []
+
+    class FakeTTS:
+        def __init__(self, api_key=None):
+            pass
+
+        def synthesize(self, text, voice_id=None, speed=1.0, language=None):
+            calls.append((voice_id, language, text))
+            if voice_id == "broke":
+                raise RuntimeError("Error code: 402 - quota_exceeded")
+            return type("R", (), {"audio_bytes": bytes(200)})()
+
+    monkeypatch.setattr(voice_service, "CartesiaTTSProvider", FakeTTS)
+    monkeypatch.setattr(VoiceService, "_previews", {})
+    wav = VoiceService.get_voice_preview_wav("siya", language="te-IN")
+    assert wav[:4] == b"RIFF" and calls == [("siya", "te", PREVIEW_TEXTS["te"])]
+    VoiceService.get_voice_preview_wav("siya", language="te")  # cached
+    assert len(calls) == 1
+    with pytest.raises(voice_service.CartesiaPreviewUnavailable, match="out of credits"):
+        VoiceService.get_voice_preview_wav("broke", language="te")

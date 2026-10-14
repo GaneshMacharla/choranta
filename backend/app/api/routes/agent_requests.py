@@ -36,9 +36,9 @@ class RejectRequest(BaseModel):
     note: str = Field(..., min_length=1, max_length=2000)
 
 
-def _preview_response(voice_id: str) -> Response:
+def _preview_response(voice_id: str, language: Optional[str] = None) -> Response:
     try:
-        audio = sarvam_voices.preview_wav(voice_id)
+        audio = sarvam_voices.preview_wav(voice_id, language)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except sarvam_voices.VoicePreviewUnavailable as e:
@@ -49,13 +49,14 @@ def _preview_response(voice_id: str) -> Response:
 # ---------------------------------------------------------------- client portal
 
 @portal_router.get("/voices")
-def portal_voices(account: ClientAccount = Depends(require_client_user)):
-    return sarvam_voices.list_voices()
+def portal_voices(language: Optional[str] = None, account: ClientAccount = Depends(require_client_user)):
+    return sarvam_voices.list_voices(language)
 
 
 @portal_router.get("/voices/{voice_id}/preview")
-def portal_voice_preview(voice_id: str, account: ClientAccount = Depends(require_client_user)):
-    return _preview_response(voice_id)
+def portal_voice_preview(voice_id: str, language: Optional[str] = None,
+                         account: ClientAccount = Depends(require_client_user)):
+    return _preview_response(voice_id, language)
 
 
 @portal_router.get("/agent-requests/options")
@@ -108,8 +109,8 @@ def admin_pending_count(db: Session = Depends(get_db), user: User = Depends(requ
 
 
 @admin_router.get("/voices/{voice_id}/preview")
-def admin_voice_preview(voice_id: str, user: User = Depends(require_operator)):
-    return _preview_response(voice_id)
+def admin_voice_preview(voice_id: str, language: Optional[str] = None, user: User = Depends(require_operator)):
+    return _preview_response(voice_id, language)
 
 
 @admin_router.get("/{request_id}")

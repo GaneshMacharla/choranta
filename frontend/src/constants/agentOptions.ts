@@ -56,3 +56,22 @@ export const getProviderOptions = (
   }
   return options;
 };
+
+// Roles offered when creating an AI employee (Agents page and the client page)
+export const AGENT_ROLE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'Receptionist', label: 'Receptionist' },
+  { value: 'Appointment Coordinator', label: 'Appointment Coordinator' },
+  { value: 'Customer Support Specialist', label: 'Customer Support Specialist' },
+  { value: 'Sales Assistant', label: 'Sales Assistant' },
+  { value: 'Lead Qualification Specialist', label: 'Lead Qualification Specialist' },
+  { value: 'Batch Enrolment Caller', label: 'Batch Enrolment Caller' },
+  { value: 'Scheduling Coordinator', label: 'Scheduling Coordinator' },
+  { value: 'Information Desk Assistant', label: 'Information Desk Assistant' },
+  { value: 'Other', label: 'Other' },
+];
+
+// Friendly first names suggested for a new AI employee (several match Sarvam voice names)
+export const AGENT_NAME_SUGGESTIONS: string[] = [
+  'Priya', 'Ananya', 'Kavya', 'Meera', 'Neha', 'Anjali', 'Sneha', 'Diya',
+  'Arjun', 'Rahul', 'Aditya', 'Karthik', 'Rohan', 'Vikram',
+];

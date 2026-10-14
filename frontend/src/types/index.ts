@@ -18,6 +18,7 @@ export type BusinessType =
   | 'HOTEL' 
   | 'RESTAURANT' 
   | 'CORPORATE' 
+  | 'COACHING'
   | 'OTHER';
 
 export type ClientStatus = 'ACTIVE' | 'INACTIVE';
@@ -34,6 +35,8 @@ export interface Client {
   contact_phone?: string | null;
   timezone: string;
   status: ClientStatus;
+  /** Admin override of simultaneous calls; null = the platform default */
+  max_concurrent_calls?: number | null;
   agent_count: number;
   created_at: string;
   updated_at: string;
@@ -58,6 +61,8 @@ export interface ClientUpdateInput {
   contact_phone?: string;
   timezone?: string;
   status?: ClientStatus;
+  /** 0 clears the override */
+  max_concurrent_calls?: number;
 }
 
 export type AgentStatus = 'DRAFT' | 'TESTING' | 'READY' | 'DEPLOYED' | 'PAUSED' | 'ARCHIVED';
@@ -167,6 +172,10 @@ export interface AgentInstructions {
   rules: string[];
   restrictions: string[];
   escalation_rules: string[];
+  /** Call script: questions to ask in order, points to mention, the next step to agree */
+  discovery_questions?: string[];
+  offer_points?: string[];
+  next_step?: string;
 }
 
 export interface AgentConversationStyle {
@@ -308,6 +317,8 @@ export interface KnowledgeSource {
   content?: string | null;
   /** Set when written inside one AI employee's Knowledge tab; null = shared library */
   owner_agent_id?: string | null;
+  /** The client whose knowledge base this belongs to */
+  client_id?: string | null;
   metadata?: Record<string, any>;
   created_at: string;
   updated_at: string;

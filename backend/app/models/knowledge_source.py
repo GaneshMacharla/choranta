@@ -24,6 +24,8 @@ class KnowledgeSource(Base):
     content = Column(Text, nullable=True)
     # Set when the entry was written inside one AI employee's Knowledge tab (private to it); None = shared library
     owner_agent_id = Column(String(64), ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True)
+    # The client whose knowledge base this belongs to; its AI employees can use it
+    client_id = Column(String(64), ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True)
     meta = Column("metadata", JSON, default=dict)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)

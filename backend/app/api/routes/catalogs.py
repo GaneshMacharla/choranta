@@ -98,10 +98,15 @@ def attach_knowledge_to_agent(
 ):
     """Attach a knowledge source to an AI Employee."""
     repo = KnowledgeRepository(db)
-    if not repo.get_by_id(knowledge_id):
+    source = repo.get_by_id(knowledge_id)
+    if not source:
         raise HTTPException(status_code=404, detail=f"Knowledge source '{knowledge_id}' not found.")
-    if not AgentRepository(db).get_by_id(agent_id):
+    agent = AgentRepository(db).get_by_id(agent_id)
+    if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    # An AI employee only uses its own client's knowledge
+    if getattr(source, "client_id", None) and source.client_id != agent.client_id:
+        raise HTTPException(status_code=400, detail="That knowledge belongs to another client.")
     repo.attach_to_agent(agent_id, knowledge_id)
     return {"message": "Knowledge source attached successfully."}
 
@@ -243,18 +248,20 @@ def detach_integration_from_agent(
 # ==========================================
 
 @router.get("/catalogs/sarvam-voices")
-def list_sarvam_voices(current_user: User = Depends(get_current_user)):
-    """Sarvam Bulbul voices for the Studio voice picker."""
+def list_sarvam_voices(language: Optional[str] = Query(None, description="Put voices recommended for this language first"),
+                       current_user: User = Depends(get_current_user)):
+    """Sarvam Bulbul voices for the Studio voice picker, best first."""
     from app.services import sarvam_voices
-    return sarvam_voices.list_voices()
+    return sarvam_voices.list_voices(language)
 
 
 @router.get("/catalogs/sarvam-voices/{voice_id}/preview")
-def preview_sarvam_voice(voice_id: str, current_user: User = Depends(get_current_user)):
-    """Short WAV sample of a Sarvam voice (generated once, then cached)."""
+def preview_sarvam_voice(voice_id: str, language: Optional[str] = Query(None, description="Agent language, e.g. 'te'"),
+                         current_user: User = Depends(get_current_user)):
+    """Short WAV sample of a Sarvam voice in the agent's language (generated once, then cached)."""
     from app.services import sarvam_voices
     try:
-        audio = sarvam_voices.preview_wav(voice_id)
+        audio = sarvam_voices.preview_wav(voice_id, language)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except sarvam_voices.VoicePreviewUnavailable as e:
@@ -290,14 +297,16 @@ def list_voices_catalog(
 def preview_voice_audio(
     voice_id: str,
     text: Optional[str] = Query(None, description="Custom preview text"),
+    language: Optional[str] = Query(None, description="Agent language, e.g. 'te': the preview is spoken in it"),
     token: Optional[str] = Query(None, description="JWT token for direct media playback"),
     current_user: User = Depends(get_current_user_from_header_or_query)
 ):
     """
     Synthesize and stream a short preview WAV sample for the specified Cartesia voice.
     """
+    from app.services.voice_service import CartesiaPreviewUnavailable
     try:
-        wav_bytes = VoiceService.get_voice_preview_wav(voice_id=voice_id, sample_text=text)
+        wav_bytes = VoiceService.get_voice_preview_wav(voice_id=voice_id, sample_text=text, language=language)
         return Response(
             content=wav_bytes,
             media_type="audio/wav",
@@ -306,6 +315,8 @@ def preview_voice_audio(
                 "Cache-Control": "public, max-age=86400"
             }
         )
+    except CartesiaPreviewUnavailable as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

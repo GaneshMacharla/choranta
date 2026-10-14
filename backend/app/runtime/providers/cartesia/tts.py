@@ -12,6 +12,27 @@ DEFAULT_CARTESIA_MODEL_ID = "sonic-3"
 SAMPLE_RATE = 16000
 BYTES_PER_SAMPLE = 2  # 16-bit mono
 
+# Languages Sonic-3 speaks (Cartesia's codes); anything else falls back to English
+CARTESIA_LANGUAGES = {
+    "en", "hi", "te", "ta", "kn", "ml", "mr", "bn", "gu", "pa", "or", "ur",
+    "fr", "de", "es", "pt", "zh", "ja", "it", "ko", "nl", "pl", "ru", "sv", "tr", "ar", "id", "th", "vi",
+}
+
+
+def cartesia_language(code: Optional[str]) -> str:
+    """'te-IN' -> 'te'; Odia's 'od' -> 'or'; unsupported -> 'en'."""
+    base = (code or "en").split("-")[0].lower()
+    base = {"od": "or"}.get(base, base)
+    return base if base in CARTESIA_LANGUAGES else "en"
+
+
+def _tts_options(speed: float, language: Optional[str]) -> Dict[str, Any]:
+    # Sonic-3 takes speed as a multiplier (0.6-1.5) in generation_config, plus the language to speak
+    return {
+        "generation_config": {"speed": max(0.6, min(1.5, speed or 1.0))},
+        "language": cartesia_language(language),
+    }
+
 
 class CartesiaTTSProvider(TTSProvider):
     """
@@ -89,7 +110,7 @@ class CartesiaTTSProvider(TTSProvider):
                 transcript=text,
                 voice={"id": effective_voice},
                 output_format=output_format,
-                speed=max(0.5, min(2.0, speed))
+                **_tts_options(speed, language),
             )
             audio_bytes = b"".join(response_chunks)
             duration = len(audio_bytes) / (SAMPLE_RATE * BYTES_PER_SAMPLE)
@@ -130,7 +151,7 @@ class CartesiaTTSProvider(TTSProvider):
                 transcript=text,
                 voice={"id": effective_voice},
                 output_format=output_format,
-                speed=max(0.5, min(2.0, speed))
+                **_tts_options(speed, language),
             )
             async for chunk in stream:
                 if chunk:
