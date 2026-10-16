@@ -305,9 +305,9 @@ def test_websocket_full_turn_and_barge_in_flow(client, db, auth_headers, publish
     token = auth_headers["Authorization"].split(" ")[1]
 
     with client.websocket_connect(f"/ws/runtime/sessions/{session_id}/audio?token={token}") as ws:
-        # 1. Drain greeting messages (assistant_text, audio chunks, turn_complete)
+        # 1. Drain the greeting (audio arrives in real time, so allow plenty of frames)
         greeting_text = ""
-        for _ in range(20):
+        for _ in range(600):
             msg = ws.receive()
             if "text" in msg and msg["text"]:
                 parsed = json.loads(msg["text"])
@@ -336,7 +336,7 @@ def test_websocket_full_turn_and_barge_in_flow(client, db, auth_headers, publish
         })
 
         received_types = []
-        for _ in range(20):
+        for _ in range(600):
             res = ws.receive()
             if "text" in res and res["text"]:
                 parsed = json.loads(res["text"])

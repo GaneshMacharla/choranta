@@ -217,8 +217,8 @@ class AgentService:
             knowledge_sources=[],
             tools=[],
             integrations=[],
-            stt_provider="cartesia",
-            llm_provider="gemini",
+            stt_provider="sarvam",
+            llm_provider="sarvam",
             tts_provider="cartesia",
             telephony_provider=None,
             status=agent.status.lower()

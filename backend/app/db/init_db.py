@@ -494,6 +494,8 @@ def init_db() -> None:
         if admin:
             logger.info("Internal platform admin initialized.")
         seed_catalogs(db)
+        from app.services.call_scripts import seed_standard_scripts
+        seed_standard_scripts(db)
         seed_real_estate_data(db)
         logger.info("Catalogs and real estate sample data seeded.")
     except Exception as e:

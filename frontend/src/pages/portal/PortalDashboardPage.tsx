@@ -138,8 +138,9 @@ export const PortalDashboardPage: React.FC = () => {
   if (!summary) return <LoadingState message="Loading dashboard..." />;
 
   const { wallet, month, subscription: plan } = summary;
-  // Clients who have never had a plan choose one first (unless they chose pay-as-you-go)
-  if (!plan && planCount > 0 && !hasSkippedPlanChoice(user?.id)) return <Navigate to="/portal/plans" replace />;
+  // Clients who have never had a plan choose one first, or a credit pack when no plans are offered (unless they skipped)
+  const needsFirstPurchase = planCount > 0 || wallet.balance_inr <= 0;
+  if (!plan && needsFirstPurchase && !hasSkippedPlanChoice(user?.id)) return <Navigate to="/portal/plans" replace />;
   const planCoversCalls = !!plan?.usable && plan.credits_remaining > 0;
   const showLowBalance = wallet.low_balance && !planCoversCalls;
   const hasPaid = !!plan?.usable || wallet.balance_inr > 0;

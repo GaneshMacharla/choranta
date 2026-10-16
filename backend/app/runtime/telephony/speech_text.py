@@ -19,6 +19,21 @@ BACKCHANNELS = {
 }
 
 
+# "Are you there?" checks when the line goes quiet: the caller wants to know you're still on, not to start a new topic
+PRESENCE_CHECKS = {
+    "hello", "hello hello", "hello ji", "helo", "halo", "are you there", "you there", "hello are you there",
+    "can you hear me", "hello can you hear me", "anyone there", "is anyone there",
+    "హలో", "హలో హలో", "హలో అండి", "వినిపిస్తుందా", "ఉన్నారా", "హలో ఉన్నారా", "లైన్లో ఉన్నారా",
+    "हेलो", "हैलो", "हेलो हेलो", "हेलो जी", "सुनाई दे रहा है", "आवाज़ आ रही है", "आवाज आ रही है",
+}
+
+
+def is_presence_check(text: str) -> bool:
+    # Only punctuation is stripped: Telugu and Hindi vowel signs aren't "word" characters to a regex
+    normalized = re.sub(r"[?!.,।\"'¿¡…-]", " ", (text or "").lower())
+    return re.sub(r"\s+", " ", normalized).strip() in PRESENCE_CHECKS
+
+
 def is_backchannel(text: str) -> bool:
     normalized = re.sub(r"[^a-z ]", "", text.lower()).strip()
     normalized = re.sub(r"\s+", " ", normalized)

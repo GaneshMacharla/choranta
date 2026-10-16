@@ -14,8 +14,8 @@ class CanonicalAgentSpec(BaseModel):
     knowledge_sources: List[Dict[str, Any]] = Field(default_factory=list)
     tools: List[Dict[str, Any]] = Field(default_factory=list)
     integrations: List[Dict[str, Any]] = Field(default_factory=list)
-    stt_provider: str = "cartesia"
-    llm_provider: str = "gemini"
+    stt_provider: str = "sarvam"
+    llm_provider: str = "sarvam"
     tts_provider: str = "cartesia"
     telephony_provider: Optional[str] = None
     status: str = "draft"

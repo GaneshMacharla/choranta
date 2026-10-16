@@ -55,7 +55,8 @@ def test_today_is_in_the_clients_timezone_with_unset_meaning_india(db: Session):
 
 def test_every_agent_is_told_todays_date(db: Session):
     c = _client(db)
-    prompt = _prompt(db, c.id).conversation.system_instruction
+    ctx = _prompt(db, c.id)
+    prompt = ctx.conversation.system_instruction + ctx.call_details  # the date travels with the per-call details
     assert f"Today's date: {spoken_date(client_today(db, c.id))}" in prompt
     assert "none has been added" in prompt  # no courses, no knowledge: still the strict grounding rule
 

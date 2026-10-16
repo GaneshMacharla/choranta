@@ -176,6 +176,8 @@ export interface AgentInstructions {
   discovery_questions?: string[];
   offer_points?: string[];
   next_step?: string;
+  /** Key of the standard call script this employee uses (taken on publish); '' = its own script above */
+  script_source?: string;
 }
 
 export interface AgentConversationStyle {
@@ -360,6 +362,8 @@ export interface CartesiaVoice {
   preview_url?: string | null;
   is_default: boolean;
   provider: string;
+  /** 1 = one of Choranta's top picks for business calls */
+  tier?: number | null;
 }
 
 // ==========================================

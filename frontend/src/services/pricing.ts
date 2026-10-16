@@ -26,3 +26,28 @@ export const pricingService = {
       body: JSON.stringify({ profit_percent, payg_max_concurrent_calls }),
     }),
 };
+
+/** A suggested credit top-up by business size (1 credit = ₹1, pre-GST) */
+export interface CreditPack {
+  key: string;
+  name: string;
+  credits: number;
+  suits: string;
+  recommended: boolean;
+  price_with_gst_inr: number;
+  /** About how many call minutes / calls the pack buys at the recent per-minute rate */
+  approx_minutes: number;
+  approx_calls: number;
+}
+
+export interface PublicCreditPacks {
+  packs: CreditPack[];
+  avg_credits_per_minute: number;
+  gst_rate_percent: number;
+  gst_registered: boolean;
+  min_topup_inr: number;
+}
+
+export const publicPricingService = {
+  creditPacks: () => request<PublicCreditPacks>('/public/credit-packs'),
+};

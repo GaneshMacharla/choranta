@@ -24,19 +24,19 @@ export const getLanguageOptions = (currentValue?: string): { value: string; labe
 };
 
 export const STT_PROVIDER_OPTIONS: { value: string; label: string }[] = [
-  { value: 'cartesia', label: 'Cartesia (Realtime Streaming WebSocket STT)' },
   { value: 'sarvam', label: 'Sarvam (Saaras v4, Indian languages)' },
+  { value: 'cartesia', label: 'Cartesia (Realtime Streaming WebSocket STT)' },
   { value: 'mock_stt', label: 'Mock STT (Deterministic Test Mode)' },
 ];
 
 export const LLM_PROVIDER_OPTIONS: { value: string; label: string }[] = [
-  { value: 'gemini', label: 'Google Gemini (Gemini 3.8 Flash / Realtime)' },
   { value: 'sarvam', label: 'Sarvam (sarvam-105b-conversations, Indian languages)' },
+  { value: 'gemini', label: 'Google Gemini (Gemini 3.8 Flash / Realtime)' },
   { value: 'mock_llm', label: 'Mock LLM (Deterministic Test Mode)' },
 ];
 
 export const TTS_PROVIDER_OPTIONS: { value: string; label: string }[] = [
-  { value: 'cartesia', label: 'Cartesia (Sonic Ultra-Low Latency TTS)' },
+  { value: 'cartesia', label: 'Cartesia (Sonic 3, Indian voices like Siya)' },
   { value: 'sarvam', label: 'Sarvam (Bulbul v3, Indian voices)' },
   { value: 'mock_tts', label: 'Mock TTS (Deterministic Test Mode)' },
 ];

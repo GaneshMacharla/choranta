@@ -13,6 +13,7 @@ import { WalletLedger } from '../../components/billing/WalletLedger';
 import { fmtDate, PlanUsageBar } from '../../components/billing/PlanUsageBar';
 import { payWithRazorpay } from '../../components/billing/razorpayCheckout';
 import { PlanGrid } from '../../components/billing/PlanGrid';
+import { CreditPackGrid } from '../../components/billing/CreditPackGrid';
 
 type PortalPlanInfo = Awaited<ReturnType<typeof portalService.subscription>>;
 
@@ -89,11 +90,13 @@ export const PortalBillingPage: React.FC = () => {
   const gst = info.gst_registered;
   const perMinute = info.avg_credits_per_minute;
   const creditsFor = (paid: number) => Math.floor((paid / (1 + gstRate / 100)) * 100) / 100;
-  // Top-up shortcuts in credits; with GST the amount to pay includes it
-  const presets = [1000, 2500, 5000, 14999].map((credits) => ({
-    credits,
-    pay: gst ? Math.round(credits * (1 + gstRate / 100) * 100) / 100 : credits,
-  }));
+  const packs = info.credit_packs;
+  const selectedPack = packs.find((pack) => String(pack.price_with_gst_inr) === topupAmount)?.key ?? null;
+  const openTopup = (amount = '') => {
+    setTopupAmount(amount);
+    setError(null);
+    setTopupOpen(true);
+  };
   const docName = gst ? 'invoice' : 'receipt';
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -148,7 +151,7 @@ export const PortalBillingPage: React.FC = () => {
           ) : (
             <p className="text-xs text-slate-400">
               You're on pay-as-you-go: each call is paid from your credits, about {inr(perMinute)} per minute (1 credit = ₹1).
-              {plans.length > 0 && ' Pick a monthly plan below to get bonus credits every month.'}
+              {plans.length > 0 ? ' Pick a monthly plan below to get bonus credits every month.' : ' Not sure how much to add? Pick a pack below.'}
             </p>
           )}
         </Card>
@@ -172,16 +175,34 @@ export const PortalBillingPage: React.FC = () => {
             variant="secondary"
             disabled={!online}
             title={online ? '' : 'Online payments are not set up yet'}
-            onClick={() => {
-              setTopupAmount('');
-              setError(null);
-              setTopupOpen(true);
-            }}
+            onClick={() => openTopup()}
           >
             <Plus className="mr-1.5 h-4 w-4" /> Buy credits
           </Button>
         </Card>
       </div>
+
+      {packs.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-200">Which pack do I need?</h2>
+              <p className="text-xs text-slate-500">
+                Calls cost about {inr(perMinute)} a minute. Minutes and calls below are estimates at that rate.
+              </p>
+            </div>
+            {!online && <span className="text-xs text-amber-300">Online payment isn't available yet. Contact Choranta to buy credits.</span>}
+          </div>
+          <CreditPackGrid
+            packs={packs}
+            gst={gst}
+            disabled={!online}
+            onSelect={(pack) => openTopup(String(pack.price_with_gst_inr))}
+            onCustom={online ? () => openTopup() : undefined}
+            customLabel="Enter any amount"
+          />
+        </div>
+      )}
 
       {plans.length > 0 && (
         <div className="space-y-3">
@@ -263,20 +284,15 @@ export const PortalBillingPage: React.FC = () => {
         }
       >
         <div className="space-y-3 text-xs">
-          <div className="flex flex-wrap gap-2">
-            {presets.map(({ credits, pay: amount }) => (
-              <button
-                key={credits}
-                type="button"
-                onClick={() => setTopupAmount(String(amount))}
-                className={`rounded border px-3 py-1.5 font-mono ${topupAmount === String(amount) ? 'border-[#00df8f] text-[#00df8f]' : 'border-[#232736] text-slate-300 hover:border-slate-500'}`}
-              >
-                {credits === 14999 ? `₹14,999 pack${gst ? ' + GST' : ''}` : inr(amount, 0)}
-              </button>
-            ))}
-          </div>
+          <CreditPackGrid
+            compact
+            packs={packs}
+            gst={gst}
+            selectedKey={selectedPack}
+            onSelect={(pack) => setTopupAmount(String(pack.price_with_gst_inr))}
+          />
           <label className="block space-y-1">
-            <span className="text-slate-300">Amount (₹{gst ? ', incl. GST' : ''})</span>
+            <span className="text-slate-300">Or enter an amount (₹{gst ? ', incl. GST' : ''})</span>
             <input
               type="number"
               min={info.min_topup_inr}

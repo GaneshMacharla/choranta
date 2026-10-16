@@ -101,10 +101,13 @@ class TestScenarioRunner:
 
             # Map to canonical names used by spec (cartesia, gemini, etc.)
             test_registry.register_stt("cartesia", stt_adapter)
+            test_registry.register_stt("sarvam", stt_adapter)
             test_registry.register_stt("mock_stt", stt_adapter)
             test_registry.register_llm("gemini", llm_adapter)
+            test_registry.register_llm("sarvam", llm_adapter)
             test_registry.register_llm("mock_llm", llm_adapter)
             test_registry.register_tts("cartesia", tts_adapter)
+            test_registry.register_tts("sarvam", tts_adapter)
             test_registry.register_tts("mock_tts", tts_adapter)
 
             # 4. Create state-aware ToolExecutor and AgentRuntime

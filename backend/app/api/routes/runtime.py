@@ -51,7 +51,13 @@ def get_runtime_mode(
         "mode": settings.RUNTIME_MODE,
         "mock": settings.RUNTIME_MODE == "mock",
         "external_provider_calls_enabled": settings.RUNTIME_MODE == "real",
-        "label": "MOCK / SIMULATED" if settings.RUNTIME_MODE == "mock" else "REAL PROVIDERS"
+        "label": "MOCK / SIMULATED" if settings.RUNTIME_MODE == "mock" else "REAL PROVIDERS",
+        # *_PROVIDER_OVERRIDE settings: every call uses these instead of the agent's saved providers
+        "provider_overrides": {
+            kind: value
+            for kind in ("stt", "llm", "tts")
+            if (value := (getattr(settings, f"{kind.upper()}_PROVIDER_OVERRIDE", "") or "").strip().lower())
+        },
     }
 
 

@@ -1,4 +1,5 @@
 import logging
+from app.runtime.conversation import compact_json
 from app.runtime.tools.catalog import describe_tools
 import threading
 from collections import defaultdict
@@ -403,7 +404,7 @@ class AgentRuntime:
                     import json
                     context.conversation.add_tool_result(
                         tool_call_id=tc.id,
-                        content=json.dumps(tool_result.data if tool_result.success else {"error": tool_result.error}),
+                        content=compact_json(tool_result.data if tool_result.success else {"error": tool_result.error}),
                         tool_name=tc.tool_name
                     )
 
@@ -574,7 +575,7 @@ class AgentRuntime:
 
                     # Add tool result to conversation
                     import json
-                    result_content = json.dumps(tool_result.data if tool_result.success else {"error": tool_result.error})
+                    result_content = compact_json(tool_result.data if tool_result.success else {"error": tool_result.error})
                     context.conversation.add_tool_result(
                         tool_call_id=tc.id,
                         content=result_content,

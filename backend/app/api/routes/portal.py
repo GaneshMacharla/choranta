@@ -14,7 +14,7 @@ from app.api.routes.billing import invoice_out, invoice_pdf_response, wallet_out
 from app.api.routes.plans import usage_out
 from app.api.routes.telephony import _format_call_response, _recording_path, get_call_detail
 from app.core.config import settings
-from app.services.pricing import estimated_credits_per_minute
+from app.services.pricing import credit_packs_out, estimated_credits_per_minute
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 from app.models.billing import Invoice, WalletTransaction
@@ -280,6 +280,7 @@ def subscription(account: ClientAccount = Depends(require_client_user), db: Sess
         "gst_registered": settings.GST_REGISTERED,
         "payg_only": settings.PAYG_ONLY,
         "avg_credits_per_minute": estimated_credits_per_minute(db),
+        "credit_packs": credit_packs_out(db),
     }
 
 

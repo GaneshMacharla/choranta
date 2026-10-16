@@ -10,7 +10,9 @@ import httpx
 from app.core.config import settings
 from app.runtime.exceptions import ProviderUnavailable
 from app.runtime.providers.base import TranscriptResult
-from app.runtime.providers.sarvam.common import SARVAM_REST_BASE_URL, sarvam_headers, sarvam_language
+from app.runtime.providers.sarvam.common import (
+    CONNECT_RETRIES, CONNECT_TIMEOUT_S, KEEPALIVE_S, SARVAM_REST_BASE_URL, sarvam_headers, sarvam_language,
+)
 from app.runtime.providers.stt import STTProvider
 
 logger = logging.getLogger("choranta.runtime.providers.sarvam.stt")
@@ -25,7 +27,12 @@ def _client() -> httpx.AsyncClient:
     loop = asyncio.get_running_loop()
     client = _clients.get(loop)
     if client is None or client.is_closed:
-        client = httpx.AsyncClient(base_url=SARVAM_REST_BASE_URL, timeout=httpx.Timeout(15.0, connect=5.0))
+        client = httpx.AsyncClient(
+            base_url=SARVAM_REST_BASE_URL,
+            timeout=httpx.Timeout(15.0, connect=CONNECT_TIMEOUT_S),
+            limits=httpx.Limits(keepalive_expiry=KEEPALIVE_S),
+            transport=httpx.AsyncHTTPTransport(retries=CONNECT_RETRIES),  # retries failed connects only
+        )
         _clients[loop] = client
     return client
 
@@ -78,7 +85,15 @@ class SarvamSTTProvider(STTProvider):
             return TranscriptResult(text=audio_data, is_final=True, confidence=1.0)
         return asyncio.run(self.process_audio_async(audio_data))
 
-    async def process_audio_async(self, audio_data: Any) -> TranscriptResult:
+    async def warm(self) -> None:
+        """Opens the connection ahead of the first utterance (any response will do)."""
+        try:
+            await _client().head("/")
+        except Exception as e:
+            logger.debug(f"Sarvam STT warm-up failed: {type(e).__name__}: {e}")
+
+    async def process_audio_async(self, audio_data: Any, language: Optional[str] = None) -> TranscriptResult:
+        """`language` (e.g. 'te') overrides SARVAM_STT_LANGUAGE for this request."""
         if isinstance(audio_data, str):
             return TranscriptResult(text=audio_data, is_final=True, confidence=1.0)
         audio = bytes(audio_data or b"")
@@ -90,7 +105,7 @@ class SarvamSTTProvider(STTProvider):
         wav_bytes = audio if audio.startswith(b"RIFF") else _wav(audio[: len(audio) - len(audio) % 2])
         data = {
             "model": settings.SARVAM_STT_MODEL,
-            "language_code": sarvam_language(settings.SARVAM_STT_LANGUAGE, default="unknown"),
+            "language_code": sarvam_language(language or settings.SARVAM_STT_LANGUAGE, default="unknown"),
         }
         headers = {"api-subscription-key": self._api_key}
         response = await _client().post(

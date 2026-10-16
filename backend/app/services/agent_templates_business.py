@@ -7,7 +7,7 @@ AI employee's name and the client's company. Placeholders like {{company_name}} 
 """
 from typing import Any, Dict, List, Optional
 
-SARVAM_PROVIDERS = {"stt": "sarvam", "llm": "sarvam", "tts": "sarvam", "telephony": None}
+SARVAM_PROVIDERS = {"stt": "sarvam", "llm": "sarvam", "tts": "cartesia", "telephony": None}  # Cartesia voices
 
 
 def _var(name: str, description: str, data_type: str = "string", default: Any = None, required: bool = False,
@@ -42,7 +42,7 @@ def _template(
     description: str, persona: str, goal: str, responsibilities: List[str], greeting: str, farewell: str,
     tools: List[str], outputs: List[Dict[str, Any]], business_type_text: str, tone: str = "warm and professional",
     extra_rules: Optional[List[str]] = None, escalation: Optional[List[str]] = None,
-    knowledge: Optional[List[str]] = None, capabilities: Optional[List[str]] = None, voice_id: str = "priya",
+    knowledge: Optional[List[str]] = None, capabilities: Optional[List[str]] = None, voice_id: str = "4459a9a5-69d6-4680-b970-e13dc51845b6",
 ) -> Dict[str, Any]:
     capabilities = capabilities or responsibilities[:3]
     return {
@@ -93,7 +93,7 @@ def _template(
             "tools": tools,
             "integrations": [],
             "variables": {"inputs": COMMON_INPUTS, "outputs": outputs},
-            "voice": {"provider": "sarvam", "voice_id": voice_id, "language": "en-IN", "speed": 1.0},
+            "voice": {"provider": "cartesia", "voice_id": voice_id, "language": "en-IN", "speed": 1.0},
             "providers": dict(SARVAM_PROVIDERS),
         },
     }

@@ -74,7 +74,7 @@ def test_coaching_template_creates_valid_agent(db):
         )
         greeting = ctx.resolved_greeting
         assert "Priya" not in greeting and client.name in greeting
-        assert "NEET 2027" in ctx.conversation.system_instruction
+        assert "NEET 2027" in ctx.instruction_for_turn()  # per-call details are sent after the fixed instructions
         assert "{{" not in greeting
 
         # Nothing known about the caller: the template's example values are never presented as facts
@@ -86,7 +86,7 @@ def test_coaching_template_creates_valid_agent(db):
             agent_spec=spec,
             metadata={"company_name": client.name},
         )
-        prompt = unknown.conversation.system_instruction
+        prompt = unknown.instruction_for_turn()
         assert "JEE Main" not in prompt and "Priya Reddy" not in prompt and "Rahul Sharma" not in prompt
         assert "course_enquired: (not known" in prompt
 

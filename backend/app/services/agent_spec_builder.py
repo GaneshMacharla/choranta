@@ -77,6 +77,7 @@ class AgentSpecBuilder:
             discovery_questions=[q.strip() for q in draft.instructions.discovery_questions if q.strip()],
             offer_points=[p.strip() for p in draft.instructions.offer_points if p.strip()],
             next_step=draft.instructions.next_step.strip(),
+            script_source=draft.instructions.script_source,
         )
 
         # 5. Conversation
@@ -121,8 +122,8 @@ class AgentSpecBuilder:
 
         # 11. Providers
         providers = ProvidersSpec(
-            stt=draft.providers.stt or "cartesia",
-            llm=draft.providers.llm or "gemini",
+            stt=draft.providers.stt or "sarvam",
+            llm=draft.providers.llm or "sarvam",
             tts=draft.providers.tts or "cartesia",
             telephony=draft.providers.telephony
         )

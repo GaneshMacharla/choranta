@@ -285,96 +285,59 @@ def active_test_session(db):
     return runtime_session
 
 
+def _ws_drain(ws, until: str, limit: int = 600) -> list:
+    """Reads server messages until one of type `until`; returns the JSON messages seen (audio skipped)."""
+    seen = []
+    for _ in range(limit):
+        msg = ws.receive()
+        if msg.get("text"):
+            parsed = json.loads(msg["text"])
+            seen.append(parsed)
+            if parsed.get("type") == until:
+                return seen
+    raise AssertionError(f"no '{until}' message; saw {[m.get('type') for m in seen]}")
+
+
+def _voice_frames(ms: int, amplitude: int = 8000) -> list:
+    """20 ms frames of a voice-like 220 Hz tone at 16kHz (pitched, so the endpointer treats it as speech)."""
+    import math
+    import struct
+    frame = struct.pack("<320h", *(int(amplitude * math.sin(2 * math.pi * 220 * i / 16000)) for i in range(320)))
+    return [frame] * (ms // 20)
+
+
 @pytest.mark.timeout(60)  # a missing server message must fail the test, not hang the suite
-def test_websocket_barge_in_and_latency_instrumentation(client, auth_headers, active_test_session, db, monkeypatch):
-    """Verifies WebSocket real-time audio turn, barge-in cancellation, and latency metrics."""
-    # Partial transcripts only come from streaming STT, which is off by default
-    monkeypatch.setattr(settings, "CARTESIA_ENABLE_STREAMING_STT", True, raising=False)
+def test_websocket_barge_in_and_latency_instrumentation(client, auth_headers, active_test_session, db):
+    """Server-side turn detection over the audio WebSocket: speak, go quiet, get a streamed reply with latency."""
     session_id = active_test_session.id
     token = auth_headers["Authorization"].split(" ")[1]
     ws_url = f"/ws/runtime/sessions/{session_id}/audio?token={token}"
 
     with client.websocket_connect(ws_url) as ws:
-        # Drain initial greeting messages
-        greeting_text = ""
-        for _ in range(20):
-            msg = ws.receive()
-            if "text" in msg and msg["text"]:
-                p = json.loads(msg["text"])
-                if p.get("type") == "assistant_text":
-                    greeting_text = p.get("text", "")
-                if p.get("type") == "turn_complete":
-                    break
-        assert len(greeting_text) > 0
+        greeting = _ws_drain(ws, "turn_complete")
+        assert any(m["type"] == "assistant_text" and m["text"] for m in greeting)
+        assert any(m["type"] == "assistant_text_delta" for m in greeting)
 
-        # 1. Start conversational turn
-        ws.send_json({"type": "start"})
+        # Speak, then silence: the server decides the turn is over (no "stop" from the client)
+        for frame in _voice_frames(600) + _voice_frames(1000, amplitude=0):
+            ws.send_bytes(frame)
 
-        # Send speech: the server needs 3 consecutive voiced frames before it treats input as speech
-        # (filters mic noise and echo); 5 while the assistant talks would be a barge-in
-        import struct
-        loud_chunk = struct.pack("<800h", *([1500] * 800))  # 50ms at 16kHz
-        for _ in range(4):
-            ws.send_bytes(loud_chunk)
+        turn = _ws_drain(ws, "turn_complete")
+        types = [m["type"] for m in turn]
+        final = next(m for m in turn if m["type"] == "transcript")
+        assert final["final"] is True and final["text"]
+        assert "assistant_text_delta" in types and "assistant_text" in types
+        metrics = next(m for m in turn if m["type"] == "latency_metrics")["metrics"]
+        for key in ("stt_ms", "llm_ms", "tts_ttfb_ms", "round_trip_ms"):
+            assert key in metrics
 
-        # Receive partial transcript from streaming STT
-        partial_msg = None
-        for _ in range(10):
-            msg = ws.receive()
-            if "text" in msg and msg["text"]:
-                p = json.loads(msg["text"])
-                if p.get("type") == "transcript" and not p.get("final"):
-                    partial_msg = p
-                    break
-        assert partial_msg is not None
-        assert partial_msg["final"] is False
-        assert len(partial_msg["text"]) > 0
-
-        # Stop speech turn
-        ws.send_json({"type": "stop"})
-
-        # Receive turn response: final transcript, assistant text, and latency metrics
-        final_msg = None
-        asst_msg = None
-        latency_msg = None
-        for _ in range(25):
-            msg = ws.receive()
-            if "text" in msg and msg["text"]:
-                p = json.loads(msg["text"])
-                if p.get("type") == "transcript" and p.get("final"):
-                    final_msg = p
-                elif p.get("type") == "assistant_text":
-                    asst_msg = p
-                elif p.get("type") == "latency_metrics":
-                    latency_msg = p
-                elif p.get("type") == "turn_complete":
-                    break
-
-        assert final_msg is not None and final_msg["final"] is True
-        assert asst_msg is not None
-        assert latency_msg is not None
-        metrics = latency_msg["metrics"]
-        assert "stt_ms" in metrics
-        assert "llm_ms" in metrics
-        assert "tts_ttfb_ms" in metrics
-        assert "round_trip_ms" in metrics
-
-        # 2. Test Real Voice Barge-In:
-        # Trigger barge-in signal directly or via loud frames while speaking
         ws.send_json({"type": "interrupt"})
-        interrupt_reply = ws.receive_json()
-        assert interrupt_reply["type"] == "interrupted"
+        assert _ws_drain(ws, "interrupted")[-1]["type"] == "interrupted"
 
-    # Verify session disconnect cleans up active_audio_sessions tracker
     assert session_id not in active_audio_sessions
 
-    # Verify runtime events in DB include ASSISTANT_INTERRUPTED and AUDIO_SESSION_DISCONNECTED
-    event_repo = RuntimeEventRepository(db)
-    events = event_repo.list_by_session(session_id)
-    event_types = [e.event_type for e in events]
-
+    event_types = [e.event_type for e in RuntimeEventRepository(db).list_by_session(session_id)]
     assert RuntimeEventType.AUDIO_SESSION_CONNECTED.value in event_types
-    assert RuntimeEventType.USER_TRANSCRIPT_PARTIAL.value in event_types
     assert RuntimeEventType.USER_TRANSCRIPT_FINAL.value in event_types
     assert RuntimeEventType.ASSISTANT_INTERRUPTED.value in event_types
     assert RuntimeEventType.AUDIO_SESSION_DISCONNECTED.value in event_types

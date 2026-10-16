@@ -1,33 +1,65 @@
+"""
+Real-time voice conversation over a WebSocket: talk to an AI Employee with raw 16kHz PCM audio.
+
+The conversation runs through the same TelephonyMediaSession as a phone call (server-side endpointing,
+LLM replies streamed sentence by sentence into speech, fillers, barge-in that keeps only what the
+caller heard, call limits, recording, quality stats), with the WebSocket as the carrier. What you hear
+when testing here is what a caller hears on the phone.
+
+Protocol (client -> server)
+  binary            16-bit mono PCM at 16kHz, any frame size (~20-100 ms is typical). Send continuously:
+                    the server decides when the caller has finished speaking.
+  {"type":"text_input","text":...}   a typed caller turn
+  {"type":"interrupt"}               stop the agent now
+  {"type":"stop"}                    the caller finished speaking (optional, for push-to-talk clients)
+  {"type":"ping"}                    keepalive -> {"type":"pong"}
+
+Protocol (server -> client)
+  binary            agent audio, 16-bit mono PCM at 16kHz, paced to real time; play it in order
+  transcript        {"text", "final": true} the caller's words
+  assistant_text_delta  {"text"} a sentence of the reply as it starts playing
+  assistant_text    {"text", "interrupted"} the reply as the caller heard it, once the turn ends
+  latency_metrics   {"metrics": {stt_ms, llm_ms, tts_ttfb_ms, round_trip_ms}} at the reply's first audio
+  interrupted       the agent stopped talking: drop any audio not yet played
+  turn_complete     {"usage"} the agent finished its turn
+  tool_started      {"tool_name"}
+  call_ended        {"reason"} the agent hung up (silence, goodbye, maximum length)
+  error             {"message"}
+"""
 import asyncio
 import json
 import logging
-from app.runtime.tools.catalog import describe_tools
-from app.runtime import call_rules
-from app.runtime.speech_style import apply_voice_style
-from app.runtime.knowledge import apply_knowledge
 import struct
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional, Set
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, status
+from typing import Any, Dict, Optional, Set
+
+import anyio
+
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
+
 from app.core.config import settings
-from app.core.security import decode_and_verify_token
+from app.core.security import decode_and_verify_token, generate_unique_id
 from app.db.session import get_db
-from app.models.runtime_session import RuntimeSession
+from app.models.agent_version import AgentVersion
+from app.models.call import Call
+from app.repositories.call_repository import CallRepository
 from app.repositories.runtime_session_repository import RuntimeSessionRepository
 from app.repositories.user_repository import UserRepository
-from app.runtime.events.emitter import EventEmitter
+from app.runtime.context import TEST_CALL_PHONE
 from app.runtime.events.types import RuntimeEventType
 from app.runtime.lifecycle import SessionStatus
-from app.runtime.runtime import AgentRuntime
 from app.runtime.providers.registry import default_registry
+from app.runtime.providers.telephony.browser import BrowserTelephonyProvider
+from app.runtime.runtime import AgentRuntime
+from app.runtime.telephony.session import TelephonyMediaSession
 
 logger = logging.getLogger("choranta.runtime.websocket")
 
 router = APIRouter(tags=["Realtime Audio Transport"])
 
-# Global tracker for concurrent active audio WebSocket connections
+# Runtime sessions with an audio WebSocket open (one connection per session)
 active_audio_sessions: Set[str] = set()
 
 
@@ -63,6 +95,155 @@ def _authenticate_ws(token: Optional[str], db: Session) -> Optional[str]:
         return None
 
 
+class WebSocketMediaSession(TelephonyMediaSession):
+    """A phone call session whose carrier is a raw-PCM WebSocket (16kHz both ways)."""
+
+    # The workbench ends the runtime session itself; reconnecting continues the same conversation
+    end_runtime_session_on_close = False
+
+    def __init__(self, websocket: WebSocket, call_record: Call, db: Session):
+        super().__init__(
+            websocket=websocket,
+            call_record=call_record,
+            stream_sid=call_record.provider_call_id,
+            db=db,
+            telephony_provider=BrowserTelephonyProvider(),
+        )
+        # Everything to the client (audio and messages) goes through one queue, so it arrives in order
+        self._outbox: "asyncio.Queue[Optional[Any]]" = asyncio.Queue()
+        self._writer: Optional[asyncio.Task] = None
+        self._socket_open = True
+
+    def start_writer(self) -> None:
+        self._writer = asyncio.create_task(self._write_loop())
+
+    async def stop_writer(self) -> None:
+        if self._writer and not self._writer.done():
+            self._outbox.put_nowait(None)
+            try:
+                await asyncio.wait_for(self._writer, timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                self._writer.cancel()
+        self._socket_open = False
+
+    async def _write_loop(self) -> None:
+        while True:
+            item = await self._outbox.get()
+            if item is None or not self._socket_open:
+                return
+            try:
+                if isinstance(item, bytes):
+                    await self.websocket.send_bytes(item)
+                else:
+                    await self.websocket.send_text(item)
+            except Exception:
+                self._socket_open = False
+                return
+
+    def _notify(self, message: Dict[str, Any]) -> None:
+        if self._socket_open:
+            self._outbox.put_nowait(json.dumps(message, default=str))
+
+    async def send_json(self, message: Dict[str, Any]) -> None:
+        self._notify(message)
+
+    def _should_greet(self) -> bool:
+        # Reconnecting mid-conversation continues it rather than greeting again
+        return not any(m.role.value in ("user", "assistant") for m in self.context.conversation.messages)
+
+    # Carrier transport
+
+    async def _send_carrier_audio(self, frame: bytes) -> None:
+        if self._socket_open:
+            self._outbox.put_nowait(bytes(frame))
+
+    async def _clear_carrier_playback(self) -> None:
+        await self.send_json({"type": "interrupted"})
+
+    async def _disconnect_carrier(self) -> None:
+        await self.send_json({"type": "call_ended", "reason": self._end_reason or "agent_ended"})
+        await self.stop_writer()
+        try:
+            await self.websocket.close()
+        except Exception:
+            pass
+
+    # Live conversation events
+
+    def _on_sentence_playing(self, turn, sentence) -> None:
+        self._notify({"type": "assistant_text_delta", "text": sentence.text, "filler": bool(sentence.filler_kind)})
+
+    def _emit(self, event_type: RuntimeEventType, payload: Dict[str, Any]) -> None:
+        super()._emit(event_type, payload)
+        if event_type == RuntimeEventType.USER_TRANSCRIPT_FINAL:
+            self._notify({"type": "transcript", "text": payload.get("text", ""), "final": True})
+        elif event_type == RuntimeEventType.ASSISTANT_RESPONSE:
+            self._notify({"type": "assistant_text", "text": payload.get("text", ""),
+                          "interrupted": bool(payload.get("interrupted"))})
+        elif event_type == RuntimeEventType.TTS_STARTED and "response_latency_ms" in payload:
+            round_trip = payload.get("response_latency_ms")
+            stt_ms = payload.get("stt_ms") or 0
+            llm_ms = payload.get("llm_first_token_ms") or 0
+            self._notify({"type": "latency_metrics", "metrics": {
+                "stt_ms": stt_ms,
+                "llm_ms": llm_ms,
+                "tts_ttfb_ms": max(0, (round_trip or 0) - stt_ms - llm_ms),
+                "round_trip_ms": round_trip,
+                "first_audio_filler": payload.get("first_audio_filler"),
+            }})
+        elif event_type == RuntimeEventType.TOOL_CALL_STARTED:
+            self._notify({"type": "tool_started", "tool_name": payload.get("tool_name")})
+
+    async def _run_turn(self, turn, coro) -> None:
+        await super()._run_turn(turn, coro)
+        if self.context and not self._end_call_requested:
+            await self.send_json({"type": "turn_complete", "usage": self.context.usage_tracker.get_summary()})
+
+    # Client control messages
+
+    async def end_caller_turn(self) -> None:
+        """Push-to-talk release: whatever the caller said so far is their complete turn."""
+        event = self.endpointer.flush()
+        if event is not None and event.audio:
+            self._cancel_early_transcript()
+            await self.execute_turn(event.audio)
+
+    async def interrupt(self) -> None:
+        """The client asked the agent to stop talking: end the reply, keeping only what was heard."""
+        if self._turn_task and not self._turn_task.done():
+            self._pause_time = self._pause_time or time.monotonic()
+            self._barge_ins += 1
+        await self._interrupt_current_turn()
+        self._emit(RuntimeEventType.ASSISTANT_INTERRUPTED, {"reason": "user_interrupt"})
+        await self.send_json({"type": "interrupted"})
+
+
+def _create_call_record(db: Session, session_record, user_id: str) -> Call:
+    """A test Call for this connection, so it gets a recording, quality stats and a call-log entry (never billed)."""
+    version = db.get(AgentVersion, session_record.agent_version_id)
+    business = ((version.configuration_json or {}).get("business_context") or {}) if version else {}
+    outbound = str(business.get("call_direction") or "inbound").lower() == "outbound"
+    caller, destination = ("websocket", TEST_CALL_PHONE) if outbound else (TEST_CALL_PHONE, "websocket")
+    now = datetime.now(timezone.utc)
+    return CallRepository(db).create(Call(
+        id=generate_unique_id("call", 12),
+        client_id=session_record.client_id,
+        agent_id=session_record.agent_id,
+        agent_version_id=session_record.agent_version_id,
+        runtime_session_id=session_record.id,
+        provider="browser",
+        provider_call_id=generate_unique_id("wss", 16),
+        direction="OUTBOUND" if outbound else "INBOUND",
+        caller_number=caller,
+        destination_number=destination,
+        status="ANSWERED",
+        started_at=now,
+        answered_at=now,
+        duration_seconds=0.0,
+        metadata_={"is_test": True, "channel": "websocket", "started_by": user_id},
+    ))
+
+
 @router.websocket("/ws/runtime/sessions/{session_id}/audio")
 @router.websocket("/api/v1/runtime/sessions/{session_id}/audio")
 async def runtime_audio_websocket(
@@ -71,584 +252,106 @@ async def runtime_audio_websocket(
     token: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
-    """
-    Authenticated Realtime Audio WebSocket Transport.
-    Streams 16kHz 16-bit mono PCM audio bidirectional between browser and Choranta Voice Runtime.
-    Handles user speech streaming, partial transcripts, barge-in / interruption,
-    LLM tool execution, streaming TTS playback, and monotonic latency tracking.
-    """
-    t_conn_start = time.perf_counter()
-    session_record: Optional[RuntimeSession] = None
-    assistant_speaking = False
-    current_tts_task: Optional[asyncio.Task] = None
-    streaming_stt_session: Optional[Any] = None
-    turn_in_progress = False
-
-    # Monotonic Turn Latency Tracking
-    t_speech_start: Optional[float] = None
-    t_stt_partial: Optional[float] = None
-    t_speech_end: Optional[float] = None
-
-    # 1. Handshake & Authentication
+    """Real-time voice conversation with a runtime session over raw 16kHz PCM (see the module docstring)."""
     user_id = _authenticate_ws(token, db)
     if not user_id:
         logger.warning(f"Rejecting unauthorized WebSocket connection for session '{session_id}'")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Unauthorized")
         return
 
-    # Check concurrent connection bounds
     if len(active_audio_sessions) >= settings.MAX_CONCURRENT_SESSIONS:
         logger.warning(f"Max concurrent sessions limit ({settings.MAX_CONCURRENT_SESSIONS}) reached.")
         await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER, reason="Server capacity reached")
         return
 
-    # Verify session existence and active state
-    session_repo = RuntimeSessionRepository(db)
-    session_record = session_repo.get_by_id(session_id)
+    session_record = RuntimeSessionRepository(db).get_by_id(session_id)
     if not session_record:
         logger.warning(f"RuntimeSession '{session_id}' does not exist.")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Session not found")
         return
-
-    if session_record.status not in (SessionStatus.ACTIVE.value, SessionStatus.CREATED.value, SessionStatus.INITIALIZING.value):
+    if session_record.status != SessionStatus.ACTIVE.value:
         logger.warning(f"RuntimeSession '{session_id}' is in inactive state '{session_record.status}'.")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Session not active")
         return
+    if session_id in active_audio_sessions:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Session already has an audio connection")
+        return
 
-    # Accept WebSocket connection
     await websocket.accept()
     active_audio_sessions.add(session_id)
 
-    runtime = AgentRuntime(db, registry=default_registry)
-    emitter = EventEmitter(db)
-
-    t_conn_ready = time.perf_counter()
-    conn_latency_ms = round((t_conn_ready - t_conn_start) * 1000, 2)
-
-    emitter.emit(
-        RuntimeEventType.AUDIO_SESSION_CONNECTED,
-        session_id=session_id,
-        agent_id=session_record.agent_id,
-        agent_version_id=session_record.agent_version_id,
-        client_id=session_record.client_id,
-        payload={
-            "transport": "websocket",
-            "sample_rate": 16000,
-            "channels": 1,
-            "format": "pcm_s16le",
-            "connect_latency_ms": conn_latency_ms
-        }
-    )
-
-    # Rehydrate or get context
-    context = runtime._contexts.get(session_id)
-    if not context:
-        from app.models.agent_version import AgentVersion
-        from app.schemas.agent_spec import CanonicalAgentSpec
-        from app.runtime.context import RuntimeContext
-
-        version = db.query(AgentVersion).filter(AgentVersion.id == session_record.agent_version_id).first()
-        spec = CanonicalAgentSpec.model_validate(version.configuration_json)
-        context = RuntimeContext(
-            session_id=session_id,
-            agent_id=session_record.agent_id,
-            client_id=session_record.client_id,
-            agent_version_id=session_record.agent_version_id,
-            agent_spec=spec,
-            metadata=session_record.metadata_
-        )
-        apply_knowledge(db, context)
-        runtime._contexts[session_id] = context
-
-    stt_provider = default_registry.get_stt(context.agent_spec.providers.stt)
-    llm_provider = default_registry.get_llm(context.agent_spec.providers.llm)
-    tts_provider = default_registry.get_tts(context.agent_spec.providers.tts)
-
-    audio_buffer = bytearray()
-    speech_energy_count = 0
-    has_spoken = False
-
-    async def on_stt_partial(partial_text: str):
-        """Callback from streaming STT when partial transcript is recognized."""
-        nonlocal t_stt_partial, t_speech_start
-        if not partial_text:
-            return
-        if t_stt_partial is None and t_speech_start is not None:
-            t_stt_partial = time.perf_counter()
-
-        emitter.emit(
-            RuntimeEventType.USER_TRANSCRIPT_PARTIAL,
-            session_id=session_id,
-            agent_id=context.agent_id,
-            agent_version_id=context.agent_version_id,
-            client_id=context.client_id,
-            payload={"text": partial_text}
-        )
-        await websocket.send_json({
-            "type": "transcript",
-            "text": partial_text,
-            "final": False
+    session: Optional[WebSocketMediaSession] = None
+    try:
+        call_record = _create_call_record(db, session_record, user_id)
+        session = WebSocketMediaSession(websocket, call_record, db)
+        session.runtime = AgentRuntime(db, registry=default_registry)
+        session.start_writer()
+        await session.initialize()  # plays the greeting
+        session._emit(RuntimeEventType.AUDIO_SESSION_CONNECTED, {
+            "transport": "websocket", "sample_rate": 16000, "channels": 1, "format": "pcm_s16le",
+            "call_id": call_record.id,
         })
 
-    async def ensure_streaming_stt() -> Any:
-        nonlocal streaming_stt_session
-        if not settings.CARTESIA_ENABLE_STREAMING_STT:
-            return None
-        if streaming_stt_session is None:
-            try:
-                streaming_stt_session = await stt_provider.create_stream(
-                    on_partial=on_stt_partial
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create streaming STT session: {e}")
-                streaming_stt_session = None
-        return streaming_stt_session
-
-    async def send_tts_stream(text: str, t_ref_speech_end: Optional[float] = None, stt_ms: float = 0.0, llm_ms: float = 0.0):
-        nonlocal assistant_speaking
-        assistant_speaking = True
-        t_tts_start = time.perf_counter()
-        t_tts_first_chunk: Optional[float] = None
-
-        try:
-            emitter.emit(
-                RuntimeEventType.TTS_STARTED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"text": text, "voice_id": context.agent_spec.voice.voice_id}
-            )
-
-            total_bytes = 0
-            async for audio_chunk in tts_provider.synthesize_stream(
-                text=text,
-                voice_id=context.agent_spec.voice.voice_id,
-                speed=context.agent_spec.voice.speed,
-                language=context.agent_spec.languages.primary
-            ):
-                if not assistant_speaking:
-                    logger.info(f"TTS stream aborted for session '{session_id}' due to barge-in.")
-                    break
-
-                if audio_chunk:
-                    if t_tts_first_chunk is None:
-                        t_tts_first_chunk = time.perf_counter()
-                        ttfb_ms = round((t_tts_first_chunk - t_tts_start) * 1000, 2)
-                        round_trip_ms = round((t_tts_first_chunk - t_ref_speech_end) * 1000, 2) if t_ref_speech_end else None
-
-                        # Emit first audio chunk milestone
-                        latency_payload = {
-                            "stt_ms": stt_ms,
-                            "llm_ms": llm_ms,
-                            "tts_ttfb_ms": ttfb_ms,
-                            "round_trip_ms": round_trip_ms
-                        }
-                        await websocket.send_json({
-                            "type": "latency_metrics",
-                            "metrics": latency_payload
-                        })
-
-                    total_bytes += len(audio_chunk)
-                    await websocket.send_bytes(audio_chunk)
-                    emitter.emit(
-                        RuntimeEventType.TTS_AUDIO_CHUNK,
-                        session_id=session_id,
-                        agent_id=context.agent_id,
-                        agent_version_id=context.agent_version_id,
-                        client_id=context.client_id,
-                        payload={"chunk_bytes": len(audio_chunk)}
-                    )
-                    await asyncio.sleep(0.001)
-
-            duration = total_bytes / (16000 * 2)
-            context.usage_tracker.record_tts(duration)
-            emitter.emit(
-                RuntimeEventType.TTS_COMPLETED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"duration_seconds": duration, "interrupted": not assistant_speaking}
-            )
-
-            if assistant_speaking:
-                await websocket.send_json({
-                    "type": "turn_complete",
-                    "usage": context.usage_tracker.get_summary()
-                })
-        except asyncio.CancelledError:
-            logger.info(f"TTS task cancelled via barge-in for session '{session_id}'")
-            emitter.emit(
-                RuntimeEventType.ASSISTANT_INTERRUPTED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"reason": "barge_in"}
-            )
-            await websocket.send_json({"type": "interrupted"})
-        except Exception as e:
-            logger.error(f"Error streaming TTS: {e}")
-            await websocket.send_json({"type": "error", "message": f"TTS playback error: {str(e)}"})
-        finally:
-            assistant_speaking = False
-
-    async def handle_interrupt(reason: str = "barge_in"):
-        nonlocal assistant_speaking, current_tts_task
-        was_speaking = assistant_speaking or (current_tts_task and not current_tts_task.done())
-        assistant_speaking = False
-        if current_tts_task and not current_tts_task.done():
-            current_tts_task.cancel()
-        emitter.emit(
-            RuntimeEventType.ASSISTANT_INTERRUPTED,
-            session_id=session_id,
-            agent_id=context.agent_id,
-            agent_version_id=context.agent_version_id,
-            client_id=context.client_id,
-            payload={"reason": reason, "was_speaking": was_speaking}
-        )
-        await websocket.send_json({"type": "interrupted"})
-
-    async def execute_turn(user_audio_bytes: bytes, t_ref_speech_start: Optional[float] = None, t_ref_speech_end: Optional[float] = None):
-        nonlocal turn_in_progress, current_tts_task, streaming_stt_session
-        if turn_in_progress:
-            return
-        turn_in_progress = True
-
-        t_end = t_ref_speech_end or time.perf_counter()
-
-        try:
-            # 1. STT Finalization
-            emitter.emit(
-                RuntimeEventType.USER_SPEECH_STARTED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id
-            )
-
-            if streaming_stt_session:
-                transcript_res = await streaming_stt_session.finish()
-                streaming_stt_session = None
-            else:
-                transcript_res = await stt_provider.process_audio_async(user_audio_bytes)
-
-            # Streaming STT can finish without a final transcript when the provider
-            # misses the last event. Retry the captured turn through batch STT.
-            if not transcript_res.text.strip() and user_audio_bytes:
-                transcript_res = await stt_provider.process_audio_async(user_audio_bytes)
-
-            t_stt_done = time.perf_counter()
-            stt_latency_ms = round((t_stt_done - t_end) * 1000, 2)
-            user_text = transcript_res.text.strip()
-            context.usage_tracker.record_stt(len(user_audio_bytes) / (16000 * 2))
-
-            emitter.emit(
-                RuntimeEventType.USER_TRANSCRIPT_FINAL,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={
-                    "text": user_text,
-                    "confidence": transcript_res.confidence,
-                    "latency_ms": stt_latency_ms
-                }
-            )
-
-            await websocket.send_json({
-                "type": "transcript",
-                "text": user_text,
-                "final": True
-            })
-
-            if not user_text:
-                return
-
-            context.conversation.add_user_message(user_text)
-
-            # 2. LLM Invocation & Tool Execution
-            t_llm_start = time.perf_counter()
-            emitter.emit(
-                RuntimeEventType.LLM_REQUEST_STARTED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id
-            )
-
-            apply_voice_style(context.conversation, context.agent_spec)
-            available_tools_list = call_rules.with_end_call(describe_tools(db, context.active_tools))
-            llm_result = await llm_provider.generate_async(
-                system_instruction=context.instruction_for_turn(),
-                messages=context.conversation.to_llm_messages(),
-                available_tools=available_tools_list
-            )
-
-            t_llm_done = time.perf_counter()
-            llm_latency_ms = round((t_llm_done - t_llm_start) * 1000, 2)
-
-            context.usage_tracker.record_llm(
-                llm_result.usage.get("input_tokens", 0),
-                llm_result.usage.get("output_tokens", 0)
-            )
-
-            emitter.emit(
-                RuntimeEventType.LLM_RESPONSE,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"latency_ms": llm_latency_ms, "finish_reason": llm_result.finish_reason}
-            )
-
-            hang_up = call_rules.wants_to_end(llm_result.tool_calls)
-            if hang_up:
-                # Say goodbye, then close the call after the audio (no tools, no further turns)
-                llm_result.text = call_rules.goodbye_text(context.agent_spec, llm_result.text)
-                llm_result.tool_calls = []
-
-            # Tool Execution Loop
-            if llm_result.tool_calls:
-                context.conversation.add_assistant_message(
-                    content=llm_result.text,
-                    tool_calls=[tc.model_dump() for tc in llm_result.tool_calls]
-                )
-
-                for tc in llm_result.tool_calls:
-                    emitter.emit(
-                        RuntimeEventType.TOOL_CALL_STARTED,
-                        session_id=session_id,
-                        agent_id=context.agent_id,
-                        agent_version_id=context.agent_version_id,
-                        client_id=context.client_id,
-                        payload={"call_id": tc.id, "tool_name": tc.tool_name, "arguments": tc.arguments}
-                    )
-
-                    tool_res = runtime.tool_executor.execute_tool(
-                        tool_call_id=tc.id,
-                        tool_name=tc.tool_name,
-                        arguments=context.with_contact_details(tc.tool_name, tc.arguments),
-                        enabled_tool_ids=context.active_tools,
-                        client_id=context.client_id
-                    )
-
-                    emitter.emit(
-                        RuntimeEventType.TOOL_CALL_COMPLETED,
-                        session_id=session_id,
-                        agent_id=context.agent_id,
-                        agent_version_id=context.agent_version_id,
-                        client_id=context.client_id,
-                        payload={"call_id": tc.id, "success": tool_res.success, "data": tool_res.data, "error": tool_res.error}
-                    )
-
-                    res_str = json.dumps(tool_res.data if tool_res.success else {"error": tool_res.error})
-                    context.conversation.add_tool_result(
-                        tool_call_id=tc.id,
-                        content=res_str,
-                        tool_name=tc.tool_name
-                    )
-
-                t_tool_llm_start = time.perf_counter()
-                llm_result = await llm_provider.generate_async(
-                    system_instruction=context.instruction_for_turn(),
-                    messages=context.conversation.to_llm_messages(),
-                    available_tools=available_tools_list
-                )
-                t_tool_llm_done = time.perf_counter()
-                llm_latency_ms += round((t_tool_llm_done - t_tool_llm_start) * 1000, 2)
-
-                context.usage_tracker.record_llm(
-                    llm_result.usage.get("input_tokens", 0),
-                    llm_result.usage.get("output_tokens", 0)
-                )
-
-            assistant_text = llm_result.text or context.agent_spec.conversation.fallback_response
-            context.conversation.add_assistant_message(content=assistant_text)
-
-            emitter.emit(
-                RuntimeEventType.ASSISTANT_RESPONSE,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"text": assistant_text}
-            )
-
-            await websocket.send_json({
-                "type": "assistant_text",
-                "text": assistant_text
-            })
-
-            # Update session usage in DB
-            session_record.usage_json = context.usage_tracker.get_summary()
-            session_repo.update(session_record)
-
-            # 3. Stream TTS Audio
-            current_tts_task = asyncio.create_task(
-                send_tts_stream(
-                    assistant_text,
-                    t_ref_speech_end=t_end,
-                    stt_ms=stt_latency_ms,
-                    llm_ms=llm_latency_ms
-                )
-            )
-            await current_tts_task
-            if hang_up:
-                emitter.emit(RuntimeEventType.TOOL_CALL_COMPLETED, session_id=session_id, agent_id=context.agent_id,
-                             agent_version_id=context.agent_version_id, client_id=context.client_id,
-                             payload={"tool_name": call_rules.END_CALL_TOOL_NAME, "success": True})
-                await websocket.send_json({"type": "call_ended", "reason": "agent_hung_up"})
-                await websocket.close()
-
-        except Exception as e:
-            logger.error(f"Error during audio conversational turn: {e}")
-            await websocket.send_json({"type": "error", "message": str(e)})
-            emitter.emit(
-                RuntimeEventType.SESSION_ERROR,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"error": str(e)}
-            )
-        finally:
-            turn_in_progress = False
-
-    try:
-        # Initial greeting if defined
-        has_dialogue = any(m.role.value in ("user", "assistant") for m in context.conversation.messages)
-        if context.agent_spec.conversation.greeting and not has_dialogue:
-            greeting_text = context.resolved_greeting or context.agent_spec.conversation.greeting
-            context.conversation.add_assistant_message(content=greeting_text)
-            emitter.emit(
-                RuntimeEventType.ASSISTANT_RESPONSE,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"text": greeting_text, "is_greeting": True}
-            )
-            await websocket.send_json({"type": "assistant_text", "text": greeting_text})
-            current_tts_task = asyncio.create_task(send_tts_stream(greeting_text))
-
-        # Main Ingestion Loop
-        while True:
+        while not session.closed:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
                 break
 
-            # Binary Audio Frame
-            if "bytes" in message and message["bytes"]:
-                raw_bytes = message["bytes"]
-                if len(raw_bytes) > settings.MAX_AUDIO_FRAME_SIZE:
-                    logger.warning(f"Audio frame exceeds max size limit ({len(raw_bytes)} bytes)")
+            raw = message.get("bytes")
+            if raw:
+                if len(raw) > settings.MAX_AUDIO_FRAME_SIZE:
+                    logger.warning(f"Audio frame exceeds max size limit ({len(raw)} bytes)")
                     continue
+                await session.handle_carrier_audio(raw)
+                continue
 
-                # Voice activity & Barge-in detection
-                has_energy = _is_voice_energy(raw_bytes, threshold=1200)
-                if has_energy:
-                    speech_energy_count += 1
-                    if t_speech_start is None:
-                        t_speech_start = time.perf_counter()
-
-                    # Require several consecutive energetic frames before treating
-                    # microphone input as a real turn. This filters silence, device
-                    # noise, and echoed assistant audio from STT.
-                    if speech_energy_count >= 3:
-                        has_spoken = True
-
-                    if speech_energy_count >= 5 and assistant_speaking:
-                        # User started speaking over assistant -> Barge In!
-                        await handle_interrupt(reason="barge_in")
-                else:
-                    speech_energy_count = max(0, speech_energy_count - 1)
-
-                # Stream audio to active STT session if available (avoid feeding echo during assistant speech)
-                if has_spoken and not assistant_speaking:
-                    stt_stream = await ensure_streaming_stt()
-                    if stt_stream:
-                        await stt_stream.send_audio(raw_bytes)
-                    audio_buffer.extend(raw_bytes)
-
-            # JSON Control Message
-            elif "text" in message and message["text"]:
-                try:
-                    payload = json.loads(message["text"])
-                    msg_type = payload.get("type", "")
-
-                    if msg_type == "ping":
-                        await websocket.send_json({"type": "pong"})
-
-                    elif msg_type == "interrupt":
-                        await handle_interrupt(reason="user_interrupt")
-
-                    elif msg_type == "start":
-                        audio_buffer.clear()
-                        speech_energy_count = 0
-                        has_spoken = False
-                        t_speech_start = time.perf_counter()
-                        t_stt_partial = None
-                        t_speech_end = None
-                        await ensure_streaming_stt()
-
-                    elif msg_type == "stop":
-                        t_speech_end = time.perf_counter()
-                        if has_spoken and len(audio_buffer) > 0 and not turn_in_progress:
-                            turn_bytes = bytes(audio_buffer)
-                            audio_buffer.clear()
-                            has_spoken = False
-                            s_start = t_speech_start
-                            s_end = t_speech_end
-                            t_speech_start = None
-                            t_stt_partial = None
-                            asyncio.create_task(
-                                execute_turn(
-                                    turn_bytes,
-                                    t_ref_speech_start=s_start,
-                                    t_ref_speech_end=s_end
-                                )
-                            )
-                        else:
-                            audio_buffer.clear()
-                            has_spoken = False
-
-                    elif msg_type == "text_input":
-                        input_txt = payload.get("text", "")
-                        if input_txt and not turn_in_progress:
-                            if assistant_speaking:
-                                await handle_interrupt(reason="user_interrupt")
-                            t_now = time.perf_counter()
-                            asyncio.create_task(
-                                execute_turn(
-                                    input_txt.encode("utf-8"),
-                                    t_ref_speech_start=t_now,
-                                    t_ref_speech_end=t_now
-                                )
-                            )
-
-                except json.JSONDecodeError:
-                    logger.warning("Received invalid JSON payload over audio WebSocket")
+            text = message.get("text")
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                logger.warning("Received invalid JSON payload over audio WebSocket")
+                continue
+            kind = payload.get("type", "")
+            if kind == "ping":
+                await session.send_json({"type": "pong"})
+            elif kind == "interrupt":
+                await session.interrupt()
+            elif kind == "stop":
+                await session.end_caller_turn()
+            elif kind == "text_input":
+                await session.handle_text_input(payload.get("text", ""))
+            # "start" is accepted for older clients: turns are detected on the server
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket client disconnected for session '{session_id}'")
     except Exception as e:
-        logger.error(f"WebSocket session error: {e}")
+        logger.error(f"WebSocket session error: {type(e).__name__}: {e}")
+        if session:
+            await session.send_json({"type": "error", "message": str(e)})
     finally:
+        # Shielded: closing saves the recording, flushes events and settles usage even if the task is cancelled
+        with anyio.CancelScope(shield=True):
+            await _finish(session, session_record, db)
         active_audio_sessions.discard(session_id)
-        if current_tts_task and not current_tts_task.done():
-            current_tts_task.cancel()
-        if streaming_stt_session:
-            try:
-                await streaming_stt_session.close()
-            except Exception:
-                pass
 
-        emitter.emit(
-            RuntimeEventType.AUDIO_SESSION_DISCONNECTED,
-            session_id=session_id,
-            agent_id=context.agent_id if context else (session_record.agent_id if session_record else ""),
-            agent_version_id=context.agent_version_id if context else (session_record.agent_version_id if session_record else ""),
-            client_id=context.client_id if context else (session_record.client_id if session_record else "")
-        )
+
+async def _finish(session: Optional[WebSocketMediaSession], session_record, db: Session) -> None:
+    if not session:
+        return
+    session._socket_open = False
+    if session._writer and not session._writer.done():
+        session._writer.cancel()
+    session._emit(RuntimeEventType.AUDIO_SESSION_DISCONNECTED, {"call_id": session.call_record.id})
+    try:
+        await session.close(reason="caller_hangup")
+    except Exception as e:
+        logger.error(f"Error closing WebSocket call for session '{session_record.id}': {type(e).__name__}: {e}")
+    # Keep the session's usage current; the transcript is saved when the session ends
+    try:
+        if session.context:
+            session_record.usage_json = session.context.usage_tracker.get_summary()
+            RuntimeSessionRepository(db).update(session_record)
+    except Exception:
+        pass

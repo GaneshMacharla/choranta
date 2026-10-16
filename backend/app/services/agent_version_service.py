@@ -89,7 +89,8 @@ class AgentVersionService:
             AgentConfigurationService(self.db).get_configuration(agent_id)
             config_record = self.config_repo.get_by_agent_id(agent_id)
 
-        draft_data = AgentConfigurationData.model_validate(config_record.configuration_data)
+        from app.services.call_scripts import with_standard_script
+        draft_data = with_standard_script(self.db, AgentConfigurationData.model_validate(config_record.configuration_data))
         attached_knw = [k.id for k in self.knowledge_repo.get_for_agent(agent_id)]
         attached_tools = [t.id for t in self.tool_repo.get_for_agent(agent_id)]
         attached_ints = [i.id for i in self.integration_repo.get_for_agent(agent_id)]

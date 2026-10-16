@@ -110,10 +110,11 @@ class AgentConfigurationService:
         attached_tools = [t.id for t in self.tool_repo.get_for_agent(agent_id)]
         attached_ints = [i.id for i in self.integration_repo.get_for_agent(agent_id)]
 
+        from app.services.call_scripts import with_standard_script
         spec = AgentSpecBuilder.build_from_draft(
             agent=agent,
             client=client,
-            draft=resp.configuration,
+            draft=with_standard_script(self.db, resp.configuration),
             attached_knowledge_ids=attached_knw,
             attached_tool_ids=attached_tools,
             attached_integration_ids=attached_ints
@@ -180,13 +181,13 @@ class AgentConfigurationService:
             integrations=[],
             voice={
                 "provider": "cartesia",
-                "voice_id": None,
+                "voice_id": "4459a9a5-69d6-4680-b970-e13dc51845b6",
                 "language": "en",
                 "speed": 1.0
             },
             providers={
-                "stt": "cartesia",
-                "llm": "gemini",
+                "stt": "sarvam",
+                "llm": "sarvam",
                 "tts": "cartesia",
                 "telephony": None
             }

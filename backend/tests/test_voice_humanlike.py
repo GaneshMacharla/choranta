@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.runtime.conversation import ConversationState
 from app.runtime.speech_style import VOICE_STYLE_MARKER, apply_voice_style
 from app.runtime.telephony import phrases
+from app.runtime.telephony.session import TelephonyMediaSession
 from app.runtime.telephony.speech_text import clean_for_speech, looks_incomplete, normalize_for_speech
 from test_phase3c_telephony import telephony_setup  # noqa: F401
 from test_telephony_realtime import (  # noqa: F401
@@ -61,7 +62,7 @@ def test_phrases_follow_the_agent_language_and_never_repeat_back_to_back():
 
 
 def test_voice_style_is_added_once_and_used_by_browser_test_calls():
-    from app.api.routes import webrtc_audio, websocket_audio
+    from app.api.routes import websocket_audio
 
     conversation = ConversationState(system_instruction="You are Anjali.")
     spec = type("Spec", (), {"business_context": None, "identity": None})()
@@ -69,8 +70,9 @@ def test_voice_style_is_added_once_and_used_by_browser_test_calls():
     apply_voice_style(conversation, spec)
     assert conversation.system_instruction.count(VOICE_STYLE_MARKER) == 1
     assert "contractions" in conversation.system_instruction
-    for module in (webrtc_audio, websocket_audio):
-        assert "apply_voice_style(context.conversation" in inspect.getsource(module)
+    # The audio WebSocket runs on the phone session, which applies the voice style
+    assert issubclass(websocket_audio.WebSocketMediaSession, TelephonyMediaSession)
+    assert "apply_voice_style(self.context.conversation" in inspect.getsource(TelephonyMediaSession)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +200,7 @@ def test_phone_calls_never_ask_for_the_known_number(metadata, phone):
     from test_telephony_realtime import _build_test_agent_spec
 
     ctx = RuntimeContext("s", "a", "c", "v", _build_test_agent_spec("agt_phone"), {**metadata, "user_name": "Ravi"})
-    prompt = ctx.conversation.system_instruction
+    prompt = ctx.instruction_for_turn()  # what the LLM is sent
     assert f"Phone number: {phone}. Never ask the caller for their phone number" in prompt
     assert "Name: Ravi. Don't ask for their name again" in prompt
     # The number (and name) fill booking / lead tools when the agent leaves them out

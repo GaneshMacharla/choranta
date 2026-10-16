@@ -48,6 +48,8 @@ class RuntimeContext:
         # Conversation state initialized with primary system prompt derived from AgentSpec
         system_prompt = self._compile_system_prompt(agent_spec)
         self.conversation = ConversationState(system_instruction=system_prompt)
+        # Per-call details (caller, today's date), sent after the fixed instructions: see instruction_for_turn
+        self.call_details = self._compile_call_details(agent_spec)
         # Set by runtime.knowledge.apply_knowledge when the knowledge base is too big to give whole
         self.knowledge_index = None
 
@@ -125,7 +127,9 @@ class RuntimeContext:
         """
         from app.runtime.knowledge import relevant_knowledge
 
-        base = self.conversation.system_instruction
+        # Fixed instructions first (identical on every turn and every call to this agent, so the LLM provider can
+        # reuse them from cache), then this call's details, then this turn's knowledge
+        base = self.conversation.system_instruction + getattr(self, "call_details", "")
         if self.knowledge_index is None:
             return base
         said = [m.content for m in self.conversation.messages
@@ -149,12 +153,16 @@ class RuntimeContext:
     def _compile_system_prompt(self, spec: CanonicalAgentSpec) -> str:
         """Assembles prompt grounding the agent from its immutable canonical spec and variables."""
         company_name = self.metadata.get("company_name") or (spec.business_context and spec.business_context.business_name) or spec.identity.organization or "Apex Realty Bangalore"
+        def sentence(text: str) -> str:
+            text = (text or "").strip()
+            return text if not text or text[-1] in ".!?" else text + "."
+
         lines = [
-            f"You are {spec.identity.name or spec.agent.name}, an AI voice employee representing {company_name}.",
-            f"Role: {spec.agent.role}.",
-            f"Persona: {spec.identity.persona}.",
-            f"Tone: {spec.conversation.tone}.",
-            f"Primary Goal: {spec.instructions.primary_goal}.",
+            f"You are {spec.identity.name or spec.agent.name}, {spec.agent.role or 'an agent'} at {company_name}, "
+            "speaking with a customer on the phone.",
+            f"Persona: {sentence(spec.identity.persona)}",
+            f"Tone: {sentence(spec.conversation.tone)}",
+            f"Primary Goal: {sentence(spec.instructions.primary_goal)}",
         ]
 
         primary = spec.languages.primary if spec.languages else "en"
@@ -165,19 +173,6 @@ class RuntimeContext:
                 + (f"; switch to {', '.join(dict.fromkeys(others))} only if the caller clearly speaks it" if others else "")
                 + "."
             )
-
-        # Ground Input Variables (known lead/call context)
-        input_vars = getattr(spec.variables, "inputs", [])
-        if input_vars:
-            lines.append("\nKnown Lead Context & Input Variables:")
-            for iv in input_vars:
-                val = self.metadata.get(iv.name)
-                if val is None or str(val).strip().lower() in ("", "none", "null", "there"):
-                    # Template defaults are examples, not facts about this caller
-                    val = company_name if iv.name == "company_name" else None
-                val_str = f"'{val}' (known - don't ask for it again)" if val is not None else "(not known; ask the caller only if it matters)"
-                desc_str = f" - {iv.description}" if iv.description else ""
-                lines.append(f"- {iv.name}: {val_str}{desc_str}")
 
         # Ground Output Variables (targets to discover and qualify)
         output_vars = getattr(spec.variables, "outputs", [])
@@ -207,11 +202,32 @@ class RuntimeContext:
             for esc in spec.instructions.escalation_rules:
                 lines.append(f"- {esc}")
 
+        lines.append(self._call_flow(spec))
+        return "\n".join(lines)
+
+    def _compile_call_details(self, spec: CanonicalAgentSpec) -> str:
+        """
+        What is specific to this call (who the caller is, what we know about them). Sent after the agent's fixed
+        instructions, so every call to the same agent starts with identical text the LLM provider can cache.
+        """
+        company_name = self.metadata.get("company_name") or (spec.business_context and spec.business_context.business_name) or spec.identity.organization or "Apex Realty Bangalore"
+        lines: List[str] = []
+        # Ground Input Variables (known lead/call context)
+        input_vars = getattr(spec.variables, "inputs", [])
+        if input_vars:
+            lines.append("\nKnown Lead Context & Input Variables:")
+            for iv in input_vars:
+                val = self.metadata.get(iv.name)
+                if val is None or str(val).strip().lower() in ("", "none", "null", "there"):
+                    # Template defaults are examples, not facts about this caller
+                    val = company_name if iv.name == "company_name" else None
+                val_str = f"'{val}' (known - don't ask for it again)" if val is not None else "(not known; ask the caller only if it matters)"
+                desc_str = f" - {iv.description}" if iv.description else ""
+                lines.append(f"- {iv.name}: {val_str}{desc_str}")
         contact = self._contact_section()
         if contact:
             lines.append(contact)
-        lines.append(self._call_flow(spec))
-        return "\n".join(lines)
+        return ("\n\nThis call:" + "\n".join(lines)) if lines else ""
 
     @staticmethod
     def _contact_phone(metadata: Dict[str, Any]) -> Optional[str]:

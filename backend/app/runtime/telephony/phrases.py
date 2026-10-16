@@ -40,6 +40,12 @@ PHRASES: Dict[str, Dict[str, List[str]]] = {
         "hi": ["माफ़ कीजिए, क्या आप फिर से बता सकते हैं?", "सॉरी, ठीक से सुनाई नहीं दिया। एक बार फिर बताइए?"],
         "te": ["క్షమించండి, మళ్ళీ చెప్తారా?", "సారీ, సరిగ్గా వినిపించలేదు. ఇంకోసారి చెప్తారా?"],
     },
+    # Caller checks the line ("Hello? Are you there?"): reassure, then repeat the open question (no LLM round)
+    "still_here": {
+        "en": ["Yes, I'm here.", "Yes, I can hear you.", "I'm right here."],
+        "hi": ["जी, मैं यहीं हूँ।", "जी, आपकी आवाज़ आ रही है।"],
+        "te": ["అవునండి, నేను లైన్‌లోనే ఉన్నాను.", "వినిపిస్తుందండి."],
+    },
     # Used when the agent has no farewell of its own
     "default_farewell": {
         "en": ["Thank you for your time. Have a great day!"],

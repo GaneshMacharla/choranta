@@ -92,6 +92,34 @@ def estimated_credits_per_minute(db: Session) -> float:
     return value
 
 
+# Suggested credit top-ups by business size, so clients know how much to buy (1 credit = Rs 1, pre-GST)
+CREDIT_PACKS = [
+    {"key": "starter", "name": "Starter", "credits": 1000, "suits": "Trying it out, or a few calls a day"},
+    {"key": "growth", "name": "Growth", "credits": 3000, "suits": "About 7 calls a day for a month", "recommended": True},
+    {"key": "business", "name": "Business", "credits": 7500, "suits": "About 18 calls a day for a month"},
+    {"key": "scale", "name": "Scale", "credits": 20000, "suits": "Campaigns, 45+ calls a day"},
+    {"key": "enterprise", "name": "Enterprise", "credits": 50000, "suits": "Large teams and call centres, 120+ calls a day"},
+]
+AVG_CALL_MINUTES = 2  # typical call length for the "about N calls" estimate
+
+
+def credit_packs_out(db: Session) -> list:
+    """The credit packs with about how many minutes and calls each buys at the current per-minute rate."""
+    rate = estimated_credits_per_minute(db)
+    gst = settings.EFFECTIVE_GST_RATE_PERCENT / 100.0
+    packs = []
+    for pack in CREDIT_PACKS:
+        minutes = int(pack["credits"] // rate) if rate > 0 else 0
+        packs.append({
+            **pack,
+            "recommended": pack.get("recommended", False),
+            "price_with_gst_inr": round(pack["credits"] * (1 + gst), 2),
+            "approx_minutes": minutes,
+            "approx_calls": minutes // AVG_CALL_MINUTES,
+        })
+    return packs
+
+
 def clear_estimate_cache() -> None:
     with _estimate_lock:
         _estimate.update(value=None, at=0.0)

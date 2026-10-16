@@ -1,7 +1,35 @@
+import json
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
+
+# Raw tool results are kept for this many recent caller turns (follow-ups like "and the second one?" need them)
+KEEP_TOOL_TURNS = 3
+# Agent replies older than this many caller turns are cut to their first sentence (only matters on long calls)
+KEEP_FULL_TURNS = 10
+
+_SENTENCE_END = re.compile(r"(?<=[.!?।])\s")
+
+
+def _first_sentence(text: str) -> str:
+    return _SENTENCE_END.split((text or "").strip(), maxsplit=1)[0]
+
+
+def _prune(value: Any) -> Any:
+    if isinstance(value, dict):
+        pruned = {k: _prune(v) for k, v in value.items()}
+        return {k: v for k, v in pruned.items() if v not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [_prune(v) for v in value]
+    return value
+
+
+def compact_json(data: Any) -> str:
+    """A tool result as the model reads it: no empty fields or padding, and Indian-language text as-is
+    (escaped \\uXXXX text costs several times the tokens)."""
+    return json.dumps(_prune(data), ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 class ConversationRole(str, Enum):
@@ -69,8 +97,28 @@ class ConversationState:
         return msg
 
     def to_llm_messages(self) -> List[Dict[str, Any]]:
+        """
+        The history sent with each reply, kept lean because every message is paid for again on every turn:
+        - Tool calls and their raw results from before the last KEEP_TOOL_TURNS caller turns are dropped (what the
+          agent said about them stays, as it was spoken).
+        - On long calls, the agent's replies from before the last KEEP_FULL_TURNS caller turns are cut to their
+          first sentence. Everything the caller said is always kept word for word.
+        """
+        user_positions = [i for i, m in enumerate(self.messages) if m.role == ConversationRole.USER]
+        tool_boundary = user_positions[-KEEP_TOOL_TURNS] if len(user_positions) >= KEEP_TOOL_TURNS else 0
+        full_boundary = user_positions[-KEEP_FULL_TURNS] if len(user_positions) > KEEP_FULL_TURNS else 0
+
         result = []
-        for m in self.messages:
+        for i, m in enumerate(self.messages):
+            if i < tool_boundary and m.role == ConversationRole.TOOL:
+                continue
+            if i < tool_boundary and m.role == ConversationRole.ASSISTANT and m.tool_calls:
+                if m.content.strip():
+                    result.append({"role": m.role.value, "content": _first_sentence(m.content) if i < full_boundary else m.content})
+                continue
+            if i < full_boundary and m.role == ConversationRole.ASSISTANT:
+                result.append({"role": m.role.value, "content": _first_sentence(m.content)})
+                continue
             item: Dict[str, Any] = {
                 "role": m.role.value,
                 "content": m.content,

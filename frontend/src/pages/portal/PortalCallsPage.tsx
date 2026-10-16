@@ -76,9 +76,18 @@ export const PortalCallsPage: React.FC = () => {
                     )}
                     {c.direction === 'OUTBOUND' ? c.destination_number : c.caller_number}
                   </td>
-                  <td className="px-4 py-3 text-slate-300">{c.status}</td>
+                  <td className="px-4 py-3 text-slate-300">
+                    {c.status}
+                    {c.metadata?.is_test && (
+                      <span className="ml-2 rounded-full border border-purple-800/60 bg-purple-950/40 px-2 py-0.5 text-[10px] text-purple-300">
+                        Test
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 font-mono text-slate-300">{duration(c.duration_seconds)}</td>
-                  <td className="px-4 py-3 font-mono text-amber-300">{c.cost ? inr(c.cost.charge_total) : '—'}</td>
+                  <td className="px-4 py-3 font-mono text-amber-300">
+                    {c.metadata?.is_test ? <span className="text-slate-500">Not billed</span> : c.cost ? inr(c.cost.charge_total) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -111,7 +120,7 @@ export const PortalCallsPage: React.FC = () => {
                 ))
               )}
             </div>
-            {detail.cost && <CallCostCard cost={detail.cost} />}
+            {detail.cost && !detail.metadata?.is_test && <CallCostCard cost={detail.cost} />}
           </div>
         )}
       </Modal>

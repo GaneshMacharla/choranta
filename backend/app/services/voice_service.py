@@ -10,6 +10,10 @@ from app.runtime.providers.cartesia.tts import CartesiaTTSProvider, DEFAULT_CART
 logger = logging.getLogger("choranta.services.voice")
 
 # Curated fallback voices in case of offline/network limits - Prioritized for India
+# Choranta's top Cartesia picks for business phone calls, by name: Cartesia publishes no ratings, so these are
+# chosen for clear, conversational delivery (Indian voices first for Indian languages)
+CARTESIA_TOP_PICKS = {"siya", "sana", "kabir", "sarthak", "katie", "jacqueline", "carson", "jameson"}
+
 FALLBACK_CARTESIA_VOICES: List[Dict[str, Any]] = [
     {
         "id": "4459a9a5-69d6-4680-b970-e13dc51845b6",
@@ -271,6 +275,9 @@ class VoiceService:
             cls._refresh_cache()
 
         voices = cls._cache or [VoiceResponse(**v) for v in FALLBACK_CARTESIA_VOICES]
+        voices = [
+            v.model_copy(update={"tier": 1 if v.name.strip().lower() in CARTESIA_TOP_PICKS else None}) for v in voices
+        ]
 
         # Apply filtering
         if gender:

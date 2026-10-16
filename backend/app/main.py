@@ -12,7 +12,7 @@ from app.api.routes import (
     auth, clients, agents, dashboard,
     agent_configuration, catalogs, client_knowledge, runtime,
     websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing, inventory, billing, portal, plans,
-    campaigns, api_keys, public_leads, agent_requests, verifications, demo_leads, courses
+    campaigns, api_keys, public_leads, agent_requests, verifications, demo_leads, courses, call_scripts
 )
 
 logging.basicConfig(
@@ -150,12 +150,14 @@ app.include_router(agents.router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_configuration.router, prefix=settings.API_V1_PREFIX)
 app.include_router(catalogs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(client_knowledge.router, prefix=settings.API_V1_PREFIX)
+app.include_router(call_scripts.router, prefix=settings.API_V1_PREFIX)
 app.include_router(dashboard.router, prefix=settings.API_V1_PREFIX)
 app.include_router(runtime.router, prefix=settings.API_V1_PREFIX)
 app.include_router(mock_environment.router, prefix=settings.API_V1_PREFIX)
 app.include_router(test_scenarios.router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router, prefix=settings.API_V1_PREFIX)
 app.include_router(pricing.router, prefix=settings.API_V1_PREFIX)
+app.include_router(pricing.public_router, prefix=settings.API_V1_PREFIX)
 app.include_router(inventory.router, prefix=settings.API_V1_PREFIX)
 app.include_router(billing.router, prefix=settings.API_V1_PREFIX)
 app.include_router(portal.router, prefix=settings.API_V1_PREFIX)
@@ -173,6 +175,6 @@ app.include_router(courses.admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)
-app.include_router(webrtc_audio.router)
+app.include_router(webrtc_audio.router, prefix=settings.API_V1_PREFIX)
 if settings.ENVIRONMENT != "production":
     app.include_router(demo_leads.router)  # dev-only demo website form at /demo/lead-form

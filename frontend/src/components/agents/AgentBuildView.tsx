@@ -6,10 +6,21 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { StringListEditor } from './StringListEditor';
 import { CallLimitsEditor } from './CallLimitsEditor';
+import { CallScriptCard } from './CallScriptCard';
+import { AgentKnowledgePanel } from './AgentKnowledgePanel';
 import { AgentTestingWorkbench } from '../testing/AgentTestingWorkbench';
-import { AVAILABLE_LANGUAGES } from '../../constants/agentOptions';
+import {
+  AVAILABLE_LANGUAGES,
+  LLM_PROVIDER_OPTIONS,
+  STT_PROVIDER_OPTIONS,
+  TTS_PROVIDER_OPTIONS,
+  getProviderOptions,
+} from '../../constants/agentOptions';
 import { clientsService } from '../../services/clients';
 import { runtimeService } from '../../services/runtime';
+import { request } from '../../services/api';
+import { StandardCallScript, callScriptsService } from '../../services/callScripts';
+import { useAuth } from '../../context/AuthContext';
 import { Agent, AgentConfigurationData, AgentVersion, Client, KnowledgeSource } from '../../types';
 
 const FIELD =
@@ -26,6 +37,8 @@ interface AgentBuildViewProps {
   isPublishing: boolean;
   knowledgeList: KnowledgeSource[];
   onToggleKnowledge: (id: string) => void;
+  /** The employee's own notes/FAQs changed: refresh the attached knowledge list */
+  onAgentKnowledgeChange: () => void;
   voiceLabel: string;
   onChangeVoice: () => void;
   /** Moves the employee to DEPLOYED (through the allowed status steps) */
@@ -38,7 +51,7 @@ interface AgentBuildViewProps {
  */
 export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
   agent, config, updateDraft, isDirty, versions, onPublish, isPublishing, knowledgeList, onToggleKnowledge,
-  voiceLabel, onChangeVoice, onGoLive,
+  onAgentKnowledgeChange, voiceLabel, onChangeVoice, onGoLive,
 }) => {
   const [client, setClient] = useState<Client | null>(null);
   const [sessions, setSessions] = useState<number | null>(null);
@@ -49,6 +62,20 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
   useEffect(() => {
     clientsService.get(agent.client_id).then(setClient).catch(() => setClient(null));
   }, [agent.client_id]);
+  // Standard call scripts (shared per template; admins edit them)
+  const { user } = useAuth();
+  const [standards, setStandards] = useState<StandardCallScript[] | null>(null);
+  useEffect(() => {
+    callScriptsService.list().then(setStandards).catch(() => setStandards([]));
+  }, []);
+
+  // Providers the server forces on every call (*_PROVIDER_OVERRIDE), whatever is saved here
+  const [providerOverrides, setProviderOverrides] = useState<Record<string, string>>({});
+  useEffect(() => {
+    request<{ provider_overrides?: Record<string, string> }>('/runtime/mode')
+      .then((res) => setProviderOverrides(res.provider_overrides || {}))
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     runtimeService.sessionCount(agent.id).then((r) => setSessions(r.sessions)).catch(() => setSessions(null));
   }, [agent.id, latest?.id]);
@@ -58,12 +85,24 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
     updateDraft((prev) => ({ ...prev, instructions: { ...prev.instructions, ...patch } }));
   const setConversation = (patch: Partial<AgentConfigurationData['conversation']>) =>
     updateDraft((prev) => ({ ...prev, conversation: { ...prev.conversation, ...patch } }));
+  const setProvider = (kind: 'stt' | 'llm' | 'tts', value: string) =>
+    updateDraft((prev) => ({
+      ...prev,
+      providers: { ...prev.providers, [kind]: value },
+      // A voice belongs to one provider: switching provider clears it, so a voice is picked again instead of the
+      // new provider silently using its default
+      ...(kind === 'tts' && value !== prev.voice.provider ? { voice: { ...prev.voice, provider: value, voice_id: null } } : {}),
+    }));
+  const otherLanguages = config.languages.supported.filter((l) => l !== config.languages.primary);
+  // The script calls will use: the linked standard script, else this employee's own
+  const linkedScript = standards?.find((st) => st.key === ins.script_source) || null;
+  const script = linkedScript || ins;
 
   // Go-live readiness: blocking items must pass; warnings are shown but don't block
   const checks: { label: string; ok: boolean; blocking: boolean }[] = [
     { label: 'Greeting written', ok: !!config.conversation.greeting.trim(), blocking: true },
     { label: 'Goal written', ok: !!ins.primary_goal.trim(), blocking: true },
-    { label: 'Call script has questions and a next step', ok: !!ins.discovery_questions?.length && !!ins.next_step?.trim(), blocking: true },
+    { label: 'Call script has questions and a next step', ok: !!script.discovery_questions?.length && !!script.next_step?.trim(), blocking: true },
     { label: 'Voice chosen', ok: !!config.voice.voice_id, blocking: true },
     { label: 'All changes published', ok: !isDirty && !!latest, blocking: true },
     { label: 'Knowledge attached', ok: config.knowledge_sources.length > 0, blocking: false },
@@ -86,10 +125,43 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
   };
 
   return (
-    <div className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
+    // Side by side (2xl), each column scrolls on its own: keep building on the left while the test stays put
+    <div className="grid grid-cols-1 gap-6 2xl:h-[calc(100vh-2rem)] 2xl:grid-cols-2">
       {/* SETUP, IN CALL ORDER */}
-      <div className="space-y-5">
-        <Card title="1. Greeting & farewell" subtitle="Said word for word (translated to the call's language). {{company_name}} is filled in.">
+      <div className="space-y-5 2xl:min-h-0 2xl:overflow-y-auto 2xl:pr-2">
+        <Card title="1. Who it is" subtitle="How it introduces itself and comes across on the call.">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-slate-300">Name it uses</span>
+              <input className={FIELD} value={config.identity.name} placeholder="e.g. Priya"
+                onChange={(e) => updateDraft((prev) => ({ ...prev, identity: { ...prev.identity, name: e.target.value } }))} />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-slate-300">Company it represents</span>
+              <input className={FIELD} value={config.business_context.business_name} placeholder="e.g. ABC Academy"
+                onChange={(e) =>
+                  updateDraft((prev) => ({
+                    ...prev,
+                    business_context: { ...prev.business_context, business_name: e.target.value },
+                    identity: { ...prev.identity, organization: e.target.value },
+                  }))
+                } />
+              <span className="block text-[11px] text-slate-500">Said on calls and used for {'{{company_name}}'} in the greeting.</span>
+            </label>
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-slate-300">Persona</span>
+              <textarea rows={2} className={FIELD} value={config.identity.persona} placeholder="e.g. Friendly admissions counsellor who knows every course"
+                onChange={(e) => updateDraft((prev) => ({ ...prev, identity: { ...prev.identity, persona: e.target.value } }))} />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-slate-300">Tone</span>
+              <textarea rows={2} className={FIELD} value={config.conversation.tone} placeholder="e.g. Warm, patient and to the point"
+                onChange={(e) => setConversation({ tone: e.target.value })} />
+            </label>
+          </div>
+        </Card>
+
+        <Card title="2. Greeting & farewell" subtitle="Said word for word (translated to the call's language). {{company_name}} is filled in.">
           <div className="space-y-3">
             <textarea rows={2} className={FIELD} value={config.conversation.greeting} placeholder="Hello, this is Priya from {{company_name}}..."
               onChange={(e) => setConversation({ greeting: e.target.value })} />
@@ -101,27 +173,26 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
           </div>
         </Card>
 
-        <Card title="2. Goal" subtitle="The one outcome this call is for.">
-          <textarea rows={2} className={FIELD} value={ins.primary_goal} placeholder="Book a free demo class for interested learners."
-            onChange={(e) => setIns({ primary_goal: e.target.value })} />
-        </Card>
-
-        <Card title="3. Call script" subtitle="What it asks (in order), what it mentions, and the step it agrees. It skips anything already known.">
+        <Card title="3. Goal" subtitle="The one outcome this call is for, and what else it can help with.">
           <div className="space-y-4">
-            <StringListEditor label="Questions to ask" items={ins.discovery_questions || []} placeholder="e.g. Would online or classroom suit you better?"
-              onChange={(items) => setIns({ discovery_questions: items })} emptyText="No questions yet." />
-            <StringListEditor label="Points to mention (only the ones that fit)" items={ins.offer_points || []} placeholder="e.g. New batch starts Monday"
-              onChange={(items) => setIns({ offer_points: items })} emptyText="No points yet." />
-            <label className="block space-y-1">
-              <span className="text-xs font-medium text-slate-300">Next step to agree</span>
-              <input className={FIELD} value={ins.next_step || ''} placeholder="e.g. Book a free demo class"
-                onChange={(e) => setIns({ next_step: e.target.value })} />
-            </label>
+            <textarea rows={2} className={FIELD} value={ins.primary_goal} placeholder="Book a free demo class for interested learners."
+              onChange={(e) => setIns({ primary_goal: e.target.value })} />
+            <StringListEditor label="What it handles" items={ins.responsibilities} placeholder="e.g. Answer questions about courses, fees and timings"
+              onChange={(items) => setIns({ responsibilities: items })} emptyText="Nothing added." />
           </div>
         </Card>
 
+        <CallScriptCard
+          instructions={ins}
+          setInstructions={setIns}
+          standards={standards}
+          onStandardSaved={(saved) => setStandards((prev) => (prev || []).map((st) => (st.key === saved.key ? saved : st)))}
+          isAdmin={user?.role === 'ADMIN'}
+          publishedInstructions={latest?.configuration_json?.instructions}
+        />
+
         <Card
-          title={<span className="flex items-center gap-2 text-sm font-semibold text-slate-100"><BookOpen className="h-4 w-4 text-[#00df8f]" /> 4. Knowledge</span>}
+          title={<span className="flex items-center gap-2 text-sm font-semibold text-slate-100"><BookOpen className="h-4 w-4 text-[#00df8f]" /> 5. Knowledge</span>}
           subtitle={`From ${client?.name || 'the client'}'s knowledge base. Ticked entries are what it answers from.`}
           action={<Link to={`/clients/${agent.client_id}`} className="text-xs text-[#00df8f] hover:underline">Manage knowledge base</Link>}
         >
@@ -144,16 +215,20 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
           )}
         </Card>
 
-        <Card title="5. Rules & handoff" subtitle="What it must always or never do, and when a person takes over.">
+        <AgentKnowledgePanel agentId={agent.id} onChange={onAgentKnowledgeChange} />
+
+        <Card title="6. Rules & handoff" subtitle="What it must always or never do, and when a person takes over.">
           <div className="space-y-4">
-            <StringListEditor label="Rules" items={ins.rules} placeholder="e.g. Never promise a job or salary"
+            <StringListEditor label="Always" items={ins.rules} placeholder="e.g. Confirm the batch timing before booking"
               onChange={(items) => setIns({ rules: items })} />
+            <StringListEditor label="Never" items={ins.restrictions} placeholder="e.g. Never promise a job or salary"
+              onChange={(items) => setIns({ restrictions: items })} />
             <StringListEditor label="Hand over to a person when..." items={ins.escalation_rules} placeholder="e.g. They ask about refunds: book a callback"
               onChange={(items) => setIns({ escalation_rules: items })} />
           </div>
         </Card>
 
-        <Card title="6. Voice & language">
+        <Card title="7. Voice & language">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <span className="mb-1.5 block text-xs font-medium text-slate-300">Voice</span>
@@ -171,17 +246,65 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
                   voice: { ...prev.voice, language: primary },
                 }));
               }} />
+            <div>
+              <span className="mb-1.5 block text-xs font-medium text-slate-300">Also speaks (when the caller does)</span>
+              <div className="flex flex-wrap gap-1.5">
+                {/* English is listed once (en-IN); plain 'en' shows only if an older setup already picked it */}
+                {AVAILABLE_LANGUAGES.filter((l) => l.value !== config.languages.primary && (l.value !== 'en' || otherLanguages.includes('en'))).map((l) => {
+                  const on = otherLanguages.includes(l.value);
+                  return (
+                    <button key={l.value} type="button"
+                      onClick={() =>
+                        updateDraft((prev) => {
+                          const others = prev.languages.supported.filter((x) => x !== prev.languages.primary && x !== l.value);
+                          return { ...prev, languages: { ...prev.languages, supported: [prev.languages.primary, ...others, ...(on ? [] : [l.value])] } };
+                        })
+                      }
+                      className={`rounded-full border px-2.5 py-0.5 text-[11px] ${on ? 'border-[#00df8f] bg-[#00df8f]/15 text-[#00df8f]' : 'border-[#1b3a46] text-slate-300'}`}>
+                      {l.label.split(' (')[0].split(' - ')[0]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-slate-300">
+                Speaking speed <span className="font-mono text-[#00df8f]">{config.voice.speed.toFixed(2)}x</span>
+              </span>
+              <input type="range" min="0.5" max="2.0" step="0.05" value={config.voice.speed} className="w-full accent-[#00df8f]"
+                onChange={(e) => updateDraft((prev) => ({ ...prev, voice: { ...prev.voice, speed: parseFloat(e.target.value) || 1.0 } }))} />
+              <span className="flex justify-between text-[10px] text-slate-500"><span>Slower</span><span>Natural (1.00x)</span><span>Faster</span></span>
+            </label>
           </div>
         </Card>
 
-        <Card title="7. Call limits" subtitle="Keeps calls short and costs in check.">
+        <Card title="8. Call limits" subtitle="Keeps calls short and costs in check.">
           <CallLimitsEditor limits={config.conversation.limits} onChange={(limits) => setConversation({ limits })} />
         </Card>
+
+        <details className="rounded-xl border border-[#102d38] bg-[#071a21] p-4 text-xs">
+          <summary className="cursor-pointer select-none font-semibold text-slate-300">Advanced: speech and AI providers</summary>
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            {([
+              { kind: 'stt', label: 'Speech-to-text', options: STT_PROVIDER_OPTIONS },
+              { kind: 'llm', label: 'AI model', options: LLM_PROVIDER_OPTIONS },
+              { kind: 'tts', label: 'Text-to-speech', options: TTS_PROVIDER_OPTIONS },
+            ] as const).map(({ kind, label, options }) => {
+              const saved = config.providers[kind];
+              const forced = providerOverrides[kind];
+              return (
+                <Select key={kind} label={label} options={getProviderOptions(options, saved)} value={saved}
+                  onChange={(e) => setProvider(kind, e.target.value)}
+                  helperText={forced && forced !== saved ? `Calls use ${forced}: set for every agent by the server (${kind.toUpperCase()}_PROVIDER_OVERRIDE).` : undefined} />
+              );
+            })}
+          </div>
+        </details>
       </div>
 
       {/* TEST + GO LIVE */}
-      <div>
-        <div className="space-y-5 2xl:sticky 2xl:top-4">
+      <div className="2xl:min-h-0 2xl:overflow-y-auto 2xl:pr-2">
+        <div className="space-y-5">
           <Card title="Test" subtitle={latest ? `Testing version ${latest.version_number}` : 'Publish once to start testing'}>
             {isDirty || !latest ? (
               <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-800/50 bg-amber-950/30 p-3 text-xs text-amber-200">

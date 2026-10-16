@@ -99,6 +99,8 @@ class VoiceResponse(BaseModel):
     preview_url: Optional[str] = None
     is_default: bool = False
     provider: str = "cartesia"
+    # 1 = one of Choranta's top picks for business calls; None = not ranked
+    tier: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 

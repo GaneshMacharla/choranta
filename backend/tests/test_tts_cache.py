@@ -61,6 +61,7 @@ def _fake_session():
     return SimpleNamespace(
         context=SimpleNamespace(agent_spec=spec, usage_tracker=tracker),
         telephony_provider=SimpleNamespace(normalize_audio_outbound=lambda chunk: chunk),
+        _carrier_bytes_per_second=16000.0,
     )
 
 

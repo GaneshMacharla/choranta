@@ -5,6 +5,9 @@ import { useAuth } from '../../context/AuthContext';
 import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { PlanGrid } from '../../components/billing/PlanGrid';
+import { CreditPackGrid } from '../../components/billing/CreditPackGrid';
+import { CreditPack } from '../../services/pricing';
+import { inr } from '../../services/portal';
 import { payWithRazorpay } from '../../components/billing/razorpayCheckout';
 import { portalAgentRequestsService } from '../../services/agentRequests';
 import { portalService } from '../../services/portal';
@@ -33,6 +36,8 @@ export const PortalPlansPage: React.FC = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyPlanId, setBusyPlanId] = useState<string | null>(null);
+  // New clients see the three smaller packs first
+  const [showAllPacks, setShowAllPacks] = useState(false);
 
   useEffect(() => {
     Promise.all([plansService.list(), portalService.subscription()])
@@ -54,11 +59,14 @@ export const PortalPlansPage: React.FC = () => {
     navigate('/portal', { replace: true });
   };
 
-  const choose = async (plan: Plan) => {
-    setBusyPlanId(plan.id);
+  const choose = (plan: Plan) => checkout(plan.id, { purpose: 'SUBSCRIPTION', plan_id: plan.id });
+  const buyPack = (pack: CreditPack) => checkout(pack.key, { purpose: 'WALLET_TOPUP', amount_inr: pack.price_with_gst_inr });
+
+  const checkout = async (key: string, body: Parameters<typeof portalService.createOrder>[0]) => {
+    setBusyPlanId(key);
     setError(null);
     try {
-      const order = await portalService.createOrder({ purpose: 'SUBSCRIPTION', plan_id: plan.id });
+      const order = await portalService.createOrder(body);
       if (await payWithRazorpay(order)) {
         // No AI employee yet: take them straight to creating one
         const me = await portalAgentRequestsService.me().catch(() => null);
@@ -76,6 +84,7 @@ export const PortalPlansPage: React.FC = () => {
 
   const sub = info.subscription;
   const hasPlan = !!sub && sub.status !== 'CANCELLED';
+  const packsOnly = plans.length === 0;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -83,9 +92,11 @@ export const PortalPlansPage: React.FC = () => {
         <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-[#00df8f]/30 bg-[#00df8f]/15 text-[#00df8f]">
           <Sparkles className="h-5 w-5" />
         </div>
-        <h1 className="text-2xl font-bold">{hasPlan ? 'Plans' : `Welcome${user?.name ? `, ${user.name.split(' ')[0]}` : ''}! Choose your plan`}</h1>
+        <h1 className="text-2xl font-bold">{hasPlan ? 'Plans' : `Welcome${user?.name ? `, ${user.name.split(' ')[0]}` : ''}! Choose ${packsOnly ? 'a credit pack' : 'your plan'}`}</h1>
         <p className="mx-auto mt-1 max-w-xl text-sm text-slate-400">
-          Each plan gives your AI employee credits every month (1 credit = ₹1). Calls use plan credits first, then any credits you buy.
+          {packsOnly
+            ? `Pay only for the minutes your AI employee talks: about ${inr(info.avg_credits_per_minute)} a minute (1 credit = ₹1). Pick the pack that fits how many calls you make. Credits never expire.`
+            : 'Each plan gives your AI employee credits every month (1 credit = ₹1). Calls use plan credits first, then any credits you buy.'}
         </p>
       </div>
 
@@ -101,12 +112,29 @@ export const PortalPlansPage: React.FC = () => {
       )}
       {!info.online_payments && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-700/60 bg-amber-950/30 p-3 text-xs text-amber-200">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> Online payment isn't available yet. Contact Choranta to subscribe.
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> Online payment isn't available yet. Contact Choranta to {packsOnly ? 'buy credits' : 'subscribe'}.
         </div>
       )}
 
-      {plans.length === 0 ? (
-        <p className="py-10 text-center text-sm text-slate-400">No plans are available right now. You can start on pay-as-you-go.</p>
+      {packsOnly ? (
+        <div className="space-y-4">
+          <CreditPackGrid
+            packs={showAllPacks ? info.credit_packs : info.credit_packs.slice(0, 3)}
+            gst={info.gst_registered}
+            disabled={!info.online_payments}
+            busyKey={busyPlanId}
+            onSelect={buyPack}
+            onCustom={showAllPacks && info.online_payments ? () => navigate('/portal/billing') : undefined}
+            customLabel="Enter any amount"
+          />
+          {!showAllPacks && info.credit_packs.length > 3 && (
+            <div className="text-center">
+              <button type="button" onClick={() => setShowAllPacks(true)} className="text-xs font-semibold text-[#00df8f] underline-offset-2 hover:underline">
+                See all packs, including large-scale business
+              </button>
+            </div>
+          )}
+        </div>
       ) : (
         <PlanGrid
           plans={plans}
@@ -121,7 +149,7 @@ export const PortalPlansPage: React.FC = () => {
       {!hasPlan && (
         <div className="text-center">
           <button type="button" onClick={skip} className="text-xs text-slate-400 underline-offset-2 hover:text-slate-200 hover:underline">
-            Skip for now — pay as you go with bought credits
+            {packsOnly ? "Skip for now — I'll add credits later" : 'Skip for now — pay as you go with bought credits'}
           </button>
         </div>
       )}

@@ -1,6 +1,7 @@
 import { request } from './api';
 import { Call, CallDetail } from './telephony';
 import { AvailableNumber, CallUsage, NumberPrice, NumberType, PaymentOrder, Subscription } from './plans';
+import { CreditPack } from './pricing';
 
 export interface WalletTransaction {
   id: string;
@@ -240,6 +241,7 @@ export const portalService = {
       payg_only: boolean;
       /** Typical credits one call minute costs (recent average) */
       avg_credits_per_minute: number;
+      credit_packs: CreditPack[];
     }>('/portal/subscription'),
   usage: () => request<CallUsage[]>('/portal/usage'),
   numbers: () =>

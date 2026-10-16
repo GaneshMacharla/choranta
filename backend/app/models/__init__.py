@@ -23,6 +23,7 @@ from app.models.agent_request import AgentRequest
 from app.models.notification import ClientNotification
 from app.models.verification import ClientVerification
 from app.models.course import Course, CourseBatch, CourseChange
+from app.models.call_script import StandardCallScript
 
 __all__ = [
     "User",

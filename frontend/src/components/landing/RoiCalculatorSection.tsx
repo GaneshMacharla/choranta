@@ -1,24 +1,36 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Calculator, ArrowRight, TrendingUp, IndianRupee, Clock, Zap } from 'lucide-react';
+import { publicPricingService } from '../../services/pricing';
 
 interface RoiCalculatorSectionProps {
   onOpenDemo: () => void;
 }
 
 export const RoiCalculatorSection: React.FC<RoiCalculatorSectionProps> = ({ onOpenDemo }) => {
-  const [agents, setAgents] = useState<number>(4);
   const [callsPerMonth, setCallsPerMonth] = useState<number>(4500);
+  const [callMinutes, setCallMinutes] = useState<number>(2);
+  // Live per-minute rate (same as the pricing section); ₹7 until it loads
+  const [ratePerMinute, setRatePerMinute] = useState<number>(7);
 
-  // Loaded salary per human agent in India (salary + PF + workstation + dialer) ~ ₹23,500/mo
+  useEffect(() => {
+    publicPricingService.creditPacks().then((d) => setRatePerMinute(d.avg_credits_per_minute)).catch(() => {});
+  }, []);
+
+  const talkMinutes = callsPerMonth * callMinutes;
+
+  // Loaded cost per telecaller in India (salary + PF + workstation + dialer) ~ ₹23,500/mo.
+  // After dialling, unanswered calls, breaks and wrap-up, a telecaller talks ~100 minutes a day, 26 days a month.
+  const TELECALLER_TALK_MINUTES = 100 * 26;
+  const agents = Math.max(1, Math.ceil(talkMinutes / TELECALLER_TALK_MINUTES));
   const monthlyHumanCost = agents * 23500;
   const annualHumanCost = monthlyHumanCost * 12;
 
-  // Choranta tier cost (scales smoothly with minutes & channels)
-  const monthlyAiCost = Math.round(9000 + (callsPerMonth / 1000) * 1800);
+  // Choranta: pay per talk minute, no monthly fee
+  const monthlyAiCost = Math.round(talkMinutes * ratePerMinute);
   const annualAiCost = monthlyAiCost * 12;
 
   const annualSavings = Math.max(0, annualHumanCost - annualAiCost);
-  const savingsPercent = Math.min(85, Math.round((annualSavings / annualHumanCost) * 100));
+  const savingsPercent = Math.round((annualSavings / annualHumanCost) * 100);
 
   const formatLakhs = (amount: number) => {
     const lakhs = (amount / 100000).toFixed(1);
@@ -46,33 +58,7 @@ export const RoiCalculatorSection: React.FC<RoiCalculatorSectionProps> = ({ onOp
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center max-w-5xl mx-auto">
           {/* Controls Column */}
           <div className="lg:col-span-7 rounded-3xl border border-[#143c49] bg-[#081b24] p-6 sm:p-8 space-y-8 shadow-xl">
-            {/* Slider 1: Agents */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-semibold text-white">
-                  Current Human Telecallers / Support Reps
-                </label>
-                <span className="font-mono font-bold text-lg text-[#00df8f] bg-[#00df8f]/10 px-3 py-1 rounded-xl border border-[#00df8f]/30">
-                  {agents} {agents === 1 ? 'Agent' : 'Agents'}
-                </span>
-              </div>
-              <input
-                type="range"
-                min="1"
-                max="25"
-                step="1"
-                value={agents}
-                onChange={(e) => setAgents(parseInt(e.target.value))}
-                className="w-full h-2 bg-[#051116] rounded-lg appearance-none cursor-pointer accent-[#00df8f]"
-              />
-              <div className="flex justify-between text-[11px] text-slate-500 font-mono">
-                <span>1 Agent</span>
-                <span>10 Agents</span>
-                <span>25 Agents</span>
-              </div>
-            </div>
-
-            {/* Slider 2: Calls */}
+            {/* Slider 1: Calls */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-semibold text-white">
@@ -98,15 +84,46 @@ export const RoiCalculatorSection: React.FC<RoiCalculatorSectionProps> = ({ onOp
               </div>
             </div>
 
+            {/* Slider 2: Average call length */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-semibold text-white">
+                  Average Call Length
+                </label>
+                <span className="font-mono font-bold text-lg text-[#00df8f] bg-[#00df8f]/10 px-3 py-1 rounded-xl border border-[#00df8f]/30">
+                  {callMinutes} min
+                </span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                step="0.5"
+                value={callMinutes}
+                onChange={(e) => setCallMinutes(parseFloat(e.target.value))}
+                className="w-full h-2 bg-[#051116] rounded-lg appearance-none cursor-pointer accent-[#00df8f]"
+              />
+              <div className="flex justify-between text-[11px] text-slate-500 font-mono">
+                <span>1 min</span>
+                <span>5 min</span>
+                <span>10 min</span>
+              </div>
+            </div>
+
             <div className="rounded-2xl bg-[#051116] p-4 border border-[#143c49]/80 text-xs text-slate-400 space-y-1.5">
               <div className="flex justify-between text-slate-300">
-                <span>Traditional Call Center Overhead:</span>
-                <span className="font-mono text-white">~₹23,500 / seat / mo</span>
+                <span>Telecallers needed for this volume:</span>
+                <span className="font-mono text-white">
+                  {agents} × ~₹23,500 / mo
+                </span>
               </div>
               <div className="flex justify-between text-slate-300">
-                <span>Choranta AI Effective Minute Rate:</span>
-                <span className="font-mono text-[#00df8f]">Sub-second fractional billing</span>
+                <span>Choranta AI, no monthly fee:</span>
+                <span className="font-mono text-[#00df8f]">~₹{Math.round(ratePerMinute)} / talk minute</span>
               </div>
+              <p className="pt-1 text-[11px] text-slate-500">
+                A telecaller talks ~100 minutes a day after dialling, unanswered calls and wrap-up.
+              </p>
             </div>
           </div>
 

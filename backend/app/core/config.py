@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     CARTESIA_STT_MODEL: str = "ink-whisper"
     CARTESIA_ENABLE_STREAMING_STT: bool = False
     CARTESIA_TTS_MODEL: str = "sonic-3"
+    # Newer Cartesia voices (e.g. Akash, Aryan, Smruti) only run on this model; used for them automatically
+    CARTESIA_TTS_FALLBACK_MODEL: str = "sonic-3.5"
+    # Stream speech over one long-lived Cartesia WebSocket (no connection setup per sentence); HTTP fallback
+    CARTESIA_TTS_WEBSOCKET: bool = True
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GEMINI_FALLBACK_TO_MOCK: bool = True
@@ -139,8 +143,8 @@ class Settings(BaseSettings):
     VOICE_MAX_REPLY_CHARS: int = 130          # stop the agent's reply after the sentence that crosses this (~7 s of speech; people talk in short turns)
     VOICE_PREFETCH_SENTENCES: int = 1         # sentences synthesized ahead of playback (unheard audio is still billed)
     VOICE_TTS_CACHE_MB: int = 64              # repeated sentences (greeting, farewell, common replies) replay from memory; 0 = off
-    CALL_SILENCE_REPROMPT_S: float = 8.0      # caller silent this long -> "Are you still there?"
-    CALL_SILENCE_HANGUP_S: float = 8.0        # still silent after the reprompt -> goodbye and hang up
+    CALL_SILENCE_REPROMPT_S: float = 5.0      # caller silent this long -> "Are you still there?"
+    CALL_SILENCE_HANGUP_S: float = 5.0        # still silent this long after the reprompt -> goodbye and hang up
     CALL_MAX_DURATION_S: int = 600            # wrap up and hang up after this many seconds
 
     # Human-like turn-taking

@@ -1,698 +1,367 @@
+"""
+Browser test calls over WebRTC: talk to an AI Employee from the browser with no phone network
+and no telephony charges.
+
+The call runs through the same TelephonyMediaSession as a real phone call (endpointing, streamed
+replies, fillers, barge-in, call limits, recording, quality stats), with the browser as the carrier:
+caller audio arrives on the peer connection's audio track and the agent's audio goes back on ours,
+both as 16kHz audio. Each call is a Call record marked as a test, so it shows up in the
+call logs but is never billed.
+"""
 import asyncio
 import fractions
 import json
 import logging
-from app.runtime.tools.catalog import describe_tools
-from app.runtime import call_rules
-from app.runtime.speech_style import apply_voice_style
-from app.runtime.knowledge import apply_knowledge
-import struct
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional
+
 import av
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+from aiortc import MediaStreamTrack, RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from app.core.config import settings
-from app.core.security import decode_and_verify_token, generate_unique_id
+
+from app.api.deps import require_operator
+from app.core.security import generate_unique_id
 from app.db.session import SessionLocal, get_db
-from app.models.runtime_session import RuntimeSession
+from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
-from app.models.runtime_event import RuntimeEvent
-from app.schemas.agent_spec import CanonicalAgentSpec
-from app.runtime.context import RuntimeContext
-from app.repositories.runtime_session_repository import RuntimeSessionRepository
-from app.repositories.runtime_event_repository import RuntimeEventRepository
-from app.repositories.user_repository import UserRepository
-from app.runtime.events.emitter import EventEmitter, scrub_payload
-from app.runtime.events.types import RuntimeEventType, RuntimeEventPayload
-from app.runtime.lifecycle import SessionStatus
-from app.runtime.runtime import AgentRuntime
+from app.models.call import Call
+from app.models.user import User
+from app.repositories.call_repository import CallRepository
+from app.runtime.context import TEST_CALL_PHONE
+from app.runtime.events.types import RuntimeEventType
 from app.runtime.providers.registry import default_registry
+from app.runtime.providers.telephony.browser import BROWSER_SAMPLE_RATE, BrowserTelephonyProvider
+from app.runtime.runtime import AgentRuntime
+from app.runtime.telephony.session import TelephonyMediaSession
 
 logger = logging.getLogger("choranta.runtime.webrtc")
 
-router = APIRouter(tags=["WebRTC Voice Transport"])
+router = APIRouter(prefix="/telephony/browser-calls", tags=["Browser Test Calls (WebRTC)"])
 
-# Active WebRTC PeerConnections mapped by session_id
-active_webrtc_connections: Dict[str, RTCPeerConnection] = {}
+# 20ms of browser audio (16-bit mono)
+FRAME_SAMPLES = BROWSER_SAMPLE_RATE // 50
+FRAME_BYTES = FRAME_SAMPLES * 2
+
+# Live browser calls by call id
+active_browser_calls: Dict[str, "BrowserCall"] = {}
 
 
-class WebRTCOfferRequest(BaseModel):
+class BrowserCallRequest(BaseModel):
+    agent_id: str
+    agent_version_id: str
+    sdp: str = Field(..., description="The browser's SDP offer (with ICE candidates gathered)")
+    type: str = "offer"
+    user_name: Optional[str] = Field(None, max_length=120, description="Test caller's name (user_name)")
+    company_name: Optional[str] = Field(None, max_length=200)
+
+
+class BrowserCallResponse(BaseModel):
+    call_id: str
+    runtime_session_id: str
     sdp: str
     type: str
 
 
-class WebRTCAnswerResponse(BaseModel):
-    sdp: str
-    type: str
+class AgentAudioTrack(MediaStreamTrack):
+    """The agent's voice to the browser: buffered phone-line audio played out in real time, 20ms per frame."""
 
-
-def _is_voice_energy(pcm_bytes: bytes, threshold: int = 1200) -> bool:
-    """Computes RMS amplitude of 16-bit signed PCM frame to detect speech energy."""
-    count = len(pcm_bytes) // 2
-    if count == 0:
-        return False
-    try:
-        shorts = struct.unpack(f"<{count}h", pcm_bytes[:count * 2])
-        rms = (sum(s * s for s in shorts) / count) ** 0.5
-        return rms > threshold
-    except Exception:
-        return False
-
-
-def _authenticate_request(token: Optional[str], db: Session) -> Optional[str]:
-    """Authenticates WebRTC signaling request via Bearer JWT token."""
-    if not token:
-        return None
-    try:
-        payload = decode_and_verify_token(token.strip())
-        user_id = payload.get("sub")
-        if not user_id:
-            return None
-        user_repo = UserRepository(db)
-        user = user_repo.get_by_id(user_id) or user_repo.get_by_email(payload.get("email", ""))
-        if not user or user.status != "ACTIVE" or user.role not in ("ADMIN", "OPERATOR"):
-            return None
-        return user.id
-    except Exception as e:
-        logger.warning(f"WebRTC auth failed: {e}")
-        return None
-
-
-def _update_session_usage(session_id: str, usage_summary: dict):
-    """Safely updates session usage metrics in DB using dedicated scoped session."""
-    try:
-        with SessionLocal() as db_session:
-            repo = RuntimeSessionRepository(db_session)
-            rec = repo.get_by_id(session_id)
-            if rec:
-                rec.usage_json = usage_summary
-                repo.update(rec)
-    except Exception as e:
-        logger.warning(f"Failed to update session usage for {session_id}: {e}")
-
-
-class WebRTCEmitter(EventEmitter):
-    """
-    Independent event emitter for long-lived WebRTC connections.
-    Uses its own scoped database sessions to persist runtime events safely
-    without relying on the short-lived HTTP request db session.
-    """
-    def __init__(self):
-        super().__init__(db=None)
-
-    def emit(
-        self,
-        event_type: RuntimeEventType,
-        session_id: str,
-        agent_id: str,
-        agent_version_id: str,
-        client_id: str,
-        payload: Optional[Dict[str, Any]] = None
-    ) -> RuntimeEventPayload:
-        event_id = generate_unique_id("evt", 12)
-        safe_payload = scrub_payload(payload or {})
-        event_obj = RuntimeEventPayload(
-            event_id=event_id,
-            session_id=session_id,
-            agent_id=agent_id,
-            agent_version_id=agent_version_id,
-            client_id=client_id,
-            event_type=event_type,
-            timestamp=datetime.now(timezone.utc),
-            payload=safe_payload
-        )
-
-        for listener in self._listeners:
-            try:
-                listener(event_obj)
-            except Exception as e:
-                logger.error(f"Error in WebRTC event listener for {event_type}: {e}")
-
-        try:
-            with SessionLocal() as db_session:
-                RuntimeEventRepository(db_session).create(
-                    RuntimeEvent(
-                        id=event_id,
-                        session_id=session_id,
-                        client_id=client_id,
-                        agent_id=agent_id,
-                        agent_version_id=agent_version_id,
-                        event_type=event_type.value,
-                        payload_json=safe_payload,
-                        timestamp=event_obj.timestamp
-                    )
-                )
-        except Exception as e:
-            logger.debug(f"Failed to persist WebRTC event {event_id}: {e}")
-
-        logger.info(f"[RUNTIME EVENT] {event_type.value} | session={session_id} | agent={agent_id}")
-        return event_obj
-
-
-class AgentAudioOutputTrack(MediaStreamTrack):
-    """
-    Paced WebRTC outgoing audio track streaming synthesized agent voice
-    as 16kHz s16 mono frames (which aiortc encodes into Opus RTP packets).
-    Uses clock-based pacing (20ms cadence) to prevent packet bursts.
-    """
     kind = "audio"
 
     def __init__(self):
         super().__init__()
-        self._queue: asyncio.Queue[bytes] = asyncio.Queue()
-        self._buffer: bytearray = bytearray()
-        self._pts: int = 0
-        self._silence_frame = b"\x00\x00" * 320  # 20ms of silence at 16kHz (640 bytes)
-        self._sample_rate = 16000
-        self._samples = 320
-        self._start_time: Optional[float] = None
+        self._buffer = bytearray()
+        self._start: Optional[float] = None
+        self._pts = 0
 
-    def enqueue_chunk(self, chunk: bytes):
-        self._queue.put_nowait(chunk)
+    def write(self, pcm: bytes) -> None:
+        self._buffer.extend(pcm)
 
-    def clear(self):
-        while not self._queue.empty():
-            try:
-                self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+    def clear(self) -> None:
         self._buffer.clear()
 
     async def recv(self) -> av.AudioFrame:
         if self.readyState != "live":
             raise MediaStreamError
-
-        now = time.time()
-        if self._start_time is None:
-            self._start_time = now
-            self._pts = 0
+        if self._start is None:
+            self._start = time.monotonic()
         else:
-            self._pts += self._samples
-            expected_time = self._start_time + (self._pts / self._sample_rate)
-            wait = expected_time - now
+            self._pts += FRAME_SAMPLES
+            wait = self._start + self._pts / BROWSER_SAMPLE_RATE - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
 
-        # Pull incoming chunks into buffer
-        while len(self._buffer) < 640 and not self._queue.empty():
-            try:
-                chunk = self._queue.get_nowait()
-                self._buffer.extend(chunk)
-            except asyncio.QueueEmpty:
-                break
+        data = bytes(self._buffer[:FRAME_BYTES])
+        del self._buffer[:FRAME_BYTES]
+        if len(data) < FRAME_BYTES:
+            data += b"\x00" * (FRAME_BYTES - len(data))
 
-        if len(self._buffer) >= 640:
-            frame_bytes = bytes(self._buffer[:640])
-            del self._buffer[:640]
-        else:
-            frame_bytes = self._silence_frame
-
-        frame = av.AudioFrame(format="s16", layout="mono", samples=self._samples)
-        frame.planes[0].update(frame_bytes)
-        frame.sample_rate = self._sample_rate
-        frame.time_base = fractions.Fraction(1, self._sample_rate)
+        frame = av.AudioFrame(format="s16", layout="mono", samples=FRAME_SAMPLES)
+        frame.planes[0].update(data)
+        frame.sample_rate = BROWSER_SAMPLE_RATE
+        frame.time_base = fractions.Fraction(1, BROWSER_SAMPLE_RATE)
         frame.pts = self._pts
         return frame
 
 
-@router.post("/api/runtime/sessions/{session_id}/webrtc/offer", response_model=WebRTCAnswerResponse)
-@router.post("/api/v1/runtime/sessions/{session_id}/webrtc/offer", response_model=WebRTCAnswerResponse)
-async def handle_webrtc_offer(
-    session_id: str,
-    offer_req: WebRTCOfferRequest,
-    token: Optional[str] = Query(None),
-    request: Request = None,
-    db: Session = Depends(get_db)
-):
-    """
-    WebRTC SDP Offer / Answer Exchange Endpoint.
-    Initiates a peer-to-peer WebRTC connection using Opus audio and an events DataChannel.
-    """
-    # 1. Auth verification (header or query token)
-    auth_header = request.headers.get("Authorization", "") if request else ""
-    raw_token = token
-    if not raw_token and auth_header.startswith("Bearer "):
-        raw_token = auth_header.replace("Bearer ", "").strip()
+# Events forwarded live to the browser's data channel (the full record is in the call log)
+_LIVE_EVENTS = {
+    RuntimeEventType.USER_TRANSCRIPT_FINAL: "caller_text",
+    RuntimeEventType.ASSISTANT_RESPONSE: "agent_text",
+    RuntimeEventType.TTS_STARTED: "agent_speaking",
+    RuntimeEventType.ASSISTANT_INTERRUPTED: "interrupted",
+    RuntimeEventType.TOOL_CALL_STARTED: "tool_started",
+}
 
-    user_id = _authenticate_request(raw_token, db)
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-    # 2. Verify Session
-    session_repo = RuntimeSessionRepository(db)
-    session_record = session_repo.get_by_id(session_id)
-    if not session_record:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+class BrowserMediaSession(TelephonyMediaSession):
+    """A phone call session whose carrier is a WebRTC peer connection instead of an Exotel media stream."""
 
-    if session_record.status not in (SessionStatus.ACTIVE.value, SessionStatus.CREATED.value, SessionStatus.INITIALIZING.value):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Session is {session_record.status}")
-
-    # Close any existing WebRTC connection for this session
-    if session_id in active_webrtc_connections:
-        try:
-            await active_webrtc_connections[session_id].close()
-        except Exception:
-            pass
-        active_webrtc_connections.pop(session_id, None)
-
-    # 3. Initialize Runtime Context & Providers
-    runtime = AgentRuntime(db, registry=default_registry)
-    emitter = WebRTCEmitter()
-
-    context = runtime._contexts.get(session_id)
-    if not context:
-        version = db.query(AgentVersion).filter(AgentVersion.id == session_record.agent_version_id).first()
-        spec = CanonicalAgentSpec.model_validate(version.configuration_json)
-        context = RuntimeContext(
-            session_id=session_id,
-            agent_id=session_record.agent_id,
-            client_id=session_record.client_id,
-            agent_version_id=session_record.agent_version_id,
-            agent_spec=spec,
-            metadata=session_record.metadata_
+    def __init__(self, call_record: Call, db: Session, track: AgentAudioTrack,
+                 notify: Callable[[Dict[str, Any]], None], on_hang_up: Callable[[str], None]):
+        super().__init__(
+            websocket=None,
+            call_record=call_record,
+            stream_sid=call_record.provider_call_id,
+            db=db,
+            telephony_provider=BrowserTelephonyProvider(),
         )
-        apply_knowledge(db, context)
-        runtime._contexts[session_id] = context
+        self._track = track
+        self._notify = notify
+        self._on_hang_up = on_hang_up
 
-    stt_provider = default_registry.get_stt(context.agent_spec.providers.stt)
-    llm_provider = default_registry.get_llm(context.agent_spec.providers.llm)
-    tts_provider = default_registry.get_tts(context.agent_spec.providers.tts)
+    async def _send_carrier_audio(self, frame: bytes) -> None:
+        self._track.write(frame)
 
-    # 4. State & Tracks
-    agent_output_track = AgentAudioOutputTrack()
-    data_channel_ref: Dict[str, Any] = {"channel": None}
-    streaming_stt_session: Optional[Any] = None
-    assistant_speaking = False
-    assistant_audio_grace_until = 0.0
-    current_tts_task: Optional[asyncio.Task] = None
-    turn_in_progress = False
+    async def _clear_carrier_playback(self) -> None:
+        self._track.clear()
 
-    # Latency tracking
-    t_speech_start: Optional[float] = None
-    t_stt_partial: Optional[float] = None
-    t_speech_end: Optional[float] = None
+    async def _disconnect_carrier(self) -> None:
+        # Called from inside the agent's turn, so the call is ended from a separate task
+        self._on_hang_up(self._end_reason or "agent_ended")
 
-    def send_dc_event(event_dict: dict):
-        dc = data_channel_ref.get("channel")
-        if dc and dc.readyState == "open":
-            try:
-                dc.send(json.dumps(event_dict))
-            except Exception as e:
-                logger.debug(f"DataChannel send failed: {e}")
+    def _emit(self, event_type: RuntimeEventType, payload: Dict[str, Any]) -> None:
+        super()._emit(event_type, payload)
+        kind = _LIVE_EVENTS.get(event_type)
+        if kind:
+            self._notify({"type": kind, **{k: v for k, v in payload.items() if isinstance(v, (str, int, float, bool)) or v is None}})
 
-    async def on_stt_partial(partial_text: str):
-        nonlocal t_stt_partial, t_speech_start
-        if not partial_text:
+
+class BrowserCall:
+    """One browser test call: the peer connection, its phone session and the database session it uses."""
+
+    def __init__(self, call_id: str):
+        self.call_id = call_id
+        self.db = SessionLocal()
+        self.track = AgentAudioTrack()
+        self.pc = RTCPeerConnection(RTCConfiguration(iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]))
+        self.channel = None
+        self._channel_ready = False  # the browser said hello: its end of the data channel is open
+        self._unsent: list = []
+        self.session: Optional[BrowserMediaSession] = None
+        self._caller_audio: Optional[asyncio.Task] = None
+        self._started = False
+        self._ended = False
+
+    def notify(self, message: Dict[str, Any]) -> None:
+        if not self._channel_ready or self.channel.readyState != "open":
+            self._unsent.append(message)
             return
-        if t_stt_partial is None and t_speech_start is not None:
-            t_stt_partial = time.perf_counter()
-
-        emitter.emit(
-            RuntimeEventType.USER_TRANSCRIPT_PARTIAL,
-            session_id=session_id,
-            agent_id=context.agent_id,
-            agent_version_id=context.agent_version_id,
-            client_id=context.client_id,
-            payload={"text": partial_text}
-        )
-        send_dc_event({
-            "type": "transcript",
-            "text": partial_text,
-            "final": False
-        })
-
-    async def ensure_streaming_stt() -> Any:
-        nonlocal streaming_stt_session
-        if not settings.CARTESIA_ENABLE_STREAMING_STT:
-            return None
-        if streaming_stt_session is None:
-            try:
-                streaming_stt_session = await stt_provider.create_stream(
-                    on_partial=on_stt_partial
-                )
-            except Exception as e:
-                logger.warning(f"Failed to create streaming STT session: {e}")
-                streaming_stt_session = None
-        return streaming_stt_session
-
-    async def send_tts_stream(text: str, t_ref_speech_end: Optional[float] = None, stt_ms: float = 0.0, llm_ms: float = 0.0):
-        nonlocal assistant_speaking, assistant_audio_grace_until
-        assistant_speaking = True
-        t_tts_start = time.perf_counter()
-        t_tts_first_chunk: Optional[float] = None
-
         try:
-            emitter.emit(
-                RuntimeEventType.TTS_STARTED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"text": text, "voice_id": context.agent_spec.voice.voice_id}
-            )
-
-            total_bytes = 0
-            async for audio_chunk in tts_provider.synthesize_stream(
-                text=text,
-                voice_id=context.agent_spec.voice.voice_id,
-                speed=context.agent_spec.voice.speed,
-                language=context.agent_spec.languages.primary
-            ):
-                if not assistant_speaking:
-                    logger.info(f"WebRTC TTS stream aborted for session '{session_id}' due to barge-in.")
-                    break
-
-                if audio_chunk:
-                    if t_tts_first_chunk is None:
-                        t_tts_first_chunk = time.perf_counter()
-                        ttfb_ms = round((t_tts_first_chunk - t_tts_start) * 1000, 2)
-                        round_trip_ms = round((t_tts_first_chunk - t_ref_speech_end) * 1000, 2) if t_ref_speech_end else None
-
-                        send_dc_event({
-                            "type": "latency_metrics",
-                            "metrics": {
-                                "stt_ms": stt_ms,
-                                "llm_ms": llm_ms,
-                                "tts_ttfb_ms": ttfb_ms,
-                                "round_trip_ms": round_trip_ms
-                            }
-                        })
-
-                    total_bytes += len(audio_chunk)
-                    agent_output_track.enqueue_chunk(audio_chunk)
-                    emitter.emit(
-                        RuntimeEventType.TTS_AUDIO_CHUNK,
-                        session_id=session_id,
-                        agent_id=context.agent_id,
-                        agent_version_id=context.agent_version_id,
-                        client_id=context.client_id,
-                        payload={"chunk_bytes": len(audio_chunk)}
-                    )
-                    await asyncio.sleep(0.001)
-
-            duration = total_bytes / (16000 * 2)
-            context.usage_tracker.record_tts(duration)
-            emitter.emit(
-                RuntimeEventType.TTS_COMPLETED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"duration_seconds": duration, "interrupted": not assistant_speaking}
-            )
-
-            if assistant_speaking:
-                send_dc_event({
-                    "type": "turn_complete",
-                    "usage": context.usage_tracker.get_summary()
-                })
-        except asyncio.CancelledError:
-            logger.info(f"WebRTC TTS cancelled via barge-in for session '{session_id}'")
-            agent_output_track.clear()
-            send_dc_event({"type": "interrupted"})
+            self.channel.send(json.dumps(message, default=str))
         except Exception as e:
-            logger.error(f"WebRTC TTS error: {e}")
-            send_dc_event({"type": "error", "message": str(e)})
-        finally:
-            assistant_speaking = False
-            assistant_audio_grace_until = time.perf_counter() + 0.75
+            logger.debug(f"Browser call {self.call_id}: data channel send failed: {e}")
 
-    async def handle_interrupt(reason: str = "barge_in"):
-        nonlocal assistant_speaking, assistant_audio_grace_until, current_tts_task
-        assistant_speaking = False
-        assistant_audio_grace_until = time.perf_counter() + 0.75
-        agent_output_track.clear()
-        if current_tts_task and not current_tts_task.done():
-            current_tts_task.cancel()
-        emitter.emit(
-            RuntimeEventType.ASSISTANT_INTERRUPTED,
-            session_id=session_id,
-            agent_id=context.agent_id,
-            agent_version_id=context.agent_version_id,
-            client_id=context.client_id,
-            payload={"reason": reason}
-        )
-        send_dc_event({"type": "interrupted"})
+    def _flush_unsent(self) -> None:
+        unsent, self._unsent = self._unsent, []
+        for message in unsent:
+            self.notify(message)
 
-    async def execute_turn(user_audio_bytes: bytes, t_ref_speech_start: Optional[float] = None, t_ref_speech_end: Optional[float] = None):
-        nonlocal turn_in_progress, current_tts_task, streaming_stt_session
-        if turn_in_progress:
-            return
-        turn_in_progress = True
-        t_end = t_ref_speech_end or time.perf_counter()
+    async def connect(self, offer: RTCSessionDescription) -> RTCSessionDescription:
+        call_record = self.db.get(Call, self.call_id)
+        self.session = BrowserMediaSession(call_record, self.db, self.track, self.notify, self.hang_up)
+        self.pc.addTrack(self.track)
 
-        try:
-            emitter.emit(
-                RuntimeEventType.USER_SPEECH_STARTED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id
-            )
+        @self.pc.on("datachannel")
+        def on_datachannel(channel):
+            self.channel = channel
 
-            if streaming_stt_session:
-                transcript_res = await streaming_stt_session.finish()
-                streaming_stt_session = None
-            else:
-                transcript_res = await stt_provider.process_audio_async(user_audio_bytes)
+            @channel.on("message")
+            def on_message(raw):
+                try:
+                    kind = json.loads(raw).get("type")
+                except Exception:
+                    return
+                if kind == "hello":
+                    self._channel_ready = True
+                    self._flush_unsent()
+                elif kind == "hangup":
+                    self.hang_up("caller_hangup")
 
-            # Streaming STT can finish without a final transcript when the provider
-            # misses the last event. Retry the captured turn through batch STT.
-            if not transcript_res.text.strip() and user_audio_bytes:
-                transcript_res = await stt_provider.process_audio_async(user_audio_bytes)
+        @self.pc.on("track")
+        def on_track(track):
+            if track.kind == "audio" and self._caller_audio is None:
+                self._caller_audio = asyncio.create_task(self._pump_caller_audio(track))
 
-            t_stt_done = time.perf_counter()
-            stt_latency_ms = round((t_stt_done - t_end) * 1000, 2)
-            user_text = transcript_res.text.strip()
-            context.usage_tracker.record_stt(len(user_audio_bytes) / (16000 * 2))
+        @self.pc.on("connectionstatechange")
+        async def on_state():
+            state = self.pc.connectionState
+            logger.info(f"Browser call {self.call_id}: WebRTC {state}.")
+            if state == "connected" and not self._started:
+                self._started = True
+                await self.session.initialize()  # plays the greeting
+                self.notify({"type": "connected", "call_id": self.call_id})
+            elif state in ("failed", "closed"):
+                self.hang_up("caller_hangup" if state == "closed" else "connection_failed")
 
-            emitter.emit(
-                RuntimeEventType.USER_TRANSCRIPT_FINAL,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"text": user_text, "confidence": transcript_res.confidence, "latency_ms": stt_latency_ms}
-            )
+        await self.pc.setRemoteDescription(offer)
+        await self.pc.setLocalDescription(await self.pc.createAnswer())
+        return self.pc.localDescription
 
-            if not user_text:
-                return
-
-            send_dc_event({
-                "type": "transcript",
-                "text": user_text,
-                "final": True
-            })
-
-            context.conversation.add_user_message(user_text)
-
-            # LLM Invocation
-            t_llm_start = time.perf_counter()
-            emitter.emit(
-                RuntimeEventType.LLM_REQUEST_STARTED,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id
-            )
-
-            apply_voice_style(context.conversation, context.agent_spec)
-            available_tools_list = call_rules.with_end_call(describe_tools(db, context.active_tools))
-            llm_result = await llm_provider.generate_async(
-                system_instruction=context.instruction_for_turn(),
-                messages=context.conversation.to_llm_messages(),
-                available_tools=available_tools_list
-            )
-
-            t_llm_done = time.perf_counter()
-            llm_latency_ms = round((t_llm_done - t_llm_start) * 1000, 2)
-
-            context.usage_tracker.record_llm(
-                llm_result.usage.get("input_tokens", 0),
-                llm_result.usage.get("output_tokens", 0)
-            )
-
-            emitter.emit(
-                RuntimeEventType.LLM_RESPONSE,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"latency_ms": llm_latency_ms, "finish_reason": llm_result.finish_reason}
-            )
-
-            hang_up = call_rules.wants_to_end(llm_result.tool_calls)
-            assistant_text = (call_rules.goodbye_text(context.agent_spec, llm_result.text) if hang_up
-                              else llm_result.text or context.agent_spec.conversation.fallback_response)
-            context.conversation.add_assistant_message(content=assistant_text)
-
-            emitter.emit(
-                RuntimeEventType.ASSISTANT_RESPONSE,
-                session_id=session_id,
-                agent_id=context.agent_id,
-                agent_version_id=context.agent_version_id,
-                client_id=context.client_id,
-                payload={"text": assistant_text}
-            )
-
-            send_dc_event({
-                "type": "assistant_text",
-                "text": assistant_text
-            })
-
-            # Update session usage in DB safely
-            _update_session_usage(session_id, context.usage_tracker.get_summary())
-
-            # Stream TTS Audio over WebRTC
-            current_tts_task = asyncio.create_task(
-                send_tts_stream(
-                    assistant_text,
-                    t_ref_speech_end=t_end,
-                    stt_ms=stt_latency_ms,
-                    llm_ms=llm_latency_ms
-                )
-            )
-            await current_tts_task
-            if hang_up:
-                send_dc_event({"type": "call_ended", "reason": "agent_hung_up"})
-
-        except Exception as e:
-            logger.error(f"WebRTC turn execution error: {e}")
-            send_dc_event({"type": "error", "message": str(e)})
-        finally:
-            turn_in_progress = False
-
-    # 5. Build RTCPeerConnection
-    pc = RTCPeerConnection(
-        configuration=RTCConfiguration(
-            iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
-        )
-    )
-    active_webrtc_connections[session_id] = pc
-
-    # Add agent audio track to peer connection
-    pc.addTrack(agent_output_track)
-
-    @pc.on("datachannel")
-    def on_datachannel(channel):
-        data_channel_ref["channel"] = channel
-        logger.info(f"WebRTC DataChannel '{channel.label}' established for session '{session_id}'")
-
-        @channel.on("message")
-        def on_message(msg_str):
-            try:
-                msg = json.loads(msg_str)
-                mtype = msg.get("type")
-                if mtype == "interrupt":
-                    asyncio.create_task(handle_interrupt("user_interrupt"))
-                elif mtype == "ping":
-                    send_dc_event({"type": "pong"})
-            except Exception as err:
-                logger.debug(f"DataChannel message parse error: {err}")
-
-        def trigger_greeting():
-            has_dialogue = any(m.role.value in ("user", "assistant") for m in context.conversation.messages)
-            if context.agent_spec.conversation.greeting and not has_dialogue:
-                greeting_text = context.resolved_greeting or context.agent_spec.conversation.greeting
-                context.conversation.add_assistant_message(content=greeting_text)
-                send_dc_event({"type": "assistant_text", "text": greeting_text})
-                asyncio.create_task(send_tts_stream(greeting_text))
-
-        @channel.on("open")
-        def on_open():
-            logger.info(f"DataChannel open for session '{session_id}'")
-            trigger_greeting()
-
-        if channel.readyState == "open":
-            trigger_greeting()
-
-    @pc.on("track")
-    def on_track(track):
-        if track.kind == "audio":
-            logger.info(f"Received caller audio track on WebRTC session '{session_id}'")
-            asyncio.create_task(consume_caller_audio(track))
-
-    async def consume_caller_audio(incoming_track: MediaStreamTrack):
-        resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
-        audio_buffer = bytearray()
-        speech_energy_count = 0
-        has_spoken = False
-        last_speech_time = 0.0
-
+    async def _pump_caller_audio(self, track) -> None:
+        """Browser microphone (Opus, 48kHz) to 16kHz PCM frames for the call session."""
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=BROWSER_SAMPLE_RATE)
         try:
             while True:
-                frame = await incoming_track.recv()
-                resampled_frames = resampler.resample(frame)
-
-                for r_frame in resampled_frames:
-                    raw_pcm = r_frame.to_ndarray().tobytes()
-
-                    # Ignore speaker echo while the assistant is talking and for
-                    # a short decay window after playback stops.
-                    if assistant_speaking or time.perf_counter() < assistant_audio_grace_until:
-                        speech_energy_count = 0
-                        has_spoken = False
-                        audio_buffer.clear()
-                        continue
-
-                    has_energy = _is_voice_energy(raw_pcm, threshold=1200)
-
-                    if has_energy:
-                        speech_energy_count += 1
-                        if speech_energy_count >= 3:
-                            has_spoken = True
-                            last_speech_time = time.perf_counter()
-
-                    else:
-                        speech_energy_count = max(0, speech_energy_count - 1)
-
-                    if has_spoken and not assistant_speaking:
-                        stt_stream = await ensure_streaming_stt()
-                        if stt_stream:
-                            await stt_stream.send_audio(raw_pcm)
-                        audio_buffer.extend(raw_pcm)
-
-                    # Silence pause VAD: auto-execute after one second of silence.
-                    if has_spoken and (time.perf_counter() - last_speech_time > 1.0) and not turn_in_progress:
-                        if len(audio_buffer) > 0:
-                            turn_bytes = bytes(audio_buffer)
-                            audio_buffer.clear()
-                            has_spoken = False
-                            asyncio.create_task(
-                                execute_turn(
-                                    turn_bytes,
-                                    t_ref_speech_start=last_speech_time - 1.0,
-                                    t_ref_speech_end=last_speech_time
-                                )
-                            )
+                frame = await track.recv()
+                if not self._started or self._ended:
+                    continue
+                for pcm in resampler.resample(frame):
+                    await self.session.handle_carrier_audio(pcm.to_ndarray().tobytes())
+        except MediaStreamError:
+            pass
         except Exception as e:
-            logger.debug(f"WebRTC incoming audio stream ended: {e}")
+            logger.warning(f"Browser call {self.call_id}: caller audio stopped: {type(e).__name__}: {e}")
 
-    # Set Remote Offer and Create Local Answer
-    offer = RTCSessionDescription(sdp=offer_req.sdp, type=offer_req.type)
-    await pc.setRemoteDescription(offer)
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
+    def hang_up(self, reason: str) -> None:
+        if not self._ended:
+            asyncio.create_task(self.end(reason))
 
-    return WebRTCAnswerResponse(
-        sdp=pc.localDescription.sdp,
-        type=pc.localDescription.type
+    async def end(self, reason: str) -> None:
+        if self._ended:
+            return
+        self._ended = True
+        active_browser_calls.pop(self.call_id, None)
+        self.notify({"type": "call_ended", "reason": reason})
+        try:
+            if self.session and self._started:
+                await self.session.close(reason=reason)
+            elif self.session:
+                # Never connected: close the call record without running the session
+                call_record = self.db.get(Call, self.call_id)
+                if call_record and call_record.status not in ("COMPLETED", "FAILED"):
+                    call_record.status = "FAILED"
+                    call_record.ended_at = datetime.now(timezone.utc)
+                    call_record.termination_reason = reason
+                    self.db.commit()
+                if call_record and call_record.runtime_session_id:
+                    try:
+                        AgentRuntime(self.db, registry=default_registry).end_session(call_record.runtime_session_id)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Browser call {self.call_id}: error ending the call: {type(e).__name__}: {e}")
+        finally:
+            if self._caller_audio and not self._caller_audio.done():
+                self._caller_audio.cancel()
+            try:
+                await self.pc.close()
+            except Exception:
+                pass
+            self.db.close()
+            logger.info(f"Browser call {self.call_id} ended ({reason}).")
+
+
+def _create_call_record(db: Session, req: BrowserCallRequest, user: User) -> Call:
+    """Creates the test Call and starts its runtime session, as the carrier webhook does for a phone call."""
+    agent = db.get(Agent, req.agent_id)
+    version = db.get(AgentVersion, req.agent_version_id)
+    if not agent or not version or version.agent_id != agent.id:
+        raise HTTPException(status_code=404, detail="AI Employee version not found.")
+
+    # Outbound agents are tested as if they had called the tester
+    direction_setting = str(((version.configuration_json or {}).get("business_context") or {}).get("call_direction") or "inbound")
+    outbound = direction_setting.lower() == "outbound"
+    call_id = generate_unique_id("call", 12)
+    caller, destination = ("browser", TEST_CALL_PHONE) if outbound else (TEST_CALL_PHONE, "browser")
+
+    variables = {k: v.strip() for k, v in (("user_name", req.user_name), ("company_name", req.company_name)) if v and v.strip()}
+    session_obj = AgentRuntime(db, registry=default_registry).start_session(
+        agent_id=agent.id,
+        agent_version_id=version.id,
+        metadata={
+            "origin": "telephony_outbound" if outbound else "telephony_inbound",
+            "channel": "browser",
+            "is_test": True,
+            "call_id": call_id,
+            "provider": "browser",
+            "caller": caller,
+            "destination": destination,
+            **variables,
+        },
+    )
+    now = datetime.now(timezone.utc)
+    return CallRepository(db).create(Call(
+        id=call_id,
+        client_id=agent.client_id,
+        agent_id=agent.id,
+        agent_version_id=version.id,
+        runtime_session_id=session_obj.id,
+        provider="browser",
+        provider_call_id=generate_unique_id("web", 16),
+        direction="OUTBOUND" if outbound else "INBOUND",
+        caller_number=caller,
+        destination_number=destination,
+        status="ANSWERED",
+        started_at=now,
+        answered_at=now,
+        duration_seconds=0.0,
+        metadata_={"is_test": True, "channel": "browser", "started_by": user.id, "variables": variables},
+    ))
+
+
+@router.post("", response_model=BrowserCallResponse, status_code=status.HTTP_201_CREATED)
+async def start_browser_call(
+    req: BrowserCallRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_operator),
+):
+    """Starts a free test call with an AI Employee from the browser (WebRTC SDP offer in, answer out)."""
+    if req.type != "offer":
+        raise HTTPException(status_code=400, detail="Expected an SDP offer.")
+    call_record = _create_call_record(db, req, current_user)  # readiness errors become 4xx responses
+
+    call = BrowserCall(call_record.id)
+    active_browser_calls[call.call_id] = call
+    try:
+        answer = await call.connect(RTCSessionDescription(sdp=req.sdp, type=req.type))
+    except Exception as e:
+        logger.error(f"Browser call {call.call_id}: WebRTC negotiation failed: {type(e).__name__}: {e}")
+        await call.end("connection_failed")
+        raise HTTPException(status_code=400, detail="Could not set up the audio connection.")
+
+    # Nobody connected (e.g. the browser gave up): don't leave the call open
+    async def expire_if_unconnected():
+        await asyncio.sleep(30)
+        if not call._started:
+            await call.end("connection_timeout")
+    asyncio.create_task(expire_if_unconnected())
+
+    return BrowserCallResponse(
+        call_id=call_record.id,
+        runtime_session_id=call_record.runtime_session_id,
+        sdp=answer.sdp,
+        type=answer.type,
     )
 
 
-@router.post("/api/runtime/sessions/{session_id}/webrtc/close")
-@router.post("/api/v1/runtime/sessions/{session_id}/webrtc/close")
-async def close_webrtc_session(session_id: str):
-    """Closes an active WebRTC peer connection."""
-    pc = active_webrtc_connections.pop(session_id, None)
-    if pc:
-        try:
-            await pc.close()
-        except Exception:
-            pass
-    return {"status": "closed", "session_id": session_id}
+@router.post("/{call_id}/hangup")
+async def hang_up_browser_call(call_id: str, _: User = Depends(require_operator)):
+    """Ends a browser test call (the tester pressed End Call)."""
+    call = active_browser_calls.get(call_id)
+    if call:
+        await call.end("caller_hangup")
+    return {"status": "ended", "call_id": call_id}

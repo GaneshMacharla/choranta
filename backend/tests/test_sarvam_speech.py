@@ -150,10 +150,12 @@ def test_voice_preview_is_spoken_in_the_agent_language(monkeypatch):
 
 def test_browser_test_calls_send_the_agent_language_to_tts():
     import inspect
-    from app.api.routes import webrtc_audio, websocket_audio
+    from app.api.routes import websocket_audio
+    from app.runtime.telephony import session
 
-    for module in (webrtc_audio, websocket_audio):
-        assert "language=context.agent_spec.languages.primary" in inspect.getsource(module), module.__name__
+    # The audio WebSocket runs on the phone session, which speaks in the agent's language
+    assert issubclass(websocket_audio.WebSocketMediaSession, session.TelephonyMediaSession)
+    assert "language=spec.languages.primary" in inspect.getsource(session.TelephonyMediaSession._synthesize)
 
 
 def test_voices_carry_gender_and_put_sarvam_language_picks_first():

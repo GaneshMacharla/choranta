@@ -59,7 +59,7 @@ const listVoices = () => request<SarvamVoice[]>('/catalogs/sarvam-voices');
 
 const INDIAN_LANGUAGES = LANGUAGES.map((l) => l.code);
 
-/** Cartesia voices in the picker's shape: Indian voices count as recommended for Indian languages. */
+/** Cartesia voices in the picker's shape: Indian voices count as recommended for Indian languages, and Choranta's top picks lead. */
 const listCartesiaVoices = async (): Promise<SarvamVoice[]> =>
   (await catalogsService.listVoices()).map((v) => ({
     id: v.id,
@@ -68,7 +68,7 @@ const listCartesiaVoices = async (): Promise<SarvamVoice[]> =>
     description: v.description || null,
     is_default: false,
     gender: (v.gender || '').toLowerCase().startsWith('f') ? ('female' as const) : ('male' as const),
-    tier: null,
+    tier: v.tier ?? null,
     recommended_languages: (v.country || '').toUpperCase() === 'IN' ? INDIAN_LANGUAGES : [],
     note: null,
   }));
@@ -165,7 +165,7 @@ export const SarvamVoicePickerModal: React.FC<SarvamVoicePickerModalProps> = ({
             <span className={v.gender === 'female' ? 'text-pink-300' : 'text-sky-300'}>{v.gender}</span>
             {topRated && (
               <span className="flex items-center gap-0.5 text-amber-300">
-                <Star className="h-2.5 w-2.5 fill-current" /> Top rated
+                <Star className="h-2.5 w-2.5 fill-current" /> {v.provider === 'cartesia' ? 'Top pick' : 'Top rated'}
               </span>
             )}
             {v.note && <span className="text-slate-500">Dramatic</span>}
@@ -283,7 +283,7 @@ export const SarvamVoicePickerModal: React.FC<SarvamVoicePickerModalProps> = ({
             <>
               {recommended.length > 0 && (
                 <section className="space-y-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-[#00df8f]">{provider === 'cartesia' ? `Indian voices (speak ${langLabel})` : `Recommended by Sarvam for ${langLabel}`}</h3>
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-[#00df8f]">{provider === 'cartesia' ? `Recommended for ${langLabel} (Indian voices)` : `Recommended by Sarvam for ${langLabel}`}</h3>
                   {grid(recommended)}
                 </section>
               )}

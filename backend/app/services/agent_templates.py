@@ -176,8 +176,8 @@ REAL_ESTATE_LEAD_QUALIFICATION_TEMPLATE: Dict[str, Any] = {
             "speed": 1.0
         },
         "providers": {
-            "stt": "cartesia",
-            "llm": "gemini",
+            "stt": "sarvam",
+            "llm": "sarvam",
             "tts": "cartesia",
             "telephony": None
         }
@@ -367,8 +367,8 @@ COACHING_ADMISSION_COUNSELLOR_TEMPLATE: Dict[str, Any] = {
             "speed": 1.0
         },
         "providers": {
-            "stt": "cartesia",
-            "llm": "gemini",
+            "stt": "sarvam",
+            "llm": "sarvam",
             "tts": "cartesia",
             "telephony": None
         }
@@ -388,8 +388,10 @@ AVAILABLE_AGENT_TEMPLATES = [
 ]
 
 # Every template carries a call script (questions to ask, points to mention, the next step to agree)
+# and is linked to that template's standard call script, which admins maintain
 for _tpl in AVAILABLE_AGENT_TEMPLATES:
     _tpl["default_config"]["instructions"].update(CALL_SCRIPTS.get(_tpl["id"], {}))
+    _tpl["default_config"]["instructions"]["script_source"] = _tpl["id"] if _tpl["id"] in CALL_SCRIPTS else ""
 
 
 def _complete(tpl: Dict[str, Any]) -> Dict[str, Any]:

@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import inspect
+import re
 import json
 import logging
 import os
@@ -11,6 +13,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Set
 from fastapi import WebSocket
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
+from app.runtime.conversation import compact_json
 from app.core.config import settings
 from app.models.call import Call
 from app.models.runtime_session import RuntimeSession
@@ -24,7 +27,7 @@ from app.runtime.call_limits import CallLimits, resolve_call_limits
 from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony import TelephonyProvider
 from app.runtime.telephony.endpointing import SpeechEndpointer, EndpointerConfig
-from app.runtime.telephony.speech_text import SentenceChunker, clean_for_speech, is_backchannel, pause_hint
+from app.runtime.telephony.speech_text import SentenceChunker, clean_for_speech, is_backchannel, is_presence_check, pause_hint
 from app.runtime.telephony import phrases
 from app.runtime.speech_style import VOICE_STYLE_INSTRUCTIONS, VOICE_STYLE_MARKER, apply_voice_style
 from app.schemas.agent_spec import ConversationSpec
@@ -45,6 +48,8 @@ PLAYBACK_LEAD_MS = 250
 EVENT_FLUSH_INTERVAL_S = 0.5
 # Speaking-rate estimate used to work out how much of a sentence the caller heard before cutting in
 CHARS_PER_SECOND = 15.0
+# Sarvam closes idle connections after ~30 s; a light request this often keeps them open for the next reply
+KEEP_WARM_INTERVAL_S = 10.0
 # Transcription starts after 250 ms of silence and is reused if the caller stays quiet until the
 # turn ends (VOICE_END_SILENCE_MS), which hides most of the speech-to-text time
 EARLY_TRANSCRIBE_MS = 250
@@ -62,6 +67,10 @@ END_CALL_TOOL = call_rules.END_CALL_TOOL
 STOCK_FALLBACK_RESPONSE = ConversationSpec.model_fields["fallback_response"].default
 # When the agent's voice provider fails mid-call (outage, out of credits), sentences are spoken with this one
 TTS_FALLBACK_PROVIDER = "sarvam"
+
+# The agent stops talking for the caller only once this much pitched sound (a voice) is heard: loud rumble,
+# breath or wind on the mic has almost none, so it no longer cuts the agent off
+BARGE_IN_PITCHED_MS = 120
 
 # During the greeting, short caller replies ("Hello?", "Haan", "Who is this?") don't cancel it
 GREETING_IGNORE_MAX_WORDS = 4
@@ -132,9 +141,12 @@ class TelephonyMediaSession:
     - Runtime events are persisted in the background, never on the audio path.
     """
 
+    # A phone call is the whole session; a reconnectable transport (the audio WebSocket) keeps it open
+    end_runtime_session_on_close = True
+
     def __init__(
         self,
-        websocket: WebSocket,
+        websocket: Optional[WebSocket],
         call_record: Call,
         stream_sid: str,
         db: Session,
@@ -176,7 +188,7 @@ class TelephonyMediaSession:
         self._pending_writes: List[asyncio.Task] = []
 
         # Stereo call recording (caller left, agent right), saved when the call ends
-        self.recorder = CallRecorder(start_time=time.monotonic())
+        self.recorder = CallRecorder(start_time=time.monotonic(), sample_rate=self._carrier_rate)
 
         # Call control: agent hang-up, silence handling, maximum duration
         self._tool_defs: List[Dict[str, Any]] = []
@@ -195,6 +207,15 @@ class TelephonyMediaSession:
         self._barge_ins = 0
         self._false_barge_ins = 0
 
+    @property
+    def _carrier_rate(self) -> int:
+        """Sample rate of the carrier's audio: 8kHz on phone lines, 16kHz on browser test calls."""
+        return getattr(self.telephony_provider, "carrier_sample_rate", 8000) or 8000
+
+    @property
+    def _carrier_bytes_per_second(self) -> float:
+        return self._carrier_rate * 2.0
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -202,7 +223,7 @@ class TelephonyMediaSession:
     async def initialize(self) -> None:
         """Marks the call active, attaches the runtime session and plays the greeting."""
         active_telephony_calls.add(self.call_record.id)
-        self.recorder = CallRecorder(start_time=time.monotonic())
+        self.recorder = CallRecorder(start_time=time.monotonic(), sample_rate=self._carrier_rate)
 
         self.call_record.status = "ACTIVE"
         self.call_record.answered_at = datetime.now(timezone.utc)
@@ -234,9 +255,48 @@ class TelephonyMediaSession:
             "destination": self.call_record.destination_number
         })
 
-        if self.context and self.context.agent_spec.conversation.greeting:
+        self._warm_connections()
+        keep_warm = asyncio.create_task(self._keep_warm_loop())
+        _background_tasks.add(keep_warm)
+        keep_warm.add_done_callback(_background_tasks.discard)
+        if self.context and self.context.agent_spec.conversation.greeting and self._should_greet():
             greeting = self.context.resolved_greeting or self.context.agent_spec.conversation.greeting
             self._start_turn(self._speak_text(greeting, is_greeting=True))
+
+    def _should_greet(self) -> bool:
+        return True
+
+    async def _keep_warm_loop(self) -> None:
+        try:
+            while not self.closed:
+                await asyncio.sleep(KEEP_WARM_INTERVAL_S)
+                if not self.closed:
+                    self._warm_connections()
+        except asyncio.CancelledError:
+            pass
+
+    def _warm_connections(self) -> None:
+        """Opens the speech-to-text, AI model and voice connections in the background, so a reply doesn't
+        wait for a (sometimes slow) connection to be set up."""
+        if not self.context or settings.ENVIRONMENT == "test":
+            return
+        spec = self.context.agent_spec
+        for kind in ("stt", "llm", "tts"):
+            try:
+                provider = getattr(default_registry, f"get_{kind}")(getattr(spec.providers, kind))
+            except Exception:
+                continue
+            warm = getattr(provider, "warm", None)
+            if not callable(warm):
+                continue
+            kwargs = (
+                {"voice_id": spec.voice.voice_id, "speed": spec.voice.speed, "language": spec.languages.primary}
+                if kind == "tts" else {}
+            )
+            job = warm(**kwargs) if asyncio.iscoroutinefunction(warm) else asyncio.to_thread(warm, **kwargs)
+            task = asyncio.create_task(job)
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
     async def close(self, reason: str = "normal") -> None:
         """Terminates the call: stops speaking, flushes events, ends the runtime session."""
@@ -278,7 +338,7 @@ class TelephonyMediaSession:
         if self._pending_writes:
             await asyncio.gather(*self._pending_writes, return_exceptions=True)
 
-        if self.runtime_session:
+        if self.runtime_session and self.end_runtime_session_on_close:
             try:
                 self.runtime.end_session(self.runtime_session.id)
             except Exception as e:
@@ -315,17 +375,19 @@ class TelephonyMediaSession:
             carrier_bytes = base64.b64decode(payload_b64)
         except Exception:
             return
+        await self.handle_carrier_audio(carrier_bytes)
 
+    async def handle_carrier_audio(self, carrier_bytes: bytes) -> None:
+        """Processes one frame of caller audio in the carrier's format (16-bit PCM at the carrier's rate)."""
         self.recorder.add_caller_audio(carrier_bytes)
         pcm16_bytes = self.telephony_provider.normalize_audio_inbound(carrier_bytes)
         if not pcm16_bytes:
             return
 
         for event in self.endpointer.process(pcm16_bytes):
-            if event.kind in ("speech_start", "utterance"):
-                self._mark_caller_activity()
+            # Silence handling pauses while the caller is talking (see _is_idle); only words reset it
             if event.kind == "speech_start":
-                if self._is_playing():
+                if self._is_playing() and self._caller_talking():
                     await self.handle_barge_in()
             elif event.kind == "speech_discarded":
                 # It was only noise: carry on with the reply
@@ -343,6 +405,13 @@ class TelephonyMediaSession:
                     self._cancel_early_transcript()
                 self._early_transcript = None
                 await self.execute_turn(event.audio, t_end=time.perf_counter(), early_transcript=early)
+        # Sound that started as possible noise becomes an interruption once it is clearly a voice
+        if self._is_playing() and self._caller_talking():
+            await self.handle_barge_in()
+
+    def _caller_talking(self) -> bool:
+        """The caller is speaking now: sustained sound that is pitched like a voice, not just loud."""
+        return self.endpointer.in_speech and self.endpointer.pitched_ms >= BARGE_IN_PITCHED_MS
 
     def _cancel_early_transcript(self) -> None:
         if self._early_transcript and not self._early_transcript.done():
@@ -351,8 +420,20 @@ class TelephonyMediaSession:
 
     async def _transcribe(self, audio: bytes):
         stt_provider = default_registry.get_stt(self.context.agent_spec.providers.stt)
+        language = self._stt_language()
         async with _speech_provider_slot():
+            if language and "language" in inspect.signature(stt_provider.process_audio_async).parameters:
+                return await stt_provider.process_audio_async(audio, language=language)
             return await stt_provider.process_audio_async(audio)
+
+    def _stt_language(self) -> Optional[str]:
+        """The agent's language when it speaks only one: auto-detect misreads short or quiet clips (Telugu
+        heard as English). Agents that switch languages keep auto-detect."""
+        languages = self.context.agent_spec.languages if self.context else None
+        if not languages:
+            return None
+        spoken = {code.split("-")[0].lower() for code in [languages.primary, *(languages.supported or [])] if code}
+        return languages.primary if len(spoken) == 1 else None
 
     async def execute_turn(
         self,
@@ -384,7 +465,6 @@ class TelephonyMediaSession:
             await self._handle_utterance_inner(audio, t_end, early_transcript)
         finally:
             self._processing_utterance = False
-            self._last_activity = time.monotonic()
 
     async def _handle_utterance_inner(self, audio: bytes, t_end: float, early_transcript: Optional[asyncio.Task] = None) -> None:
         transcript = None
@@ -400,10 +480,12 @@ class TelephonyMediaSession:
         stt_ms = round((time.perf_counter() - t_end) * 1000)
 
         if not user_text:
+            # Noise, a cough or line hiss: not the caller answering, so it doesn't reset silence handling
             logger.info("Caller utterance had no words; ignoring.")
             if self._paused:
                 self._resume()
             return
+        self._mark_caller_activity()
 
         if self._paused and is_backchannel(user_text):
             logger.info(f"Backchannel '{user_text}' while agent was speaking; resuming.")
@@ -435,6 +517,16 @@ class TelephonyMediaSession:
             logger.info(f"Caller said '{user_text}' while the agent was preparing a reply; keeping the reply.")
             return
 
+        if is_presence_check(user_text) and not self._is_playing():
+            # "Hello? Are you there?": reassure and repeat the open question, without paying for an LLM round
+            question = self._last_question()
+            reply = self._phrase("still_here") + (f" {question}" if question else "")
+            logger.info(f"Caller checked the line ('{user_text}'); answering without the LLM.")
+            await self._interrupt_current_turn()
+            self._add_user_text(user_text)
+            self._start_turn(self._speak_text(reply))
+            return
+
         # A new caller turn replaces whatever the agent was saying or preparing
         await self._interrupt_current_turn()
         self._add_user_text(user_text)
@@ -444,6 +536,20 @@ class TelephonyMediaSession:
             self._say_then_hang_up(self._farewell(), "end_call_phrase")
             return
         self._start_turn(self._respond_when_done(t_end, user_text, stt_ms))
+
+    async def handle_text_input(self, text: str) -> None:
+        """A typed caller turn (testing over the audio WebSocket): same handling as a transcribed utterance."""
+        text = (text or "").strip()
+        if self.closed or not text or not self.context or not self.runtime_session:
+            return
+        self._mark_caller_activity()
+        self._emit(RuntimeEventType.USER_TRANSCRIPT_FINAL, {"text": text, "typed": True})
+        await self._interrupt_current_turn()
+        self._add_user_text(text)
+        if self.limits.matches_end_call_phrase(text):
+            self._say_then_hang_up(self._farewell(), "end_call_phrase")
+            return
+        self._start_turn(self._respond(time.perf_counter()))
 
     async def _respond_when_done(self, t_end: float, user_text: str, stt_ms: Optional[int] = None) -> None:
         """
@@ -483,7 +589,7 @@ class TelephonyMediaSession:
         self._play_clock = self._pause_time
         self.recorder.discard_agent_after(self._pause_time)
         try:
-            await self.websocket.send_text(self.telephony_provider.build_clear_message(self.stream_sid))
+            await self._clear_carrier_playback()
         except Exception as e:
             logger.warning(f"Error sending clear message to telephony provider: {e}")
         self._emit(RuntimeEventType.ASSISTANT_INTERRUPTED, {"reason": "telephony_barge_in"})
@@ -643,7 +749,9 @@ class TelephonyMediaSession:
                         await put(sentence)
                         queued_chars += len(sentence)
                     if not queued_chars:
-                        farewell = self._farewell()
+                        # Ended without a word (often "not interested"): a neutral goodbye, not the agent's
+                        # farewell, which may promise a follow-up the caller just turned down
+                        farewell = self._phrase("default_farewell")
                         turn.full_text_parts.append(farewell)
                         await put(farewell)
                     break
@@ -679,7 +787,7 @@ class TelephonyMediaSession:
                     })
                     self.context.conversation.add_tool_result(
                         tool_call_id=tc.id,
-                        content=json.dumps(result.data if result.success else {"error": result.error}),
+                        content=compact_json(result.data if result.success else {"error": result.error}),
                         tool_name=tc.tool_name
                     )
                 # Text spoken before the tool call is already in the conversation
@@ -711,13 +819,25 @@ class TelephonyMediaSession:
             await asyncio.sleep(settings.VOICE_SLOW_REPLY_ACK_MS / 1000.0)
         except asyncio.CancelledError:
             return
-        if turn.queued_reply or turn.sentences or self.endpointer.in_speech or self._paused:
+        if turn.queued_reply or turn.sentences or self._caller_talking() or self._paused:
             return
         await sentences.put(FillerText(self._phrase("slow_ack"), "slow_ack"))
 
     def _language(self) -> str:
         spec = self.context.agent_spec if self.context else None
         return (spec.languages.primary if spec and spec.languages else None) or "en"
+
+    def _last_question(self) -> str:
+        """The question the agent last asked, if its last reply ended on one (to repeat after "Hello?")."""
+        if not self.context:
+            return ""
+        for m in reversed(self.context.conversation.messages):
+            if m.role == ConversationRole.USER:
+                return ""  # the caller has spoken since: nothing open to repeat
+            if m.role == ConversationRole.ASSISTANT and (m.content or "").strip():
+                last = re.split(r"(?<=[.!?।])\s+", m.content.strip())[-1]
+                return last if last.endswith("?") else ""
+        return ""
 
     def _phrase(self, kind: str) -> str:
         """A canned line in the agent's language, never the same variant twice in a row on this call."""
@@ -802,7 +922,7 @@ class TelephonyMediaSession:
                     if chunk:
                         sentence.audio.extend(self.telephony_provider.normalize_audio_outbound(chunk))
                         sentence.updated.set()
-            self.context.usage_tracker.record_tts(len(sentence.audio) / 16000.0, characters=len(sentence.text))
+            self.context.usage_tracker.record_tts(len(sentence.audio) / self._carrier_bytes_per_second, characters=len(sentence.text))
             tts_cache.put(key, bytes(sentence.audio))
         except asyncio.CancelledError:
             raise
@@ -847,7 +967,7 @@ class TelephonyMediaSession:
                 continue
 
             # Don't start talking over a caller who is mid-sentence
-            if pos == 0 and self.endpointer.in_speech:
+            if pos == 0 and self._caller_talking():
                 await asyncio.sleep(0.05)
                 continue
 
@@ -871,10 +991,11 @@ class TelephonyMediaSession:
 
     async def _send_frame(self, turn: _AssistantTurn, sentence: _SpokenSentence, frame: bytes) -> None:
         now = time.monotonic()
-        frame_ms = len(frame) / 16.0  # carrier audio: 8kHz 16-bit = 16 bytes per ms
+        frame_ms = len(frame) / self._carrier_bytes_per_second * 1000.0
         start = max(now, self._play_clock)
         if sentence.play_start is None:
             sentence.play_start = start
+            self._on_sentence_playing(turn, sentence)
         if sentence.filler_kind and not sentence.counted:
             sentence.counted = True
             self._fillers_played[sentence.filler_kind] = self._fillers_played.get(sentence.filler_kind, 0) + 1
@@ -895,7 +1016,7 @@ class TelephonyMediaSession:
                 })
         self.assistant_speaking = True
 
-        await self.websocket.send_text(self.telephony_provider.build_media_message(self.stream_sid, frame))
+        await self._send_carrier_audio(frame)
         self.recorder.add_agent_audio(frame, start)
 
         lead = self._play_clock - time.monotonic()
@@ -941,9 +1062,23 @@ class TelephonyMediaSession:
             await asyncio.sleep(0.1)
         logger.info(f"Hanging up call {self.call_record.id} ({self._end_reason}).")
         try:
-            await self.websocket.close()
+            await self._disconnect_carrier()
         except Exception:
             pass
+
+    def _on_sentence_playing(self, turn: _AssistantTurn, sentence: _SpokenSentence) -> None:
+        """A sentence (or filler) started playing to the caller. Transports that show live text override this."""
+
+    # Carrier transport: the media-stream WebSocket. Browser test calls override these.
+
+    async def _send_carrier_audio(self, frame: bytes) -> None:
+        await self.websocket.send_text(self.telephony_provider.build_media_message(self.stream_sid, frame))
+
+    async def _clear_carrier_playback(self) -> None:
+        await self.websocket.send_text(self.telephony_provider.build_clear_message(self.stream_sid))
+
+    async def _disconnect_carrier(self) -> None:
+        await self.websocket.close()
 
     def _say_then_hang_up(self, text: str, reason: str) -> None:
         self._end_call_requested = True
@@ -1034,7 +1169,7 @@ class TelephonyMediaSession:
                 heard.append(sentence.text)
                 continue
             # Partially heard: estimate how far through the sentence playback got
-            total_s = (len(sentence.audio) / 16000.0) if sentence.done and sentence.audio else len(sentence.text) / CHARS_PER_SECOND
+            total_s = (len(sentence.audio) / self._carrier_bytes_per_second) if sentence.done and sentence.audio else len(sentence.text) / CHARS_PER_SECOND
             fraction = min(1.0, max(0.0, (cutoff - sentence.play_start) / max(total_s, 0.1)))
             cut = int(len(sentence.text) * fraction)
             partial = sentence.text[:cut].rsplit(" ", 1)[0] if " " in sentence.text[:cut] else ""

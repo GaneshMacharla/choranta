@@ -57,6 +57,8 @@ def setup_test_db():
     auth_service = AuthService(db)
     auth_service.seed_initial_admin()
     seed_catalogs(db)
+    from app.services.call_scripts import seed_standard_scripts
+    seed_standard_scripts(db)
     
     # Seed OPERATOR for role tests
     operator = db.query(User).filter(User.email == "operator@choranta.internal").first()

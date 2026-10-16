@@ -7,6 +7,7 @@ import { RoiCalculatorSection } from '../components/landing/RoiCalculatorSection
 import { AudioShowcaseSection } from '../components/landing/AudioShowcaseSection';
 import { SecurityIntegrationsSection } from '../components/landing/SecurityIntegrationsSection';
 import { FaqSection } from '../components/landing/FaqSection';
+import { PricingSection } from '../components/landing/PricingSection';
 import { Footer } from '../components/landing/Footer';
 import { DemoModal } from '../components/landing/DemoModal';
 
@@ -41,6 +42,9 @@ export const LandingPage: React.FC = () => {
 
         {/* Interactive Cost & ROI Calculator */}
         <RoiCalculatorSection onOpenDemo={() => handleOpenDemo('roi')} />
+
+        {/* Pay-per-minute credit packs */}
+        <PricingSection onOpenDemo={() => handleOpenDemo('sales')} />
 
         {/* Real Audio Showcase & Speech Nuances */}
         <AudioShowcaseSection onOpenDemo={handleOpenDemo} />

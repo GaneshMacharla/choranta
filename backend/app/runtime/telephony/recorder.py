@@ -3,8 +3,7 @@ import io
 import wave
 from typing import Optional
 
-SAMPLE_RATE = 8000          # carrier audio: 8 kHz, 16-bit mono
-BYTES_PER_SECOND = SAMPLE_RATE * 2
+SAMPLE_RATE = 8000          # carrier audio: 8 kHz, 16-bit mono (phone lines); browser test calls use 16 kHz
 
 
 class CallRecorder:
@@ -16,8 +15,9 @@ class CallRecorder:
     discarded when the caller interrupted is cut, so the recording matches what was heard.
     """
 
-    def __init__(self, start_time: float):
+    def __init__(self, start_time: float, sample_rate: int = SAMPLE_RATE):
         self.start_time = start_time
+        self.sample_rate = sample_rate
         self._caller = bytearray()
         self._agent = bytearray()
 
@@ -43,7 +43,7 @@ class CallRecorder:
 
     @property
     def duration_seconds(self) -> float:
-        return max(len(self._caller), len(self._agent)) / BYTES_PER_SECOND
+        return max(len(self._caller), len(self._agent)) / (self.sample_rate * 2)
 
     def to_wav(self) -> Optional[bytes]:
         length = max(len(self._caller), len(self._agent))
@@ -56,10 +56,10 @@ class CallRecorder:
         with wave.open(buffer, "wb") as wav:
             wav.setnchannels(2)
             wav.setsampwidth(2)
-            wav.setframerate(SAMPLE_RATE)
+            wav.setframerate(self.sample_rate)
             wav.writeframes(stereo)
         return buffer.getvalue()
 
     def _offset(self, when: float) -> int:
-        offset = int(max(0.0, when - self.start_time) * SAMPLE_RATE) * 2
+        offset = int(max(0.0, when - self.start_time) * self.sample_rate) * 2
         return offset

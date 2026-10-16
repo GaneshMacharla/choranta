@@ -148,7 +148,35 @@ export interface InitiateOutboundCallInput {
   custom_field?: string;
 }
 
+/** A free browser test call: the browser's WebRTC offer in, the server's answer out. */
+export interface StartBrowserCallInput {
+  agent_id: string;
+  agent_version_id: string;
+  sdp: string;
+  type: string;
+  user_name?: string;
+  company_name?: string;
+}
+
+export interface BrowserCallAnswer {
+  call_id: string;
+  runtime_session_id: string;
+  sdp: string;
+  type: RTCSdpType;
+}
+
 export const telephonyService = {
+  async startBrowserCall(data: StartBrowserCallInput): Promise<BrowserCallAnswer> {
+    return request<BrowserCallAnswer>('/telephony/browser-calls', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async hangUpBrowserCall(callId: string): Promise<void> {
+    await request(`/telephony/browser-calls/${callId}/hangup`, { method: 'POST' });
+  },
+
   async getOverview(): Promise<TelephonyOverview> {
     return request<TelephonyOverview>('/telephony/overview');
   },

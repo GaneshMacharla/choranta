@@ -116,6 +116,35 @@ async def test_silent_caller_is_reprompted_then_hung_up(db: Session, telephony_s
 
 
 @pytest.mark.asyncio
+async def test_noise_after_the_reprompt_does_not_keep_the_call_alive(db: Session, telephony_setup, fakes, monkeypatch):
+    """Line noise (sound with no words) mustn't re-arm the reprompt: one "still there?", then goodbye."""
+    monkeypatch.setattr(settings, "CALL_SILENCE_REPROMPT_S", 0.3, raising=False)
+    monkeypatch.setattr(settings, "CALL_SILENCE_HANGUP_S", 0.6, raising=False)
+    s = _session(db, telephony_setup)
+    s.websocket = ClosableWebSocket()
+    s._last_activity = 0.0
+    watchdog = asyncio.create_task(s._watchdog())
+    try:
+        await _until(lambda: s._reprompted, timeout=10)
+        await _until(lambda: s._turn_task is not None and s._turn_task.done(), timeout=10)
+        # A noise burst on the line: the endpointer briefly thinks it's speech, then drops it
+        from app.runtime.telephony.endpointing import EndpointerEvent
+        bursts = iter([[EndpointerEvent(kind="speech_start")], [EndpointerEvent(kind="speech_discarded")]])
+        monkeypatch.setattr(s.endpointer, "process", lambda pcm: next(bursts, []))
+        await s.handle_carrier_audio(b"\x01\x00" * 160)
+        await s.handle_carrier_audio(b"\x01\x00" * 160)
+        await s.execute_turn(b"\x01\x00" * 320)  # noise that reached transcription: no words
+        await _until(lambda: s.websocket.closed, timeout=10)
+        from app.runtime.telephony import phrases
+        reprompts = [t for t in fakes["tts"].spoken if t in phrases.variants("reprompt", s._language())]
+        assert len(reprompts) == 1
+        assert s._end_reason == "caller_silent"
+    finally:
+        watchdog.cancel()
+        await _shutdown(s)
+
+
+@pytest.mark.asyncio
 async def test_phone_style_instructions_are_added_once(db: Session, telephony_setup, fakes):
     s = _session(db, telephony_setup)
     try:

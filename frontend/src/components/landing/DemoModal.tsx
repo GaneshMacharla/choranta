@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, CheckCircle, PhoneCall, Sparkles, Send, ShieldCheck, ArrowRight } from 'lucide-react';
+import { X, CheckCircle, PhoneCall, Sparkles, Send, ShieldCheck, ArrowRight, ChevronDown } from 'lucide-react';
 
 interface DemoModalProps {
   isOpen: boolean;
@@ -128,25 +128,29 @@ export const DemoModal: React.FC<DemoModalProps> = ({ isOpen, onClose, initialWo
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
                     Primary Workflow
                   </label>
+                  <div className="relative">
                   <select
                     value={formData.workflow}
                     onChange={(e) => setFormData({ ...formData, workflow: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#051116] border border-[#143c49] text-sm text-slate-100 focus:outline-none focus:border-[#00df8f] transition-colors"
+                    className="w-full appearance-none truncate pl-3.5 pr-10 py-2.5 rounded-xl bg-[#051116] border border-[#143c49] text-sm text-slate-100 [color-scheme:dark] focus:outline-none focus:border-[#00df8f] transition-colors cursor-pointer [&>option]:bg-[#051116] [&>option]:text-slate-100"
                   >
                     <option value="sales">Lead Qualification & Sales</option>
                     <option value="support">Customer Support & FAQs</option>
                     <option value="appointments">Appointment Scheduling</option>
                     <option value="retail">COD Verification & Delivery</option>
                   </select>
+                  <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
                     Test Language
                   </label>
+                  <div className="relative">
                   <select
                     value={formData.language}
                     onChange={(e) => setFormData({ ...formData, language: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#051116] border border-[#143c49] text-sm text-slate-100 focus:outline-none focus:border-[#00df8f] transition-colors"
+                    className="w-full appearance-none truncate pl-3.5 pr-10 py-2.5 rounded-xl bg-[#051116] border border-[#143c49] text-sm text-slate-100 [color-scheme:dark] focus:outline-none focus:border-[#00df8f] transition-colors cursor-pointer [&>option]:bg-[#051116] [&>option]:text-slate-100"
                   >
                     <option value="Hinglish">Natural Hinglish (Recommended)</option>
                     <option value="Hindi">Pure Hindi</option>
@@ -154,6 +158,8 @@ export const DemoModal: React.FC<DemoModalProps> = ({ isOpen, onClose, initialWo
                     <option value="Telugu">Telugu</option>
                     <option value="Tamil">Tamil</option>
                   </select>
+                  <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  </div>
                 </div>
               </div>
 

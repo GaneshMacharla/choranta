@@ -26,6 +26,8 @@ class TelephonyProvider(BaseProvider):
 
     # Size in bytes of each outbound media frame sent to the carrier (0 = send chunks as produced)
     outbound_frame_bytes: int = 0
+    # Sample rate of the carrier's 16-bit mono PCM audio, both directions (phone lines are 8kHz)
+    carrier_sample_rate: int = 8000
 
     @abstractmethod
     def validate_webhook(self, request_url: str, params: Dict[str, Any], signature: str) -> bool:

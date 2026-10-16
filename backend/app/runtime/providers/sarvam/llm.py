@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.runtime.exceptions import ProviderUnavailable
 from app.runtime.providers.base import LLMResult, ToolCallRequest
 from app.runtime.providers.llm import LLMProvider
+from app.runtime.providers.sarvam.common import CONNECT_RETRIES, CONNECT_TIMEOUT_S, KEEPALIVE_S
 
 logger = logging.getLogger("choranta.runtime.providers.sarvam.llm")
 
@@ -47,8 +48,19 @@ class SarvamLLMProvider(LLMProvider):
             self._client = httpx.Client(
                 base_url=settings.SARVAM_BASE_URL.rstrip("/"),
                 headers={"Authorization": f"Bearer {key}"},
-                timeout=httpx.Timeout(settings.SARVAM_TIMEOUT_S, connect=5.0),
+                timeout=httpx.Timeout(settings.SARVAM_TIMEOUT_S, connect=CONNECT_TIMEOUT_S),
+                limits=httpx.Limits(keepalive_expiry=KEEPALIVE_S),
+                transport=httpx.HTTPTransport(retries=CONNECT_RETRIES),  # retries failed connects only
             )
+
+    def warm(self) -> None:
+        """Opens the connection ahead of the first reply (any response will do)."""
+        try:
+            if self._client is None:
+                self.initialize({})
+            self._client.head("/")
+        except Exception as e:
+            logger.debug(f"Sarvam LLM warm-up failed: {type(e).__name__}: {e}")
 
     def close(self) -> None:
         if self._client is not None:

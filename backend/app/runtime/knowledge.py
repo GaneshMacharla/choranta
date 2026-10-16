@@ -26,8 +26,9 @@ from app.runtime.today import DEFAULT_TIMEZONE, client_today, today_line
 
 KNOWLEDGE_MARKER = "Business knowledge"
 RELEVANT_MARKER = "Relevant knowledge for the caller's latest message"
-MAX_INLINE_CHARS = 8000       # a knowledge base this small is given whole
-RETRIEVED_CHARS = 3000        # passages added per reply when the knowledge base is larger
+MAX_INLINE_CHARS = 2500       # a knowledge base this small is given whole
+RETRIEVED_CHARS = 2000        # passages added per reply when the knowledge base is larger
+SAFE_WHOLE_CHARS = 8000       # up to this size, given whole whenever retrieval can't be trusted (it always used to be)
 CHUNK_CHARS = 700             # passage size for retrieval
 
 GROUNDING_RULE = (
@@ -45,6 +46,8 @@ _STOPWORDS = {
     "no", "hai", "kya", "ka", "ki", "ke", "ko", "se", "aur", "ante", "inka", "naaku", "meeru", "cheppandi",
 }
 _WORD = re.compile(r"\w+", re.UNICODE)
+# Any Indian-language script (Devanagari through Malayalam)
+_INDIC = re.compile(r"[ऀ-ൿ]")
 
 
 def _tokens(text: str) -> List[str]:
@@ -89,18 +92,29 @@ class KnowledgeIndex:
 
     def __init__(self, chunks: List[Tuple[str, str]]):
         self.chunks = chunks
+        self._total_chars = sum(len(text) for _, text in chunks)
         self._tokens = [Counter(_tokens(f"{title} {text}")) for title, text in chunks]
         df = Counter(t for counts in self._tokens for t in counts)
         n = max(1, len(chunks))
         self._idf = {t: math.log(1 + (n - d + 0.5) / (d + 0.5)) for t, d in df.items()}
 
     def search(self, query: str, budget: int = RETRIEVED_CHARS) -> List[Tuple[str, str]]:
+        # Knowledge small enough to have always been given whole is still given whole whenever retrieval can't be
+        # trusted, so trimming it never costs the agent a fact:
+        # - the caller speaks Telugu/Hindi script, which can't be matched reliably against English knowledge
+        #   (a stray "BHK" would pick the wrong passages)
+        # - nothing matched what they said
+        small = self._total_chars <= SAFE_WHOLE_CHARS
+        if small and _INDIC.search(query or ""):
+            return list(self.chunks)
         words = set(_tokens(query))
         scored = []
         for i, counts in enumerate(self._tokens):
             score = sum(self._idf.get(w, 0.0) * min(counts[w], 3) for w in words if w in counts)
             if score > 0:
                 scored.append((score, i))
+        if not scored and small:
+            return list(self.chunks)
         order = [i for _, i in sorted(scored, key=lambda s: (-s[0], s[1]))] or list(range(len(self.chunks)))
         picked, used = [], 0
         for i in order:
@@ -162,7 +176,9 @@ def apply_knowledge(db: Session, context: Any) -> None:
         today = datetime.now(ZoneInfo(DEFAULT_TIMEZONE)).date()
         block, index = f"\n\n{KNOWLEDGE_MARKER}: unavailable right now. {GROUNDING_RULE}", None
     context.knowledge_index = index
-    conversation.system_instruction = (conversation.system_instruction or "") + today_line(today) + block
+    conversation.system_instruction = (conversation.system_instruction or "") + block
+    # The date changes daily, so it goes with the per-call details after the cacheable fixed instructions
+    context.call_details = getattr(context, "call_details", "") + today_line(today)
     messages = getattr(conversation, "messages", None)
     if messages and str(getattr(messages[0].role, "value", messages[0].role)).lower() == "system":
         messages[0].content = conversation.system_instruction.strip()

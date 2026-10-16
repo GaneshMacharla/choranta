@@ -50,6 +50,9 @@ const directionFor = (tasks: string[]): CallDirection => {
 const BLANK = '__blank__';
 
 /** A template's ready-made setup made specific to this employee (no AI involved). */
+// Default text-to-speech voice for new employees: Cartesia's Siya (Indian, multilingual)
+const DEFAULT_VOICE = { id: '4459a9a5-69d6-4680-b970-e13dc51845b6', name: 'Siya', provider: 'cartesia' };
+
 const configFromTemplate = (tpl: AgentTemplate, employeeName: string, companyName: string): AgentConfigurationData => {
   const config = JSON.parse(JSON.stringify(tpl.default_config || {})) as AgentConfigurationData;
   const company = companyName || config.business_context?.business_name || '';
@@ -195,23 +198,10 @@ export const AgentCreateWizardPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templates, businessType, templateTouched]);
 
-  // Voice: the name's own Sarvam voice if there is one, else Sarvam's top pick for the language
+  // Voice: Cartesia's Siya (Indian, speaks every Indian language) unless the admin or the request picks another
   useEffect(() => {
-    if (voiceTouched) return;
-    let cancelled = false;
-    catalogsService
-      .rankedSarvamVoices(primaryLanguage)
-      .then((ranked) => {
-        if (cancelled || !ranked.length) return;
-        const byName = ranked.find((v) => v.id === name.trim().toLowerCase());
-        const pick = byName || ranked[0];
-        setVoice({ id: pick.id, name: pick.name, provider: 'sarvam' });
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [primaryLanguage, name, voiceTouched]);
+    if (!voiceTouched) setVoice(DEFAULT_VOICE);
+  }, [voiceTouched]);
 
   const languages = [primaryLanguage, ...otherLanguages.filter((l) => l !== primaryLanguage)];
   const missing = !clientId

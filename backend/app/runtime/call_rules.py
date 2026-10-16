@@ -33,14 +33,12 @@ def rules_text(spec: Any) -> str:
     business = business_name(spec)
     return (
         "\n\n" + RULES_MARKER + "\n"
-        f"- Only talk about {business} and how it can help the caller. Greetings, small pleasantries and questions "
-        "about who you are are fine.\n"
-        f"- If the caller talks about anything unrelated to {business} (other topics, jokes, requests you can't serve, "
-        "abuse, or meaningless input after you have asked once to repeat), do not answer it. Say one short sentence, "
-        f"for example \"Sorry, I can only help with {business} enquiries. Goodbye!\", and immediately call the "
-        f"{END_CALL_TOOL_NAME} tool.\n"
-        f"- When the conversation is complete or the caller wants to stop, say a brief goodbye and call the "
-        f"{END_CALL_TOOL_NAME} tool. After saying goodbye, never keep the conversation going."
+        f"- Only talk about {business} and how it can help. Small talk and questions about you: a few friendly words, "
+        "then steer back.\n"
+        f"- Unrelated requests: don't answer; say kindly you can only help with {business} enquiries, steer back once.\n"
+        "- Still off topic after that, abusive, or no sense after one request to repeat: one polite goodbye, then call "
+        f"{END_CALL_TOOL_NAME}.\n"
+        f"- When done or the caller wants to stop: a brief goodbye, then call {END_CALL_TOOL_NAME}; never continue after it."
     )
 
 

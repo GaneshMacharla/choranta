@@ -236,7 +236,7 @@ export const CallsPage: React.FC = () => {
                       {call.caller_number}
                     </td>
                     <td className="px-5 py-3.5 font-mono text-xs text-slate-400">
-                      {call.destination_number}
+                      {call.destination_number === 'browser' ? 'Browser (WebRTC)' : call.destination_number}
                     </td>
                     <td className="px-5 py-3.5">
                       <div>
@@ -253,17 +253,32 @@ export const CallsPage: React.FC = () => {
                         </div>
                       </div>
                     </td>
-                    <td className="px-5 py-3.5">{getStatusBadge(call.status)}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {getStatusBadge(call.status)}
+                        {call.metadata?.is_test && (
+                          <Badge variant="purple" size="sm">
+                            Test{call.provider === 'browser' ? ' · Browser' : ''}
+                          </Badge>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-5 py-3.5 text-xs text-slate-300 font-mono">
                       {formatDuration(call.duration_seconds)}
                     </td>
                     <td className="px-5 py-3.5 text-xs font-mono whitespace-nowrap">
+                      {call.metadata?.is_test ? (
+                        <span className="text-slate-500">Not billed</span>
+                      ) : (
+                        <>
                       <span className="text-amber-300">{formatInrPerMinute(call.cost)}</span>
                       {call.cost && (
                         <span className="block text-[10px] text-slate-500">₹{call.cost.charge_total.toFixed(2)} total</span>
                       )}
                       {call.cost?.per_minute != null && (
                         <span className="block text-[10px] text-slate-600">cost ₹{call.cost.per_minute.toFixed(2)}/min</span>
+                      )}
+                        </>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-right">
@@ -304,7 +319,12 @@ export const CallsPage: React.FC = () => {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#0d101a] p-3 rounded border border-[#1b2030] text-xs">
               <div>
                 <span className="text-slate-500 block">Status</span>
-                <span className="font-medium text-slate-200">{callDetail.status}</span>
+                <span className="font-medium text-slate-200">
+                  {callDetail.status}
+                  {callDetail.metadata?.is_test && (
+                    <span className="ml-1.5 text-purple-300">· Test{callDetail.provider === 'browser' ? ' (browser)' : ''}</span>
+                  )}
+                </span>
               </div>
               <div>
                 <span className="text-slate-500 block">Duration</span>

@@ -8,7 +8,7 @@ import {
   CheckCircle,
   AlertTriangle,
   Activity,
-  RefreshCw,
+  Loader2,
   Mic,
   MicOff,
   Radio,
@@ -19,17 +19,18 @@ import {
   Layers,
   Sliders,
   History,
-  Cpu,
   PhoneCall,
   PhoneOff,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { agentsService } from '../../services/agents';
 import { runtimeService } from '../../services/runtime';
+import { catalogsService } from '../../services/catalogs';
 import { request } from '../../services/api';
 import { testScenariosService, TestRun, TestScenario } from '../../services/testScenarios';
 import { VoiceScenarioSuite } from './VoiceScenarioSuite';
 import { PhoneCallTester } from './PhoneCallTester';
+import { BrowserCallTester } from './BrowserCallTester';
 import {
   Agent,
   AgentVersion,
@@ -41,7 +42,7 @@ import {
 import { Card } from '../common/Card';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
-import { StatusBadge, Badge } from '../common/Badge';
+import { StatusBadge } from '../common/Badge';
 import { LoadingState } from '../common/LoadingState';
 import { ErrorState } from '../common/ErrorState';
 
@@ -94,13 +95,18 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
 
   // Agents & Versions catalog
   const [agents, setAgents] = useState<Agent[]>([]);
+  // Voice id -> name for both providers, so the chosen voice shows by name
+  const [voiceNames, setVoiceNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    Promise.all([catalogsService.listSarvamVoices().catch(() => []), catalogsService.listVoices().catch(() => [])])
+      .then(([sarvam, cartesia]) => setVoiceNames(Object.fromEntries([...sarvam, ...cartesia].map((v) => [v.id, v.name]))));
+  }, []);
   const [selectedAgentId, setSelectedAgentId] = useState<string>(initialAgentId);
   const [versions, setVersions] = useState<AgentVersion[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string>(initialVersionId);
 
   // Readiness State
   const [readiness, setReadiness] = useState<ReadinessCheckResult | null>(null);
-  const [isCheckingReadiness, setIsCheckingReadiness] = useState(false);
 
   // Active Session State
   const [activeSession, setActiveSession] = useState<RuntimeSession | null>(null);
@@ -108,8 +114,8 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [isEndingSession, setIsEndingSession] = useState(false);
 
-  // Mode Tab: 'stream' | 'simulate' | 'webrtc'
-  const [activeTab, setActiveTab] = useState<'stream' | 'simulate' | 'webrtc'>('stream');
+  // Diagnostics tab: 'stream' | 'simulate'
+  const [activeTab, setActiveTab] = useState<'stream' | 'simulate'>('stream');
   const [testMode, setTestMode] = useState<'voice' | 'phone' | 'chat' | 'scenarios'>('voice');
   const [showTestSetup, setShowTestSetup] = useState(false);
   const [showTestHistory, setShowTestHistory] = useState(false);
@@ -122,13 +128,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
   const [scenarioTurn, setScenarioTurn] = useState('I want to check appointment availability');
   const [scenarioRun, setScenarioRun] = useState<TestRun | null>(null);
   const [isScenarioActionRunning, setIsScenarioActionRunning] = useState(false);
-
-  // Realtime WebRTC State
-  const [webrtcStatus, setWebrtcStatus] = useState<'DISCONNECTED' | 'CONNECTING' | 'CONNECTED'>('DISCONNECTED');
-  const [webrtcError, setWebrtcError] = useState<string | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const dataChannelRef = useRef<RTCDataChannel | null>(null);
-  const webrtcAudioElRef = useRef<HTMLAudioElement | null>(null);
 
   // Turn Simulator State (HTTP)
   const [userInput, setUserInput] = useState('');
@@ -172,6 +171,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const silenceTimerRef = useRef<any>(null);
   const hasSpokenRef = useRef(false);
+  const liveAgentMsgIdRef = useRef<string | null>(null);
 
   // Page loading & errors
   const [isLoading, setIsLoading] = useState(true);
@@ -180,8 +180,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
   // Computed Call In Progress State
   const isCallActive = Boolean(
     (activeSession && activeSession.status === 'ACTIVE') ||
-    (chatMessages.length > 0 && chatMessages[chatMessages.length - 1]?.text !== 'Call ended.') ||
-    webrtcStatus === 'CONNECTED'
+    (chatMessages.length > 0 && chatMessages[chatMessages.length - 1]?.text !== 'Call ended.')
   );
 
   useEffect(() => {
@@ -250,7 +249,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
         } else {
           setSelectedVersionId('');
         }
-        setReadiness(null);
       } catch (err: any) {
         console.error('Error loading versions:', err);
       }
@@ -258,8 +256,9 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
     loadVersions();
   }, [selectedAgentId]);
 
-  // 3. Automatically check readiness when selectedVersionId changes
+  // 3. Check readiness whenever the selected version changes; a published version is frozen, so one check holds
   useEffect(() => {
+    setReadiness(null);
     if (selectedAgentId && selectedVersionId) {
       handleCheckReadiness();
     }
@@ -274,14 +273,11 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
 
   const handleCheckReadiness = async () => {
     if (!selectedAgentId || !selectedVersionId) return;
-    setIsCheckingReadiness(true);
     try {
       const res = await runtimeService.checkReadiness(selectedAgentId, selectedVersionId);
       setReadiness(res);
     } catch (err: any) {
       alert(`Readiness check error: ${err.message}`);
-    } finally {
-      setIsCheckingReadiness(false);
     }
   };
 
@@ -334,7 +330,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
   const handleAgentHungUp = (endRecord: boolean) => {
     const sessionId = activeSession?.id;
     disconnectWebSocket();
-    disconnectWebRTC();
     setIsAssistantSpeaking(false);
     // Text chat sessions are ended by the backend; voice sessions are ended here
     if (endRecord && sessionId) runtimeService.endSession(sessionId).catch(() => {});
@@ -349,7 +344,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
     if (!activeSession) return;
     const sessionIdToEnd = activeSession.id;
     disconnectWebSocket();
-    disconnectWebRTC();
     setIsEndingSession(true);
     try {
       if (activeSession.status === 'ACTIVE') {
@@ -533,33 +527,49 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
             } else {
               setPartialTranscript(msg.text);
             }
+          } else if (msg.type === 'assistant_text_delta') {
+            // A sentence of the reply started playing: grow the agent's live bubble
+            if (msg.filler) return;
+            const liveId = liveAgentMsgIdRef.current;
+            if (liveId) {
+              setLiveChat((prev) =>
+                prev.map((m) => (m.id === liveId ? { ...m, text: `${m.text} ${msg.text}`.trim() } : m))
+              );
+            } else {
+              const id = Math.random().toString(36).substring(7);
+              liveAgentMsgIdRef.current = id;
+              setLiveChat((prev) => [
+                ...prev,
+                { id, sender: 'assistant', text: msg.text, time: new Date().toLocaleTimeString() },
+              ]);
+            }
           } else if (msg.type === 'assistant_text') {
-            setLiveChat((prev) => [
-              ...prev,
-              {
-                id: Math.random().toString(36).substring(7),
-                sender: 'assistant',
-                text: msg.text,
-                time: new Date().toLocaleTimeString(),
-              },
-            ]);
+            // The turn ended: settle the bubble on what the caller actually heard
+            const liveId = liveAgentMsgIdRef.current;
+            liveAgentMsgIdRef.current = null;
+            const settled = { text: msg.text, interrupted: !!msg.interrupted };
+            if (liveId) {
+              setLiveChat((prev) => prev.map((m) => (m.id === liveId ? { ...m, ...settled } : m)));
+            } else if (msg.text) {
+              setLiveChat((prev) => [
+                ...prev,
+                {
+                  id: Math.random().toString(36).substring(7),
+                  sender: 'assistant',
+                  time: new Date().toLocaleTimeString(),
+                  ...settled,
+                },
+              ]);
+            }
           } else if (msg.type === 'latency_metrics') {
             setLatencyMetrics(msg.metrics);
           } else if (msg.type === 'interrupted') {
-            // Barge in received: clear audio context
+            // The agent stopped talking: drop audio that hasn't played yet
             if (playbackCtxRef.current) {
               playbackCtxRef.current.close().catch(() => {});
               playbackCtxRef.current = null;
             }
             setIsAssistantSpeaking(false);
-            setLiveChat((prev) => {
-              if (prev.length === 0) return prev;
-              const last = prev[prev.length - 1];
-              if (last.sender === 'assistant') {
-                return [...prev.slice(0, -1), { ...last, interrupted: true }];
-              }
-              return prev;
-            });
           } else if (msg.type === 'call_ended') {
             handleAgentHungUp(true);
           } else if (msg.type === 'turn_complete') {
@@ -657,26 +667,8 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
         const inputData = e.inputBuffer.getChannelData(0);
 
-        let sum = 0;
-        for (let i = 0; i < inputData.length; i++) {
-          sum += inputData[i] * inputData[i];
-        }
-        const rms = Math.sqrt(sum / inputData.length);
-
-        // VAD Speech Activity Detection
-        if (rms > 0.02) {
-          hasSpokenRef.current = true;
-          if (silenceTimerRef.current) {
-            clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = null;
-          }
-        } else if (hasSpokenRef.current && !silenceTimerRef.current) {
-          // User paused speaking: auto-send turn after 1 second
-          silenceTimerRef.current = setTimeout(() => {
-            stopMicrophone();
-          }, 1000);
-        }
-
+        // The mic streams continuously, like a phone line: the server detects when the caller
+        // has finished speaking and when they talk over the agent.
         // Downsample to exact 16kHz PCM16 for Cartesia STT
         const pcm16 = downsampleTo16kHz(inputData, audioCtx.sampleRate);
         wsRef.current.send(pcm16.buffer as ArrayBuffer);
@@ -734,200 +726,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
     }
     setIsAssistantSpeaking(false);
   };
-
-  // -------------------------------------------------------------
-  // REALTIME WEBRTC AUDIO STREAMING (OPUS / UDP)
-  // -------------------------------------------------------------
-  const connectWebRTC = async () => {
-    if (!activeSession || !token) return;
-    setWebrtcError(null);
-    setWebrtcStatus('CONNECTING');
-
-    try {
-      // 1. Get user microphone stream
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-
-      // 2. Setup RTCPeerConnection with STUN
-      const pc = new RTCPeerConnection({
-        iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }],
-      });
-      pcRef.current = pc;
-
-      // Add caller mic audio track
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-      // 3. Create DataChannel for real-time events & telemetry
-      const dc = pc.createDataChannel('events');
-      dataChannelRef.current = dc;
-
-      dc.onopen = () => {
-        setWebrtcStatus('CONNECTED');
-      };
-
-      dc.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'transcript') {
-            if (msg.final) {
-              setPartialTranscript(null);
-              if (msg.text && msg.text.trim()) {
-                setLiveChat((prev) => [
-                  ...prev,
-                  {
-                    id: Math.random().toString(36).substring(7),
-                    sender: 'caller',
-                    text: msg.text.trim(),
-                    time: new Date().toLocaleTimeString(),
-                  },
-                ]);
-              }
-            } else {
-              setPartialTranscript(msg.text);
-            }
-          } else if (msg.type === 'assistant_text') {
-            setLiveChat((prev) => [
-              ...prev,
-              {
-                id: Math.random().toString(36).substring(7),
-                sender: 'assistant',
-                text: msg.text,
-                time: new Date().toLocaleTimeString(),
-              },
-            ]);
-            setIsAssistantSpeaking(true);
-          } else if (msg.type === 'latency_metrics') {
-            setLatencyMetrics(msg.metrics);
-          } else if (msg.type === 'interrupted') {
-            setIsAssistantSpeaking(false);
-            setLiveChat((prev) => {
-              if (prev.length === 0) return prev;
-              const last = prev[prev.length - 1];
-              if (last.sender === 'assistant') {
-                return [...prev.slice(0, -1), { ...last, interrupted: true }];
-              }
-              return prev;
-            });
-          } else if (msg.type === 'call_ended') {
-            handleAgentHungUp(true);
-          } else if (msg.type === 'turn_complete') {
-            setIsAssistantSpeaking(false);
-            if (msg.usage) {
-              setActiveSession((prev) => (prev ? { ...prev, usage: msg.usage } : prev));
-            }
-            if (activeSession) {
-              runtimeService.getEvents(activeSession.id).then(setEvents).catch(() => {});
-              runtimeService.getSession(activeSession.id).then(setActiveSession).catch(() => {});
-            }
-          }
-        } catch (e) {
-          console.error('WebRTC DataChannel message parse error:', e);
-        }
-      };
-
-      // 4. Handle incoming agent audio track via Opus/UDP
-      pc.ontrack = (event) => {
-        if (event.track.kind === 'audio') {
-          const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-          if (!webrtcAudioElRef.current) {
-            const audioEl = document.createElement('audio');
-            audioEl.autoplay = true;
-            (audioEl as any).playsInline = true;
-            webrtcAudioElRef.current = audioEl;
-            document.body.appendChild(audioEl);
-          }
-          webrtcAudioElRef.current.srcObject = stream;
-          webrtcAudioElRef.current.play().catch((e) => console.log('Audio autoplay prevented:', e));
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'connected') {
-          setWebrtcStatus('CONNECTED');
-        } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
-          setWebrtcStatus('DISCONNECTED');
-        }
-      };
-
-      // 5. Create Offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      // Wait for ICE gathering to complete before sending SDP
-      await new Promise<void>((resolve) => {
-        if (pc.iceGatheringState === 'complete') {
-          resolve();
-        } else {
-          const checkState = () => {
-            if (pc.iceGatheringState === 'complete') {
-              pc.removeEventListener('icegatheringstatechange', checkState);
-              resolve();
-            }
-          };
-          pc.addEventListener('icegatheringstatechange', checkState);
-          setTimeout(resolve, 1500);
-        }
-      });
-
-      // 6. Send Offer to backend
-      const res = await fetch(`/api/runtime/sessions/${activeSession.id}/webrtc/offer?token=${encodeURIComponent(token)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sdp: pc.localDescription?.sdp || offer.sdp,
-          type: pc.localDescription?.type || offer.type,
-        }),
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.detail || `Server rejected offer with status ${res.status}`);
-      }
-
-      const answer = await res.json();
-      await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      setWebrtcStatus('CONNECTED');
-    } catch (err: any) {
-      console.error('WebRTC connection failed:', err);
-      setWebrtcError(err.message || 'WebRTC connection failed');
-      disconnectWebRTC();
-    }
-  };
-
-  const disconnectWebRTC = () => {
-    if (pcRef.current) {
-      pcRef.current.getSenders().forEach((s) => s.track?.stop());
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-    if (dataChannelRef.current) {
-      dataChannelRef.current.close();
-      dataChannelRef.current = null;
-    }
-    if (webrtcAudioElRef.current) {
-      webrtcAudioElRef.current.srcObject = null;
-    }
-    setWebrtcStatus('DISCONNECTED');
-    setIsAssistantSpeaking(false);
-    if (activeSession) {
-      fetch(`/api/runtime/sessions/${activeSession.id}/webrtc/close`, { method: 'POST' }).catch(() => {});
-    }
-  };
-
-  const handleWebRTCBargeIn = () => {
-    if (dataChannelRef.current && dataChannelRef.current.readyState === 'open') {
-      dataChannelRef.current.send(JSON.stringify({ type: 'interrupt' }));
-    }
-    setIsAssistantSpeaking(false);
-  };
-
 
   // -------------------------------------------------------------
   // SIMULATED TURN (HTTP - PHASE 3A)
@@ -1281,54 +1079,13 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
             </div>
           </div>
         ) : (
-          <div className="flex min-h-[170px] flex-col items-center justify-center px-5 py-8 text-center">
-            {webrtcStatus === 'CONNECTED' ? (
-              <>
-                <div className="mb-4 flex items-end gap-1.5" aria-hidden="true">
-                  {[45, 75, 55, 90, 60, 80, 50, 70].map((height, index) => (
-                    <span
-                      key={index}
-                      className="w-2 rounded-sm bg-emerald-400 animate-pulse"
-                      style={{ height: `${height * 0.8}px`, animationDelay: `${index * 120}ms` }}
-                    />
-                  ))}
-                </div>
-                <p className="text-lg font-semibold text-emerald-300 flex items-center gap-2">
-                  <Volume2 className="h-5 w-5 animate-bounce" /> Call in Progress with AI Agent
-                </p>
-                <p className="mt-1 text-xs text-slate-400">
-                  Streaming audio live (WebRTC + Opus) • Active session {activeSession?.id}
-                </p>
-                <Button
-                  type="button"
-                  variant="danger"
-                  className="mt-4 rounded-full bg-red-600 hover:bg-red-500 text-white font-semibold px-6 py-2.5 shadow-lg shadow-red-950/60"
-                  onClick={() => {
-                    disconnectWebRTC();
-                    handleEndSession();
-                  }}
-                >
-                  <PhoneOff className="mr-2 h-4 w-4" /> End Call
-                </Button>
-              </>
-            ) : (
-              <>
-                <div className="mb-5 flex items-end gap-1.5" aria-hidden="true">
-                  {[32, 58, 40, 72, 46, 62].map((height, index) => (
-                    <span key={index} className="w-2 rounded-sm bg-rose-400/80" style={{ height }} />
-                  ))}
-                </div>
-                <p className="text-lg text-slate-200">
-                  Start a call to test the agent
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {activeSession && activeSession.status === 'ACTIVE'
-                    ? `Active session ${activeSession.id}`
-                    : 'Select an agent and published version below'}
-                </p>
-              </>
-            )}
-          </div>
+          <BrowserCallTester
+            agentId={selectedAgentId}
+            agentVersionId={selectedVersionId}
+            ready={!!readiness?.ready}
+            userName={mockCallerName}
+            companyName={mockCompanyName || agents.find((a) => a.id === selectedAgentId)?.client_name || undefined}
+          />
         )}
 
         {testMode !== 'scenarios' && (
@@ -1348,46 +1105,17 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               </span>
             </div>
 
-            {testMode === 'phone' ? null : webrtcStatus === 'CONNECTED' ? (
+            {testMode === 'phone' || testMode === 'voice' ? null : isCallActive ? (
               <Button
                 type="button"
                 variant="danger"
-                className="min-w-[180px] rounded-full bg-red-600 text-white hover:bg-red-500 font-semibold shadow-md shadow-red-950/50"
-                onClick={() => {
-                  disconnectWebRTC();
-                  handleEndSession();
-                }}
+                size="md"
+                className="rounded-full bg-red-600 hover:bg-red-500 text-white font-semibold px-6 py-2 shadow-md shadow-red-950/50"
+                onClick={handleEndSession}
+                isLoading={isEndingSession}
               >
                 <PhoneOff className="mr-2 h-4 w-4" /> End Call
               </Button>
-            ) : isCallActive ? (
-              <div className="flex items-center gap-2.5">
-                <Button
-                  type="button"
-                  variant="danger"
-                  size="md"
-                  className="rounded-full bg-red-600 hover:bg-red-500 text-white font-semibold px-6 py-2 shadow-md shadow-red-950/50"
-                  onClick={handleEndSession}
-                  isLoading={isEndingSession}
-                >
-                  <PhoneOff className="mr-2 h-4 w-4" /> End Call
-                </Button>
-                {testMode === 'voice' && (
-                  <Button
-                    type="button"
-                    variant="primary"
-                    className="min-w-[160px] rounded-full bg-emerald-600 text-white hover:bg-emerald-500 font-semibold shadow-md shadow-emerald-950/50"
-                    disabled={webrtcStatus === 'CONNECTING'}
-                    isLoading={webrtcStatus === 'CONNECTING'}
-                    onClick={() => {
-                      setActiveTab('webrtc');
-                      connectWebRTC();
-                    }}
-                  >
-                    <Play className="mr-2 h-4 w-4" /> Start Audio Stream
-                  </Button>
-                )}
-              </div>
             ) : (
               <Button
                 type="button"
@@ -1429,12 +1157,11 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
       )}
 
       {/* TOP CONTROLS & READINESS */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div>
         {/* Selection Card */}
         <Card
           title="Agent & Pinned Version"
           subtitle="The published version this test session runs against"
-          className="lg:col-span-5"
           bodyClassName="flex flex-col"
         >
           <div className="flex flex-1 flex-col gap-4 text-xs">
@@ -1485,7 +1212,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
                         <div className="flex items-center gap-2">
                           <Volume2 className="h-3.5 w-3.5 text-purple-400 shrink-0" />
                           <span className="text-slate-300 truncate">
-                            Voice: <strong className="text-slate-100">{voiceConf?.voice_id ? `${voiceConf.voice_id.substring(0, 8)}...` : 'Default (Greg)'}</strong>
+                            Voice: <strong className="text-slate-100">{voiceConf?.voice_id ? voiceNames[voiceConf.voice_id] || `${voiceConf.voice_id.substring(0, 8)}...` : 'Default'}</strong>
                           </span>
                         </div>
                         <Link
@@ -1501,20 +1228,40 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               )}
             </div>
 
-            <div className="mt-auto pt-2 grid grid-cols-2 gap-2">
-              <Button
-                variant="secondary"
-                size="md"
-                onClick={handleCheckReadiness}
-                isLoading={isCheckingReadiness}
-                disabled={!selectedVersionId || activeSession?.status === 'ACTIVE'}
+            {/* Readiness: checked automatically for the selected version */}
+            {selectedVersionId && (
+              <div
+                className={`rounded-lg border px-3 py-2 text-[11px] ${
+                  !readiness
+                    ? 'border-[#232736] text-slate-400'
+                    : readiness.ready
+                      ? 'border-emerald-900/60 bg-emerald-950/30 text-emerald-300'
+                      : 'border-rose-900/60 bg-rose-950/30 text-rose-300'
+                }`}
               >
-                <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Re-check Readiness
-              </Button>
+                <div className="flex items-center gap-2 font-semibold">
+                  {!readiness ? (
+                    <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking this version can run...</>
+                  ) : readiness.ready ? (
+                    <><CheckCircle className="h-3.5 w-3.5 text-emerald-400" /> Ready to test</>
+                  ) : (
+                    <><AlertTriangle className="h-3.5 w-3.5 text-rose-400" /> Can't start yet</>
+                  )}
+                </div>
+                {readiness?.errors.map((e, idx) => (
+                  <div key={`e${idx}`} className="mt-1 text-rose-300">&bull; {e}</div>
+                ))}
+                {readiness?.warnings.map((w, idx) => (
+                  <div key={`w${idx}`} className="mt-1 text-amber-300">&bull; {w}</div>
+                ))}
+              </div>
+            )}
 
+            <div className="mt-auto pt-2">
               <Button
                 variant="primary"
                 size="md"
+                className="w-full"
                 onClick={handleStartSession}
                 isLoading={isStartingSession}
                 disabled={!readiness?.ready || activeSession?.status === 'ACTIVE'}
@@ -1523,89 +1270,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               </Button>
             </div>
           </div>
-        </Card>
-
-        {/* Readiness Checklist Card */}
-        <Card
-          title="Runtime Readiness Verification"
-          subtitle="Prerequisites checked before a session can start"
-          className="lg:col-span-7"
-          bodyClassName="flex flex-col"
-        >
-          {!readiness ? (
-            <div className="flex flex-1 items-center justify-center py-6 text-center text-xs text-slate-500">
-              Select an agent and published version to run readiness checks.
-            </div>
-          ) : (
-            <div className="flex flex-1 flex-col gap-4 text-xs">
-              <div
-                className={`rounded-lg px-4 py-3 border flex flex-wrap items-center justify-between gap-2 ${
-                  readiness.ready
-                    ? 'border-emerald-900/60 bg-emerald-950/30 text-emerald-300'
-                    : 'border-rose-900/60 bg-rose-950/30 text-rose-300'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  {readiness.ready ? (
-                    <CheckCircle className="h-4 w-4 text-emerald-400" />
-                  ) : (
-                    <AlertTriangle className="h-4 w-4 text-rose-400" />
-                  )}
-                  <span className="font-semibold">
-                    {readiness.ready ? 'Passed All Runtime Prerequisites' : 'Readiness Validation Failed'}
-                  </span>
-                </div>
-                <Badge variant={readiness.ready ? 'green' : 'red'}>
-                  {readiness.ready ? 'READY TO EXECUTE' : 'BLOCKED'}
-                </Badge>
-              </div>
-
-              {/* Checklist breakdown */}
-              <div className="grid flex-1 grid-cols-1 sm:grid-cols-2 auto-rows-fr gap-3">
-                {[
-                  { icon: CheckCircle, label: 'Version Status', value: 'PUBLISHED', tone: 'text-emerald-400', iconTone: 'text-emerald-400 bg-emerald-950/50 border-emerald-900/60' },
-                  { icon: Layers, label: 'Schema Contract', value: 'v1.0 CANONICAL', tone: 'text-[#00df8f]', iconTone: 'text-[#00df8f] bg-[#06221c] border-[#0f3d33]' },
-                  { icon: Cpu, label: 'Provider Stack', value: 'CARTESIA + GEMINI', tone: 'text-purple-400', iconTone: 'text-purple-400 bg-purple-950/40 border-purple-900/50' },
-                  { icon: History, label: 'Version Number', value: `v${readiness.version_number ?? '1'}`, tone: 'text-slate-100 font-mono', iconTone: 'text-slate-300 bg-[#10232b] border-[#143c49]' },
-                ].map(({ icon: Icon, label, value, tone, iconTone }) => (
-                  <div
-                    key={label}
-                    className="flex items-center gap-3 rounded-lg border border-[#143c49] bg-[#06141a] px-4 py-3"
-                  >
-                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md border ${iconTone}`}>
-                      <Icon className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">{label}</span>
-                      <span className={`block truncate text-sm font-semibold ${tone}`}>{value}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Errors & Warnings */}
-              {readiness.errors.length > 0 && (
-                <div className="space-y-1 rounded-lg border border-rose-900/50 bg-rose-950/20 px-4 py-3">
-                  <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider">Errors</span>
-                  {readiness.errors.map((e, idx) => (
-                    <div key={idx} className="text-rose-300 font-mono text-[11px]">
-                      &bull; {e}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {readiness.warnings.length > 0 && (
-                <div className="space-y-1 rounded-lg border border-amber-900/50 bg-amber-950/20 px-4 py-3">
-                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Warnings</span>
-                  {readiness.warnings.map((w, idx) => (
-                    <div key={idx} className="text-amber-300 font-mono text-[11px]">
-                      &bull; {w}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </Card>
       </div>
 
@@ -1637,10 +1301,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
               {/* Tab Selector */}
               <div className="flex rounded-lg bg-[#151824] p-1 border border-[#232736]">
                 <button
-                  onClick={() => {
-                    disconnectWebRTC();
-                    setActiveTab('stream');
-                  }}
+                  onClick={() => setActiveTab('stream')}
                   className={`px-3 py-1 rounded text-xs font-medium transition-all ${
                     activeTab === 'stream'
                       ? 'bg-purple-600 text-white shadow-sm font-semibold'
@@ -1653,7 +1314,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
                 <button
                   onClick={() => {
                     disconnectWebSocket();
-                    disconnectWebRTC();
                     setActiveTab('simulate');
                   }}
                   className={`px-3 py-1 rounded text-xs font-medium transition-all ${
@@ -1664,20 +1324,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
                 >
                   <Sparkles className="h-3 w-3 inline mr-1" />
                   Turn Simulator (HTTP)
-                </button>
-                <button
-                  onClick={() => {
-                    disconnectWebSocket();
-                    setActiveTab('webrtc');
-                  }}
-                  className={`px-3 py-1 rounded text-xs font-medium transition-all ${
-                    activeTab === 'webrtc'
-                      ? 'bg-emerald-600 text-white shadow-sm font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <PhoneCall className="h-3 w-3 inline mr-1" />
-                  WebRTC Voice (Opus)
                 </button>
               </div>
 
@@ -1699,205 +1345,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* LEFT / CENTER: STREAMING VOICE CONSOLE OR SIMULATOR */}
             <div className="lg:col-span-2 space-y-4">
-              {activeTab === 'webrtc' ? (
-                /* REALTIME WEBRTC STREAMING CONSOLE */
-                <Card
-                  title="Realtime Voice Stream (WebRTC + Opus)"
-                  subtitle="Ultra-Low Latency UDP PeerConnection with Opus Codec & Native AEC"
-                >
-                  <div className="space-y-4 text-xs">
-                    {/* WebRTC Audio Status Header */}
-                    <div className="flex items-center justify-between p-3 rounded-lg bg-[#10121a] border border-[#1b1f2d]">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`h-3 w-3 rounded-full ${
-                            webrtcStatus === 'CONNECTED'
-                              ? 'bg-emerald-400 animate-ping'
-                              : webrtcStatus === 'CONNECTING'
-                              ? 'bg-amber-400 animate-pulse'
-                              : 'bg-slate-600'
-                          }`}
-                        />
-                        <span className="font-mono text-xs font-semibold text-slate-200">
-                          Status: {webrtcStatus}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {isAssistantSpeaking && (
-                          <span className="flex items-center gap-1 rounded bg-purple-950/60 border border-purple-800/40 px-2 py-0.5 text-[11px] text-purple-300">
-                            <Volume2 className="h-3 w-3 animate-bounce" /> Assistant Speaking
-                          </span>
-                        )}
-                        {webrtcStatus === 'CONNECTED' && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={disconnectWebRTC}
-                            className="text-slate-400 hover:text-slate-200"
-                          >
-                            Disconnect
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-
-                    {webrtcError && (
-                      <div className="rounded bg-rose-950/30 border border-rose-900/60 p-2.5 text-xs text-rose-300">
-                        {webrtcError}
-                      </div>
-                    )}
-
-                    {/* WebRTC Call Controls */}
-                    <div className="flex flex-col gap-3.5 p-4 rounded-xl bg-[#0c0e14] border border-[#1b1f2d]">
-                      <div className="flex flex-wrap items-center gap-3">
-                        {webrtcStatus !== 'CONNECTED' ? (
-                          <Button
-                            variant="primary"
-                            size="md"
-                            className="bg-emerald-600 hover:bg-emerald-500 font-semibold px-5 py-2.5 shadow-md shadow-emerald-950/50"
-                            onClick={connectWebRTC}
-                            disabled={activeSession.status !== 'ACTIVE' || webrtcStatus === 'CONNECTING'}
-                            isLoading={webrtcStatus === 'CONNECTING'}
-                          >
-                            <PhoneCall className="h-4 w-4 mr-2 shrink-0 inline" />
-                            <span className="whitespace-nowrap">Start WebRTC Voice Call (Opus / UDP)</span>
-                          </Button>
-                        ) : (
-                          <Button
-                            variant="danger"
-                            size="md"
-                            className="font-semibold px-5 py-2.5 shadow-md shadow-red-950/50 animate-pulse"
-                            onClick={disconnectWebRTC}
-                          >
-                            <PhoneOff className="h-4 w-4 mr-2 shrink-0 inline" />
-                            <span className="whitespace-nowrap">Hang Up / End WebRTC Call</span>
-                          </Button>
-                        )}
-
-                        {/* Barge-in / Interruption Button */}
-                        <Button
-                          variant="secondary"
-                          size="md"
-                          onClick={handleWebRTCBargeIn}
-                          disabled={!isAssistantSpeaking}
-                          className={`px-4 py-2.5 ${
-                            isAssistantSpeaking
-                              ? 'border-rose-800 bg-rose-950/40 text-rose-300 hover:bg-rose-900/50 font-medium'
-                              : 'opacity-40 cursor-not-allowed text-slate-500'
-                          }`}
-                        >
-                          <Hand className="h-4 w-4 mr-2 shrink-0 inline text-rose-400" />
-                          <span className="whitespace-nowrap">Barge-in / Interrupt</span>
-                        </Button>
-
-                        <div className="ml-auto hidden sm:flex items-center gap-2 text-[11px] text-slate-400 font-mono bg-[#10131d] px-2.5 py-1.5 rounded-md border border-[#1d2232]">
-                          <Radio className="h-3 w-3 text-emerald-400 animate-pulse" />
-                          <span>Opus UDP • Low-Latency</span>
-                        </div>
-                      </div>
-
-                      <div className="text-[11px] text-slate-400 bg-[#10131d] px-3.5 py-2 rounded-lg border border-[#1b1f2d] flex items-center gap-2">
-                        <Sparkles className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-                        <span>
-                          {webrtcStatus === 'CONNECTED'
-                            ? '🎙️ WebRTC call active via Opus/UDP. Speak naturally into your microphone—audio streams continuously with native echo cancellation.'
-                            : 'Click Start WebRTC Voice Call to open a peer-to-peer UDP audio stream.'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Live Transcript / Dialogue View */}
-                    <div className="space-y-2">
-                      <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                        Live Conversation Stream
-                      </div>
-                      <div className="min-h-[180px] max-h-[320px] overflow-y-auto rounded-lg border border-[#1b1f2d] bg-[#0c0e14] p-3 space-y-2">
-                        {liveChat.length === 0 && !partialTranscript ? (
-                          <div className="py-12 text-center text-xs text-slate-600">
-                            Connect WebRTC audio and speak into the microphone to converse in real time.
-                          </div>
-                        ) : (
-                          <>
-                            {liveChat.map((msg) => (
-                              <div
-                                key={msg.id}
-                                className={`flex flex-col ${
-                                  msg.sender === 'caller' ? 'items-end' : 'items-start'
-                                }`}
-                              >
-                                <div className="text-[10px] text-slate-500 mb-0.5 flex items-center gap-1">
-                                  <span>{msg.sender === 'caller' ? 'Caller' : 'AI Employee'}</span>
-                                  <span>{msg.time}</span>
-                                  {msg.interrupted && (
-                                    <span className="text-rose-400 font-medium">[Interrupted]</span>
-                                  )}
-                                </div>
-                                <div
-                                  className={`rounded-lg px-3 py-2 text-xs max-w-[85%] ${
-                                    msg.sender === 'caller'
-                                      ? 'bg-emerald-950/40 border border-emerald-800/40 text-emerald-200'
-                                      : 'bg-[#151824] border border-[#232736] text-slate-100'
-                                  }`}
-                                >
-                                  {msg.text}
-                                </div>
-                              </div>
-                            ))}
-
-                            {/* Streaming Partial Transcript */}
-                            {partialTranscript && (
-                              <div className="flex flex-col items-end">
-                                <div className="text-[10px] text-emerald-400/70 mb-0.5 flex items-center gap-1 font-mono">
-                                  <Radio className="h-3 w-3 animate-pulse" /> Caller Speaking (Streaming STT)...
-                                </div>
-                                <div className="rounded-lg px-3 py-2 text-xs max-w-[85%] bg-emerald-950/20 border border-emerald-800/20 text-emerald-300/80 italic">
-                                  {partialTranscript}
-                                </div>
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-
-                      {/* Monotonic Latency Metrics Bar */}
-                      {latencyMetrics && (
-                        <div className="pt-2">
-                          <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
-                            Realtime Turn Latency Metrics (Monotonic)
-                          </div>
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                            <div className="rounded border border-[#143c49] bg-[#06141a] p-2">
-                              <span className="text-[10px] text-slate-500 block">STT Turn Final</span>
-                              <span className="font-mono text-xs font-bold text-[#00df8f]">
-                                {latencyMetrics.stt_ms !== undefined ? `${latencyMetrics.stt_ms} ms` : '--'}
-                              </span>
-                            </div>
-                            <div className="rounded border border-[#1b1f2d] bg-[#0c0e14] p-2">
-                              <span className="text-[10px] text-slate-500 block">Gemini LLM</span>
-                              <span className="font-mono text-xs font-bold text-amber-400">
-                                {latencyMetrics.llm_ms !== undefined ? `${latencyMetrics.llm_ms} ms` : '--'}
-                              </span>
-                            </div>
-                            <div className="rounded border border-[#1b1f2d] bg-[#0c0e14] p-2">
-                              <span className="text-[10px] text-slate-500 block">TTS (TTFB)</span>
-                              <span className="font-mono text-xs font-bold text-purple-400">
-                                {latencyMetrics.tts_ttfb_ms !== undefined ? `${latencyMetrics.tts_ttfb_ms} ms` : '--'}
-                              </span>
-                            </div>
-                            <div className="rounded border border-[#1b1f2d] bg-[#0c0e14] p-2">
-                              <span className="text-[10px] text-slate-500 block">Round-Trip Total</span>
-                              <span className="font-mono text-xs font-bold text-emerald-400">
-                                {latencyMetrics.round_trip_ms != null ? `${latencyMetrics.round_trip_ms} ms` : '--'}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-              ) : activeTab === 'stream' ? (
+              {activeTab === 'stream' ? (
                 /* REALTIME VOICE WEBSOCKET STREAMING CONSOLE */
                 <Card
                   title="Realtime Voice Stream (Sarvam)"
@@ -2261,9 +1709,7 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
                   <div className="flex items-center justify-between p-2 rounded bg-[#0c0e14] border border-[#1b1f2d]">
                     <span className="text-slate-400">Audio Protocol:</span>
                     <span className="font-mono font-semibold text-slate-200">
-                      {activeTab === 'webrtc'
-                        ? 'WebRTC Opus RTP (UDP)'
-                        : activeTab === 'stream'
+                      {activeTab === 'stream'
                         ? 'PCM 16k Mono (WebSocket)'
                         : 'JSON Turn (HTTP)'}
                     </span>

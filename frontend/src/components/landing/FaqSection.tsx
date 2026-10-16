@@ -19,7 +19,7 @@ export const FaqSection: React.FC = () => {
     },
     {
       q: 'How does the pricing work compared to hiring human telecallers?',
-      a: 'A typical in-house or outsourced BPO caller costs ₹20,000–₹25,000/month loaded with overhead, yet delivers only ~45% productive talk time. Choranta starts with a predictable retainer (₹6,000–₹17,000 depending on tier) with sub-second per-minute billing for active talk-time. Most clients reduce total call center spend by 65–75%.',
+      a: 'A typical in-house or outsourced BPO caller costs ₹20,000–₹25,000/month loaded with overhead, yet delivers only ~45% productive talk time. Choranta has no monthly fee: you add credits (1 credit = ₹1) and pay only for the minutes your AI employee is on calls, about ₹7 a minute. Credits never expire, and packs start from ₹1,000.',
     },
     {
       q: 'How fast can our business go live with Choranta?',
