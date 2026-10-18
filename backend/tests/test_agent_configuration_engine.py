@@ -60,6 +60,15 @@ def test_agent_configuration_validation(client, auth_headers):
     assert val_res2.json()["valid"] is True
 
 
+def test_only_admin_can_publish_version(client, auth_headers, operator_headers):
+    cli = client.post("/api/clients", json={"name": "Lotus Hotel", "business_type": "HOTEL"}, headers=auth_headers).json()
+    agent = client.post("/api/agents", json={"client_id": cli["id"], "name": "Front Desk", "role": "Receptionist"}, headers=auth_headers).json()
+
+    res = client.post(f"/api/agents/{agent['id']}/versions", headers=operator_headers)
+    assert res.status_code == 403
+    assert client.get(f"/api/agents/{agent['id']}/versions", headers=auth_headers).json() == []
+
+
 def test_create_immutable_version_and_numbering(client, auth_headers):
     cli = client.post("/api/clients", json={"name": "Horizon Luxury Hotel", "business_type": "HOTEL"}, headers=auth_headers).json()
     agent = client.post("/api/agents", json={"client_id": cli["id"], "name": "Concierge AI", "role": "Hotel Concierge"}, headers=auth_headers).json()

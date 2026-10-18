@@ -320,6 +320,34 @@ def validate_config(db: Session, campaign: Campaign) -> None:
         raise CampaignError("Only no-answer, busy and failed calls can be retried.")
 
 
+def version_campaign_inputs(version: Optional[AgentVersion]) -> List[Dict[str, Any]]:
+    """The agent version's inputs typed once per campaign (e.g. the course and demo timings of a batch
+    announcement), as name, description, example and whether it is required."""
+    from app.services.agent_templates_business import CAMPAIGN_SOURCE
+
+    inputs = (((version.configuration_json or {}) if version else {}).get("variables") or {}).get("inputs") or []
+    return [
+        {"name": v["name"], "description": v.get("description") or v["name"], "required": bool(v.get("required")),
+         "example": (v.get("extraction_instructions") or "").removeprefix("e.g. ")}
+        for v in inputs if v.get("source") == CAMPAIGN_SOURCE and v.get("name")
+    ]
+
+
+def campaign_inputs(db: Session, campaign: Campaign) -> List[Dict[str, Any]]:
+    return version_campaign_inputs(db.get(AgentVersion, campaign.agent_version_id))
+
+
+def _clean_variables(values: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    return {str(k): str(v).strip() for k, v in (values or {}).items() if v is not None and str(v).strip()}
+
+
+def _require_campaign_details(db: Session, campaign: Campaign) -> None:
+    missing = [v["description"] for v in campaign_inputs(db, campaign)
+               if v.get("required") and not (campaign.variables or {}).get(v["name"])]
+    if missing:
+        raise CampaignError("Fill in the campaign details before launching: " + ", ".join(missing) + ".")
+
+
 def _require_editable(campaign: Campaign) -> None:
     if campaign.status != "DRAFT":
         raise CampaignError("Only draft campaigns can be changed.", 409)
@@ -342,6 +370,7 @@ def create_campaign(db: Session, client_id: str, data: Dict[str, Any], created_b
     data = dict(data)
     if not data.get("timezone"):
         data["timezone"] = client.timezone if client.timezone and client.timezone != "UTC" else "Asia/Kolkata"
+    data["variables"] = _clean_variables(data.get("variables"))
     campaign = Campaign(client_id=client_id, created_by=created_by, **{k: v for k, v in data.items() if v is not None})
     campaign.kind = campaign.kind or "BULK"
     _ensure_webhook_secret(campaign)
@@ -365,6 +394,8 @@ def update_campaign(db: Session, campaign: Campaign, data: Dict[str, Any]) -> Ca
     if "webhook_url" in data and not data["webhook_url"]:
         campaign.webhook_url = None
         data.pop("webhook_url")
+    if data.get("variables") is not None:
+        data["variables"] = _clean_variables(data["variables"])
     for key, value in data.items():
         if value is not None:
             setattr(campaign, key, value)
@@ -400,6 +431,7 @@ def launch(db: Session, campaign: Campaign, user_id: Optional[str], consent: boo
     if campaign.kind == "BULK" and not _recipient_count(db, campaign.id):
         raise CampaignError("Add recipients before launching.")
     validate_config(db, campaign)
+    _require_campaign_details(db, campaign)
     now = utcnow()
     campaign.consent_ack_by = user_id
     campaign.consent_ack_at = now
@@ -784,7 +816,7 @@ def dial_claimed(db: Session, campaign: Campaign, recipient: CampaignRecipient, 
             agent_version_id=campaign.agent_version_id,
             caller_id=caller.phone_number,
             custom_field=f"campaign:{campaign.id}",
-            variables=recipient.variables or {},
+            variables={**(campaign.variables or {}), **(recipient.variables or {})},
             extra_metadata={"campaign_id": campaign.id, "campaign_recipient_id": recipient.id},
             caller_record=caller,
             client_id=campaign.client_id,

@@ -98,7 +98,7 @@ const blankSetup = (base: AgentConfigurationData, name: string, role: string, co
 /**
  * Create an AI employee on one screen: pick a template (recommended for the client's business), name it, choose
  * languages, direction, voice and knowledge, and create. The setup comes from the template - no AI drafting.
- * The first version is published so it can be tested straight away in the employee's workspace.
+ * It starts as an unpublished draft; an admin publishes it from the employee's workspace.
  */
 export const AgentCreateWizardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -248,9 +248,8 @@ export const AgentCreateWizardPage: React.FC = () => {
       for (const id of knowledgeIds) await catalogsService.attachKnowledge(created.id, id);
       for (const id of config.tools || []) await catalogsService.attachTool(created.id, id).catch(() => {});
       if (fromRequest) await agentRequestsService.complete(fromRequest.id, created.id);
-      // Publish v1 so it can be tested right away in the workspace
-      const published = await agentsService.publishVersion(created.id).then(() => true).catch(() => false);
-      navigate(`/agents/${created.id}${published ? '' : '?unpublished=1'}`);
+      // Starts as an unpublished draft: an admin reviews it and presses Publish
+      navigate(`/agents/${created.id}`);
     } catch (err: any) {
       setError(err?.message || 'Could not create the employee.');
       setIsCreating(false);

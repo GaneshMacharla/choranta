@@ -180,15 +180,15 @@ class AgentConfigurationService:
             tools=[],
             integrations=[],
             voice={
-                "provider": "cartesia",
-                "voice_id": "4459a9a5-69d6-4680-b970-e13dc51845b6",
+                "provider": "sarvam",
+                "voice_id": "ishita",
                 "language": "en",
                 "speed": 1.0
             },
             providers={
                 "stt": "sarvam",
                 "llm": "sarvam",
-                "tts": "cartesia",
+                "tts": "sarvam",
                 "telephony": None
             }
         )

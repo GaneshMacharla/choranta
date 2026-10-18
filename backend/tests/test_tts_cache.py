@@ -62,6 +62,12 @@ def _fake_session():
         context=SimpleNamespace(agent_spec=spec, usage_tracker=tracker),
         telephony_provider=SimpleNamespace(normalize_audio_outbound=lambda chunk: chunk),
         _carrier_bytes_per_second=16000.0,
+        _sentence_language=lambda text: "hi-IN",
+        _native_rate_kwargs=lambda tts: {},
+        _tts_cache_key=lambda sentence, language: tts_cache.cache_key(
+            "sarvam", "shubh", 1.0, language, "ExotelProvider", sentence.text
+        ),
+        _carrier_audio=lambda chunk, native: chunk,
     )
 
 

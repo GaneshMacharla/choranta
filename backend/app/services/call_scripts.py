@@ -76,6 +76,17 @@ def with_standard_script(db: Session, draft: AgentConfigurationData) -> AgentCon
     return draft.model_copy(update={"instructions": instructions})
 
 
+# Standard scripts as first seeded, replaced since: a stored script still word for word like this was never
+# edited by an admin, so it is upgraded to the template's current script
+_SUPERSEDED_SCRIPTS = {
+    "course_batch_announcement": (
+        ("Do you work with data today, or are you a fresher?", "Would online or classroom suit you better?"),
+        ("Snowflake and DBT batch starting Monday, 19 October 2026", "Real projects included", "Free demo class"),
+        "Book a free demo class",
+    ),
+}
+
+
 def seed_standard_scripts(db: Session) -> None:
     """Creates a standard script for every template that has one (existing scripts keep their edits)."""
     from app.services.agent_templates import AVAILABLE_AGENT_TEMPLATES
@@ -83,7 +94,14 @@ def seed_standard_scripts(db: Session) -> None:
 
     names = {tpl["id"]: tpl["name"] for tpl in AVAILABLE_AGENT_TEMPLATES}
     for key, content in CALL_SCRIPTS.items():
-        if db.get(StandardCallScript, key):
+        existing = db.get(StandardCallScript, key)
+        if existing:
+            stored = (tuple(existing.discovery_questions or []), tuple(existing.offer_points or []), existing.next_step or "")
+            if _SUPERSEDED_SCRIPTS.get(key) == stored:
+                existing.name = names.get(key, existing.name)
+                existing.discovery_questions = list(content.get("discovery_questions") or [])
+                existing.offer_points = list(content.get("offer_points") or [])
+                existing.next_step = content.get("next_step") or ""
             continue
         db.add(StandardCallScript(
             key=key,

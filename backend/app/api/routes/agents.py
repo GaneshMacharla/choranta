@@ -1,10 +1,11 @@
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, Query, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.api.deps import get_db, get_current_user, require_admin
 from app.models.user import User
 from app.schemas.agent import AgentCreate, AgentUpdate, AgentResponse, AgentListResponse, AgentStatusEnum
-from app.schemas.agent_spec import AgentVersionResponse, VersionComparisonResponse
+from app.schemas.agent_spec import AgentConfigurationData, AgentVersionResponse, VersionComparisonResponse
 from app.schemas.agent_draft import AgentDraftRequest, AgentDraftResponse
 from app.services.agent_service import AgentService
 from app.services.agent_draft_service import AgentDraftService
@@ -66,6 +67,23 @@ def get_agent(
     return service.get_agent(agent_id)
 
 
+class SystemPromptRequest(BaseModel):
+    configuration: Optional[AgentConfigurationData] = None  # unsaved edits; omitted = the saved draft
+    outbound: bool = False
+
+
+@router.post("/{agent_id}/system-prompt")
+def get_system_prompt(
+    agent_id: str,
+    payload: SystemPromptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """The exact system prompt the LLM receives on a call, built from the draft (including unsaved edits)."""
+    from app.services.system_prompt_preview import build_system_prompt
+    return build_system_prompt(db, agent_id, payload.configuration, payload.outbound)
+
+
 @router.patch("/{agent_id}", response_model=AgentResponse)
 def update_agent(
     agent_id: str,
@@ -91,7 +109,7 @@ def update_agent(
 def delete_agent(
     agent_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin)
 ):
     """Delete an AI Employee and all associated versions, tests, and sessions."""
     service = AgentService(db)
@@ -102,7 +120,7 @@ def delete_agent(
 @router.delete("", status_code=status.HTTP_200_OK)
 def delete_all_agents(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin)
 ):
     """Delete all AI Employees across the platform."""
     from app.models.agent import Agent
@@ -133,10 +151,10 @@ def get_agent_versions(
 def create_agent_version(
     agent_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin)
 ):
     """
-    Freeze current validated draft configuration into an immutable version snapshot.
+    Freeze current validated draft configuration into an immutable version snapshot (publish). Admins only.
     """
     v_service = AgentVersionService(db)
     return v_service.create_version(agent_id, creator_id=current_user.id)

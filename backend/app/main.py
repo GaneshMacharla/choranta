@@ -67,6 +67,20 @@ async def _campaign_loop() -> None:
         await asyncio.sleep(settings.CAMPAIGN_TICK_S)
 
 
+async def _billing_sweep_loop() -> None:
+    """Charges finished calls that were never billed (e.g. the server restarted mid-call)."""
+    from app.db.session import SessionLocal
+    from app.services.billing import run_billing_sweep_job
+    while True:
+        try:
+            await asyncio.to_thread(run_billing_sweep_job, SessionLocal)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Billing sweep error: {type(e).__name__}: {e}")
+        await asyncio.sleep(settings.BILLING_SWEEP_S)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup validation and seeding
@@ -77,6 +91,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_inventory_sync_loop()),
             asyncio.create_task(_number_rental_loop()),
             asyncio.create_task(_campaign_loop()),
+            asyncio.create_task(_billing_sweep_loop()),
         ]
         if settings.ENVIRONMENT != "test" else []
     )

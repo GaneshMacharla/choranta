@@ -167,6 +167,55 @@ def test_variables_reach_the_dial_and_campaign_completes(db: Session, telephony_
     assert "Priya" in svc.export_results_csv(db, campaign)
 
 
+def _with_campaign_inputs(db: Session, setup):
+    """Gives the setup's agent version the batch announcement's campaign inputs (course, timings, demo...)."""
+    from app.services.agent_templates import get_agent_template_by_id
+
+    tpl = get_agent_template_by_id("course_batch_announcement")
+    version = setup["version"]
+    config = dict(version.configuration_json or {})
+    config["variables"] = {**(config.get("variables") or {}), "inputs": tpl["default_config"]["variables"]["inputs"]}
+    version.configuration_json = config
+    db.commit()
+
+
+BATCH = {"course_name": "Snowflake and DBT", "batch_start_date": "Monday, 19 October",
+         "batch_timings": "Weekdays 7 to 9 pm", "demo_class": "Saturday, 25 October at 11 am"}
+
+
+def test_campaign_details_reach_every_call_and_recipient_values_win(db: Session, telephony_setup):
+    _with_campaign_inputs(db, telephony_setup)
+    dialer = FakeDialer(db, telephony_setup)
+    campaign = _running(db, telephony_setup, csv_text="name,phone,course_name\nPriya,9876500011,\nRahul,9876500012,Azure\n",
+                        variables={**BATCH, "course_fees": "  ", "extra": None})
+    assert campaign.variables == BATCH  # blanks dropped, values trimmed
+    svc.run_campaign_tick(db, IN_WINDOW, dial=dialer)
+    by_phone = {phone: variables for phone, _, variables in dialer.dialed}
+    assert by_phone["+919876500011"]["demo_class"] == "Saturday, 25 October at 11 am"
+    assert by_phone["+919876500011"]["course_name"] == "Snowflake and DBT"
+    assert by_phone["+919876500012"]["course_name"] == "Azure" and by_phone["+919876500012"]["user_name"] == "Rahul"
+
+
+def test_launch_requires_the_agents_campaign_details(db: Session, telephony_setup):
+    _with_campaign_inputs(db, telephony_setup)
+    campaign = _campaign(db, telephony_setup, variables={"course_name": "Snowflake and DBT"})
+    svc.add_recipients_from_csv(db, campaign, CSV)
+    with pytest.raises(svc.CampaignError) as err:
+        svc.launch(db, campaign, "usr_test", consent=True)
+    assert "When the new batch starts" in err.value.message and "When the free demo class is" in err.value.message
+    svc.update_campaign(db, campaign, {"variables": BATCH})
+    assert svc.launch(db, campaign, "usr_test", consent=True).status == "RUNNING"
+
+
+def test_campaign_options_list_the_versions_campaign_inputs(client: TestClient, auth_headers: dict, db: Session, telephony_setup):
+    _with_campaign_inputs(db, telephony_setup)
+    options = client.get(f"/api/campaigns/options?client_id={telephony_setup['client'].id}", headers=auth_headers).json()
+    (version,) = [v for a in options["agents"] for v in a["versions"] if v["id"] == telephony_setup["version"].id]
+    inputs = {i["name"]: i for i in version["campaign_inputs"]}
+    assert inputs["course_name"]["required"] and inputs["course_name"]["example"] == "Snowflake and DBT"
+    assert not inputs["course_fees"]["required"] and "company_name" not in inputs
+
+
 def test_no_answer_is_retried_after_interval_then_fails(db: Session, telephony_setup):
     dialer = FakeDialer(db, telephony_setup)
     campaign = _running(db, telephony_setup, csv_text="phone\n9876500021\n", retry_max=1, retry_intervals_min=[30])

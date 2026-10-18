@@ -153,9 +153,40 @@ def test_browser_test_calls_send_the_agent_language_to_tts():
     from app.api.routes import websocket_audio
     from app.runtime.telephony import session
 
-    # The audio WebSocket runs on the phone session, which speaks in the agent's language
+    # The audio WebSocket runs on the phone session, which speaks each sentence in its own language
     assert issubclass(websocket_audio.WebSocketMediaSession, session.TelephonyMediaSession)
-    assert "language=spec.languages.primary" in inspect.getsource(session.TelephonyMediaSession._synthesize)
+    assert "language=language" in inspect.getsource(session.TelephonyMediaSession._synthesize)
+
+
+def test_each_sentence_is_voiced_in_the_language_it_is_written_in():
+    from app.runtime.telephony.speech_text import speech_language
+
+    assert speech_language("సరే, మీ బడ్జెట్ ఎంత?", "en", ["en", "te"]) == "te"
+    assert speech_language("ठीक है, Saturday 11 AM?", "te-IN", ["te", "hi"]) == "hi"
+    assert speech_language("Sure, let me check.", "te-IN", ["te"]) == "te-IN"   # Latin text: agent's language
+    assert speech_language("సరే", "te-IN") == "te-IN"                           # keeps the agent's regional code
+    assert speech_language("ठीक आहे", "en", ["en", "mr"]) == "mr"               # Devanagari for a Marathi agent
+
+
+def test_phone_calls_get_sarvam_audio_at_the_line_rate(monkeypatch):
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={"audios": [base64.b64encode(_wav(bytes([1, 0]) * 800, 8000)).decode()]})
+
+    _patch_async_client(monkeypatch, sarvam_tts, handler)
+    monkeypatch.setattr(settings, "SARVAM_TTS_STREAMING", False)
+    provider = sarvam_tts.SarvamTTSProvider(api_key="k")
+    assert 8000 in provider.native_sample_rates
+
+    async def collect():
+        return b"".join([c async for c in provider.synthesize_stream("Hello", sample_rate=8000)])
+
+    pcm = asyncio.run(collect())
+    assert sent["speech_sample_rate"] == 8000 and len(pcm) == 1600   # no resampling: passed through as produced
+    assert provider._ws_key(None, 1.0, "en", 8000)[-1] == 8000
+    assert provider._ws_key(None, 1.0, "en", 11025)[-1] == 16000     # unsupported rate: canonical 16 kHz
 
 
 def test_voices_carry_gender_and_put_sarvam_language_picks_first():

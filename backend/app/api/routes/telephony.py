@@ -34,7 +34,7 @@ from app.runtime.telephony.session import TelephonyMediaSession, active_telephon
 from app.services.call_costing import estimate_call_cost
 from app.services.pricing import PricingSnapshot, get_pricing
 from app.services import phone_numbers
-from app.services.billing import check_call_allowed
+from app.services.billing import agent_max_call_seconds, call_budget
 from app.services.call_status import apply_call_status
 from app.services.outbound_calls import OutboundCallError, place_outbound_call, with_webhook_token
 from app.schemas.telephony import (
@@ -303,10 +303,14 @@ async def _warm_call_voice(agent_version_id: str) -> None:
             return
         tts_name = (settings.TTS_PROVIDER_OVERRIDE or "").strip().lower() or (config.get("providers") or {}).get("tts")
         voice = config.get("voice") or {}
-        await default_registry.get_tts(tts_name).warm(
+        tts = default_registry.get_tts(tts_name)
+        # Open it at the phone line's rate when the voice can speak at it (the session asks for the same)
+        rate = TelephonyProvider.carrier_sample_rate
+        await tts.warm(
             voice_id=voice.get("voice_id"),
             speed=voice.get("speed") or 1.0,
             language=(config.get("languages") or {}).get("primary"),
+            **({"sample_rate": rate} if rate in getattr(tts, "native_sample_rates", ()) else {}),
         )
     except Exception as e:
         logger.warning(f"Could not warm the voice for agent version {agent_version_id}: {type(e).__name__}: {e}")
@@ -407,8 +411,11 @@ async def exotel_inbound_call_webhook(
             )
             return Response(content=rejection, media_type=media_type)
 
-        allowed, block_reason, _ = check_call_allowed(db, route.client_id)
+        # Reserves the call's credit budget under the wallet lock; the Call created below commits it
+        allowed, block_reason, _, credit_budget = call_budget(
+            db, route.client_id, agent_max_call_seconds(db, route.agent_version_id), lock=True)
         if not allowed:
+            db.commit()  # releases the wallet lock
             logger.warning(f"Rejecting inbound call for client {route.client_id}: {block_reason}")
             rejection = telephony_provider.generate_reject_response(
                 "This service is temporarily unavailable. Please call back later."
@@ -434,7 +441,8 @@ async def exotel_inbound_call_webhook(
                 destination_number=payload.destination_number,
                 status="RINGING",
                 started_at=datetime.now(timezone.utc),
-                metadata_=payload.raw_params
+                metadata_={**(payload.raw_params or {}),
+                           **({"credit_budget": credit_budget} if credit_budget is not None else {})},
             ))
 
         # 6. Start the RuntimeSession. Exotel hangs up if this webhook takes more than a few

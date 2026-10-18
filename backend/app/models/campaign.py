@@ -39,6 +39,9 @@ class Campaign(Base):
     retry_intervals_min = Column(JSON, nullable=False, default=lambda: [30, 60])
     retry_on = Column(JSON, nullable=False, default=lambda: ["no-answer", "busy", "failed"])
     next_caller_index = Column(Integer, nullable=False, default=0)
+    # Details every call in the campaign receives (e.g. the course and demo timings of a batch announcement),
+    # keyed by the agent's input variable names; a recipient's own variables override them
+    variables = Column(JSON, nullable=True, default=dict)
 
     # Optional results webhook: every finished recipient is POSTed here, signed with webhook_secret
     webhook_url = Column(Text, nullable=True)

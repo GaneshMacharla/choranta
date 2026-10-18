@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   Bot,
@@ -21,7 +21,10 @@ import {
   FlaskConical,
   Copy,
   Database,
+  MoreHorizontal,
+  FileText,
 } from 'lucide-react';
+import { SystemPromptPanel } from '../components/agents/SystemPromptPanel';
 import { useAuth } from '../context/AuthContext';
 import { agentsService } from '../services/agents';
 import { configurationService } from '../services/configuration';
@@ -92,6 +95,10 @@ const normalizeConfig = (raw: any): AgentConfigurationData => ({
     escalation_rules: Array.isArray(raw?.instructions?.escalation_rules)
       ? raw.instructions.escalation_rules
       : [],
+    discovery_questions: Array.isArray(raw?.instructions?.discovery_questions) ? raw.instructions.discovery_questions : [],
+    offer_points: Array.isArray(raw?.instructions?.offer_points) ? raw.instructions.offer_points : [],
+    next_step: raw?.instructions?.next_step || '',
+    script_source: raw?.instructions?.script_source || '',
   },
   conversation: {
     tone: raw?.conversation?.tone || 'professional',
@@ -149,12 +156,35 @@ export const AgentDetailPage: React.FC = () => {
   const [knowledgeList, setKnowledgeList] = useState<KnowledgeSource[]>([]);
   const [toolsList, setToolsList] = useState<Tool[]>([]);
 
-  // Navigation tab (?tab=variables/tools/versions; anything else, e.g. ?tab=tests, opens Build & test)
+  // Navigation tab (?tab=test/tests/voice opens Test, ?tab=variables/tools/versions/prompt those; anything else Configure)
   const [searchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState<'build' | 'variables' | 'tools' | 'versions'>(
-    requestedTab === 'variables' || requestedTab === 'tools' || requestedTab === 'versions' ? requestedTab : 'build'
+  const [activeTab, setActiveTab] = useState<'configure' | 'test' | 'variables' | 'tools' | 'versions' | 'prompt'>(
+    requestedTab === 'variables' || requestedTab === 'tools' || requestedTab === 'versions' || requestedTab === 'prompt'
+      ? requestedTab
+      : requestedTab === 'test' || requestedTab === 'tests' || requestedTab === 'voice'
+        ? 'test'
+        : 'configure'
   );
+
+  // Header overflow menu (Identity, Validate Spec)
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setIsMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [isMenuOpen]);
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -180,11 +210,13 @@ export const AgentDetailPage: React.FC = () => {
   const [isComparing, setIsComparing] = useState(false);
 
   // Auth & Voice Catalog State
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  // Only admins publish versions (the server enforces it too)
+  const isAdmin = user?.role === 'ADMIN';
 
   const [voicesList, setVoicesList] = useState<CartesiaVoice[]>([]);
   const [isVoicePickerOpen, setIsVoicePickerOpen] = useState(false);
-  // A voice was picked in the open picker: it is saved (and published) when the picker closes
+  // A voice was picked in the open picker: it is saved to the draft when the picker closes
   const [voicePicked, setVoicePicked] = useState(false);
   // Edit Metadata Modal State
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -316,27 +348,23 @@ export const AgentDetailPage: React.FC = () => {
     }
   };
 
-  // A newly picked voice is saved straight away so it can't be lost, and published so the next test call uses it.
-  // A live employee's voice is only saved: its calls switch voice when the admin presses Publish.
+  // A newly picked voice is saved to the draft straight away so it can't be lost. It is never published here:
+  // tests and calls switch voice when an admin presses Publish.
   const handleVoiceChosen = async () => {
-    if (!id || !config || !agent) return;
-    setIsPublishing(true);
+    if (!id || !config) return;
+    setIsSaving(true);
     try {
       const saved = await configurationService.updateConfiguration(id, config);
       setConfig(normalizeConfig(saved.configuration));
       setIsDirty(false);
-      if (agent.status === 'DEPLOYED') {
-        setActionSuccess('Voice saved. Press Publish to use it on live calls and tests.');
-      } else {
-        const newVersion = await configurationService.createVersion(id);
-        setVersions(await agentsService.getVersions(id));
-        setActionSuccess(`Voice saved and published as version ${newVersion.version_number}. Tests now use it.`);
-      }
+      setActionSuccess(
+        isAdmin ? 'Voice saved. Press Publish to use it on tests and calls.' : 'Voice saved. An admin publishes it for tests and calls.'
+      );
       setTimeout(() => setActionSuccess(null), 5000);
     } catch (err: any) {
       alert(`Couldn't save the voice: ${err.message || 'Unknown error'}`);
     } finally {
-      setIsPublishing(false);
+      setIsSaving(false);
     }
   };
 
@@ -410,7 +438,7 @@ export const AgentDetailPage: React.FC = () => {
       await fetchAllData();
       setIsDirty(false);
       setActionSuccess(`Draft restored from Version ${versionNumber}.`);
-      setActiveTab('build');
+      setActiveTab('configure');
       setTimeout(() => setActionSuccess(null), 4000);
     } catch (err: any) {
       alert(`Rollback failed: ${err.message || 'Failed to restore version.'}`);
@@ -548,25 +576,6 @@ export const AgentDetailPage: React.FC = () => {
         {/* TOP ACTION BUTTONS */}
         <div className="flex flex-wrap items-center gap-2 pt-2 lg:pt-0">
           <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsEditModalOpen(true)}
-            title="Edit Agent Identity and Status"
-          >
-            <Edit2 className="h-3.5 w-3.5 mr-1.5 text-slate-400" /> Identity
-          </Button>
-
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleValidateSpec}
-            isLoading={isValidating}
-            title="Validate configuration completeness against canonical specification"
-          >
-            <Check className="h-3.5 w-3.5 mr-1.5 text-blue-400" /> Validate Spec
-          </Button>
-
-          <Button
             variant="secondary"
             size="sm"
             onClick={handleSaveDraft}
@@ -577,44 +586,69 @@ export const AgentDetailPage: React.FC = () => {
             <Save className="h-3.5 w-3.5 mr-1.5 text-[#00df8f]" /> Save Draft
           </Button>
 
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setActiveTab('build')}
-            className="bg-emerald-600 hover:bg-emerald-500 text-white border-none shadow-md"
-            title="Switch to Tests tab to run deterministic voice scenarios"
-          >
-            <FlaskConical className="h-3.5 w-3.5 mr-1.5" /> Test Agent
-          </Button>
+          {isAdmin && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handlePublishAndTest}
+              isLoading={isPublishing}
+              title="Save your changes as a new version; tests use the latest version"
+            >
+              <UploadCloud className="h-3.5 w-3.5 mr-1.5" /> Publish
+            </Button>
+          )}
 
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={handlePublishAndTest}
-            isLoading={isPublishing}
-            title="Save your changes as a new version; tests use the latest version"
-          >
-            <UploadCloud className="h-3.5 w-3.5 mr-1.5" /> Publish
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setActiveTab('versions')}
-            title="View immutable version history"
-          >
-            <History className="h-3.5 w-3.5 mr-1.5 text-slate-400" /> History ({versions.length})
-          </Button>
+          <div ref={menuRef} className="relative">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsMenuOpen((open) => !open)}
+              isLoading={isValidating}
+              title="More actions"
+              aria-haspopup="menu"
+              aria-expanded={isMenuOpen}
+            >
+              <MoreHorizontal className="h-4 w-4 text-slate-400" />
+            </Button>
+            {isMenuOpen && (
+              <div role="menu" className="absolute right-0 z-20 mt-1 w-48 overflow-hidden rounded-lg border border-[#1b1f2d] bg-[#0c0e14] py-1 shadow-xl">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsEditModalOpen(true);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-300 hover:bg-[#151824] hover:text-slate-100"
+                >
+                  <Edit2 className="h-3.5 w-3.5 text-slate-400" /> Edit identity &amp; status
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    handleValidateSpec();
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-300 hover:bg-[#151824] hover:text-slate-100"
+                >
+                  <Check className="h-3.5 w-3.5 text-blue-400" /> Validate spec
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* CANVAS SECTION NAVIGATION (STRICT ORDER: INSTRUCTIONS, VARIABLES, TOOLS, SETTINGS, TESTS) */}
       <div className="flex overflow-x-auto rounded-xl border border-[#1b1f2d] bg-[#0c0e14] p-1 no-scrollbar">
         {[
-          { id: 'build', label: 'Build & test', icon: Bot },
+          { id: 'configure', label: 'Configure', icon: Bot },
+          { id: 'test', label: 'Test', icon: FlaskConical },
           { id: 'variables', label: `Variables (${config.variables.inputs.length + config.variables.outputs.length})`, icon: Sliders },
           { id: 'tools', label: `Tools (${config.tools.length})`, icon: Wrench },
           { id: 'versions', label: `Versions (${versions.length})`, icon: History },
+          { id: 'prompt', label: 'System prompt', icon: FileText },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -635,8 +669,9 @@ export const AgentDetailPage: React.FC = () => {
         })}
       </div>
 
-      {activeTab === 'build' && (
+      {(activeTab === 'configure' || activeTab === 'test') && (
         <AgentBuildView
+          view={activeTab}
           agent={agent}
           config={config}
           updateDraft={updateDraft}
@@ -644,6 +679,7 @@ export const AgentDetailPage: React.FC = () => {
           versions={versions}
           onPublish={handlePublishAndTest}
           isPublishing={isPublishing}
+          canPublish={isAdmin}
           knowledgeList={knowledgeList}
           onToggleKnowledge={handleToggleKnowledge}
           onAgentKnowledgeChange={() =>
@@ -920,6 +956,8 @@ export const AgentDetailPage: React.FC = () => {
       {/* ========================================================= */}
       {/* TAB 11: VERSIONS & HISTORY */}
       {/* ========================================================= */}
+      {activeTab === 'prompt' && <SystemPromptPanel agentId={agent.id} config={config} isDirty={isDirty} />}
+
       {activeTab === 'versions' && (
         <div className="space-y-6">
           {/* Comparison Bar */}
@@ -980,7 +1018,7 @@ export const AgentDetailPage: React.FC = () => {
                 <EmptyState
                   icon={<History className="h-6 w-6" />}
                   title="No published versions yet"
-                  description="Click 'Publish Version' in the top action bar to create Version 1 from current draft."
+                  description={isAdmin ? "Click 'Publish' in the top action bar to create Version 1 from the current draft." : 'An admin publishes Version 1 from the current draft.'}
                 />
               </div>
             ) : (

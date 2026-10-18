@@ -42,6 +42,7 @@ class EvaluationEngine:
         caller_goal: str = "",
         tenant_context: Optional[Dict[str, Any]] = None,
         runtime_error: Optional[str] = None,
+        voice_metrics: Optional[Dict[str, Any]] = None,
     ) -> EvaluationSummary:
         assertions: List[AssertionResult] = []
 
@@ -294,13 +295,19 @@ class EvaluationEngine:
             )
 
         # 8. CONVERSATION QUALITY EVALUATION (PLUGGABLE)
-        quality_results = self.quality_evaluator.evaluate_quality(
-            turns=turns,
-            caller_goal=caller_goal,
-            expected=expected,
-            business_state=business_state,
-        )
-        assertions.extend(quality_results)
+        # Its keyword checks are English-only, so voice runs (often Telugu or Hindi) use them only on request
+        if voice_metrics is None or expected.get("quality_checks"):
+            quality_results = self.quality_evaluator.evaluate_quality(
+                turns=turns,
+                caller_goal=caller_goal,
+                expected=expected,
+                business_state=business_state,
+            )
+            assertions.extend(quality_results)
+
+        # 9. VOICE CALL CHECKS (voice test runs only)
+        if voice_metrics is not None:
+            assertions.extend(voice_assertions(expected, voice_metrics, turns))
 
         # AGGREGATE SUMMARY
         error_count = sum(1 for a in assertions if a.status == "ERROR")
@@ -414,3 +421,94 @@ class DeterministicQualityEvaluator:
         )
 
         return results
+
+
+# Voice checks that apply when a scenario doesn't set its own threshold (expected_json keys of the same name)
+DEFAULT_VOICE_THRESHOLDS: Dict[str, Any] = {
+    "max_response_gap_ms": 2500,      # longest silence after the caller finishes before the agent speaks
+    "avg_response_gap_ms": 1800,
+    "max_interrupt_stop_ms": 600,     # how long the agent keeps talking once the caller cuts in
+    "min_transcript_accuracy": 0.8,   # share of the caller's words the agent heard correctly (real runs)
+    "max_talk_over_ms": 300,          # agent audio while the caller was still mid-sentence
+    "expected_call_end": "any",       # "agent", "caller" or "any"
+}
+
+
+def voice_assertions(expected: Dict[str, Any], metrics: Dict[str, Any], turns: List[Dict[str, Any]]) -> List[AssertionResult]:
+    """Rule-based checks on how a voice call went: timing, interruptions, hearing the caller, ending."""
+    limits = {**DEFAULT_VOICE_THRESHOLDS, **{k: v for k, v in expected.items() if k in DEFAULT_VOICE_THRESHOLDS}}
+    results: List[AssertionResult] = []
+
+    def check(name: str, passed: bool, expected_text: str, actual: Any, explanation: str) -> None:
+        results.append(AssertionResult(
+            name=name, category="voice", status="PASS" if passed else "FAIL",
+            expected=expected_text, actual=actual, evidence="Voice test call timings", explanation=explanation,
+        ))
+
+    unanswered = metrics.get("unanswered_turns") or []
+    check("voice:every_turn_answered", not unanswered, "The agent answers every caller line",
+          unanswered or "all answered",
+          "Every caller line got a spoken reply." if not unanswered
+          else f"No reply within the time limit after caller line(s) {unanswered}.")
+
+    gaps = metrics.get("response_gaps_ms") or []
+    if gaps:
+        slowest = max(gaps)
+        slow_turns = [t["turn_number"] for t in turns if (t.get("response_gap_ms") or 0) > limits["max_response_gap_ms"]]
+        check("voice:max_response_gap", slowest <= limits["max_response_gap_ms"],
+              f"Every reply starts within {limits['max_response_gap_ms']} ms", f"{slowest} ms",
+              f"Slowest reply started {slowest} ms after the caller finished"
+              + (f" (slow turns: {slow_turns})." if slow_turns else "."))
+        average = metrics.get("avg_response_gap_ms") or 0
+        check("voice:avg_response_gap", average <= limits["avg_response_gap_ms"],
+              f"Average reply gap <= {limits['avg_response_gap_ms']} ms", f"{average} ms",
+              f"Replies started {average} ms after the caller finished, on average.")
+
+    for turn in turns:
+        if turn.get("behavior") != "interrupt":
+            continue
+        n = turn["turn_number"]
+        if not turn.get("agent_was_speaking", True):
+            results.append(AssertionResult(
+                name=f"voice:interrupt_stop:turn_{n}", category="voice", status="PASS",
+                expected="Agent stops when the caller cuts in", actual="agent had already finished",
+                evidence="Voice test call timings",
+                explanation=f"Turn {n}: the agent's reply ended before the caller cut in, so there was nothing to stop.",
+            ))
+            continue
+        stop = turn.get("interrupt_stop_ms")
+        check(f"voice:interrupt_stop:turn_{n}", stop is not None and stop <= limits["max_interrupt_stop_ms"],
+              f"Agent stops within {limits['max_interrupt_stop_ms']} ms of the caller cutting in",
+              f"{stop} ms" if stop is not None else "kept talking",
+              f"Turn {n}: the agent stopped {stop} ms after the caller started talking." if stop is not None
+              else f"Turn {n}: the agent did not stop when the caller cut in.")
+
+    for turn in turns:
+        if turn.get("behavior") == "backchannel":
+            kept = bool(turn.get("agent_kept_talking"))
+            check(f"voice:backchannel:turn_{turn['turn_number']}", kept,
+                  f"Agent keeps talking through '{turn.get('caller')}'", "kept talking" if kept else "stopped",
+                  "The short acknowledgement didn't derail the reply." if kept
+                  else "The agent treated a short acknowledgement as an interruption.")
+
+    accuracy = metrics.get("transcript_accuracy")
+    if accuracy is not None and metrics.get("provider_mode") == "real":
+        worst = min((t for t in turns if "transcript_accuracy" in t), key=lambda t: t["transcript_accuracy"], default=None)
+        check("voice:transcript_accuracy", accuracy >= limits["min_transcript_accuracy"],
+              f"Agent hears >= {round(limits['min_transcript_accuracy'] * 100)}% of the caller's words",
+              f"{round(accuracy * 100)}%",
+              f"Average {round(accuracy * 100)}% of words heard correctly"
+              + (f"; worst: said \"{worst['caller']}\", heard \"{worst.get('heard', '')}\"." if worst else "."))
+
+    talk_over = metrics.get("talk_over_ms") or 0
+    check("voice:no_talking_over_caller", talk_over <= limits["max_talk_over_ms"],
+          f"Agent talks over the caller for <= {limits['max_talk_over_ms']} ms", f"{talk_over} ms",
+          "The agent waited for the caller to finish." if talk_over <= limits["max_talk_over_ms"]
+          else f"The agent started speaking while the caller was still talking ({talk_over} ms).")
+
+    wanted = str(limits["expected_call_end"] or "any").lower()
+    ended_by = metrics.get("call_ended_by")
+    if wanted in ("agent", "caller"):
+        check("voice:call_end", ended_by == wanted, f"Call ended by the {wanted}", ended_by,
+              f"The call was ended by the {ended_by} ({metrics.get('end_reason')}).")
+    return results

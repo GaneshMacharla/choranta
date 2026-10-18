@@ -1,12 +1,13 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin
 from app.models.user import User
 from app.core.config import settings
+from app.services.carrier_costs import carrier_cost_report
 from app.services.pricing import (
     PricingSnapshot, credit_packs_out, estimated_credits_per_minute, get_pricing, recent_charge_per_minute, update_pricing,
 )
@@ -29,8 +30,6 @@ def public_credit_packs(db: Session = Depends(get_db)) -> Dict[str, Any]:
 
 class UpdatePricingRequest(BaseModel):
     profit_percent: float = Field(..., description="Profit added on top of each call's real cost, in percent")
-    payg_max_concurrent_calls: Optional[int] = Field(
-        None, ge=1, description="Default simultaneous calls per client (clients without a plan); admins can override per client")
 
 
 def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
@@ -41,7 +40,6 @@ def _preview(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
 def _response(db: Session, pricing: PricingSnapshot) -> Dict[str, Any]:
     return {
         "profit_percent": pricing.profit_percent,
-        "payg_max_concurrent_calls": pricing.payg_max_concurrent_calls,
         "updated_at": pricing.updated_at.isoformat() if pricing.updated_at else None,
         "updated_by": pricing.updated_by,
         "preview": _preview(db, pricing),
@@ -61,5 +59,15 @@ def update_pricing_settings(
     current_user: User = Depends(require_admin)
 ):
     """Sets the profit % added to every call's real cost (admin only)."""
-    pricing = update_pricing(db, req.profit_percent, current_user.id, req.payg_max_concurrent_calls)
+    pricing = update_pricing(db, req.profit_percent, current_user.id)
     return _response(db, pricing)
+
+
+@router.get("/carrier-check")
+def carrier_cost_check(
+    days: int = Query(30, ge=1, le=90),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Choranta's phone-line cost estimate vs what Exotel actually charged per call (admin only)."""
+    return carrier_cost_report(db, days=days)

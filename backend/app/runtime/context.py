@@ -97,15 +97,8 @@ class RuntimeContext:
             company_name = "Apex Realty Bangalore"  # Default realistic mock company
         metadata["company_name"] = str(company_name).strip()
 
-        if "{{user_name}}" in greeting:
-            greeting = greeting.replace("{{user_name}}", metadata["user_name"])
-
-        if "{{company_name}}" in greeting:
-            greeting = greeting.replace("{{company_name}}", metadata["company_name"])
-
-        # Clean any remaining unresolved double curly bracket placeholders
-        import re
-        greeting = re.sub(r"\{\{[^}]+\}\}", "", greeting).strip()
+        # Fill every placeholder (e.g. a campaign's {{course_name}}) and drop any left unresolved
+        greeting = self.fill_placeholders(greeting)
         # Open the call in the agent's primary language even when the greeting was written in English
         return localize_greeting(greeting, spec.languages.primary if spec.languages else "en",
                                  keep=[metadata["company_name"], metadata["user_name"]])
@@ -147,7 +140,7 @@ class RuntimeContext:
 
         text = re.sub(r"\{\{([^}]+)\}\}", value, text or "")
         text = re.sub(r"\s*,\s*(?=[.!?,]|$)", "", text)  # "time, ." -> "time."
-        text = re.sub(r"\s+([,.!?])", r"", text)  # "Thanks , from" -> "Thanks, from"
+        text = re.sub(r"\s+([,.!?])", r"\1", text)  # "Thanks , from" -> "Thanks, from"
         return re.sub(r"\s{2,}", " ", text).strip()
 
     def _compile_system_prompt(self, spec: CanonicalAgentSpec) -> str:

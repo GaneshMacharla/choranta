@@ -69,9 +69,9 @@ async def test_real_estate_template_creation_and_e2e_flow():
         assert config["languages"]["primary"] == "en-IN"
         assert "hi" in config["languages"]["supported"]
         assert "te" in config["languages"]["supported"]
-        assert config["voice"]["voice_id"] == "4459a9a5-69d6-4680-b970-e13dc51845b6" and config["voice"]["provider"] == "cartesia"  # Siya
+        assert config["voice"]["voice_id"] == "ishita" and config["voice"]["provider"] == "sarvam"
         assert config["providers"]["stt"] == config["providers"]["llm"] == "sarvam"
-        assert config["providers"]["tts"] == "cartesia"
+        assert config["providers"]["tts"] == "sarvam"
 
         # Variables: 2 inputs, 3 outputs (minimal)
         input_vars = config["variables"]["inputs"]

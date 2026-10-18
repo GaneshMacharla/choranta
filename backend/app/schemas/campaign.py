@@ -25,6 +25,8 @@ class CampaignSettings(BaseModel):
     retry_intervals_min: List[int] = Field(default_factory=lambda: [30, 60])
     retry_on: List[str] = Field(default_factory=lambda: ["no-answer", "busy", "failed"])
     webhook_url: Optional[str] = Field(None, max_length=2000)
+    # Campaign details every call receives, keyed by the agent's input variable names (e.g. course_name)
+    variables: Dict[str, str] = Field(default_factory=dict)
 
 
 class CreateCampaignRequest(CampaignSettings):
@@ -46,6 +48,7 @@ class UpdateCampaignRequest(BaseModel):
     retry_intervals_min: Optional[List[int]] = None
     retry_on: Optional[List[str]] = None
     webhook_url: Optional[str] = Field(None, max_length=2000)  # "" removes the webhook
+    variables: Optional[Dict[str, str]] = None
 
 
 class CsvRecipientsRequest(BaseModel):
@@ -111,6 +114,7 @@ class CampaignResponse(BaseModel):
     retry_on: List[str]
     webhook_url: Optional[str] = None
     webhook_secret: Optional[str] = None
+    variables: Optional[Dict[str, Any]] = None
     launched_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime

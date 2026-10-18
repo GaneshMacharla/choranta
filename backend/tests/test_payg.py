@@ -12,7 +12,6 @@ from app.models.call import Call
 from app.models.subscription import ClientSubscription, Plan
 from app.services import billing, campaigns, subscriptions
 from app.services.invoice_pdf import render_invoice_pdf
-from app.services.pricing import get_pricing, update_pricing
 from test_billing import company  # noqa: F401
 from test_phase3c_telephony import telephony_setup  # noqa: F401
 
@@ -46,25 +45,39 @@ def test_without_gst_the_full_payment_becomes_credits_with_a_receipt(db: Session
     assert render_invoice_pdf(invoice).startswith(b"%PDF")
 
 
-def test_pay_as_you_go_concurrency_default_and_client_override(db: Session, telephony_setup, company, payg):
+def test_pay_as_you_go_calls_at_a_time_follow_the_wallet(db: Session, telephony_setup, company, payg, monkeypatch):
+    # 7 credits a minute x 10-minute calls: each live call holds 70 credits
+    monkeypatch.setattr(billing, "budget_credits_per_minute", lambda db: 7.0)
+    monkeypatch.setattr(settings, "CALL_MAX_DURATION_S", 600, raising=False)
+    monkeypatch.setattr(settings, "MAX_CONCURRENT_CALLS_PER_CLIENT", 50, raising=False)
     cid = telephony_setup["client"].id
+    assert billing.call_hold_credits(db) == 70.0
+
     billing.record_payment(db, cid, 500, None, None)
-    assert billing.client_concurrency_limit(db, cid) == settings.DEFAULT_PAYG_MAX_CONCURRENT_CALLS == 3
-    assert campaigns.concurrency_cap(db, cid) == 2  # one line kept free for inbound calls
+    assert billing.client_concurrency_limit(db, cid) == 7
+    assert campaigns.concurrency_cap(db, cid) == 6  # one line kept free for inbound calls
 
-    _live_calls(db, telephony_setup, 3)
-    allowed, _, code = billing.check_call_allowed(db, cid)
-    assert not allowed and code == "CONCURRENCY"
+    _live_calls(db, telephony_setup, 7)
+    allowed, reason, code = billing.check_call_allowed(db, cid)
+    assert not allowed and code == "CONCURRENCY" and "add credits" in reason
 
-    telephony_setup["client"].max_concurrent_calls = 5
-    db.commit()
+    # Adding credits allows more calls at once
+    billing.record_payment(db, cid, 500, None, None)
+    assert billing.client_concurrency_limit(db, cid) == 14
     assert billing.check_call_allowed(db, cid)[0]
-    assert campaigns.concurrency_cap(db, cid) == 4
 
-    telephony_setup["client"].max_concurrent_calls = None
+    # Never above the platform cap
+    billing.record_payment(db, cid, 10000, None, None)
+    assert billing.client_concurrency_limit(db, cid) == 50
+
+    # A balance too small for a short call starts none (2 minutes x 7 = 14 credits needed)
+    db.query(Call).filter(Call.client_id == cid).delete()
+    wallet = billing.get_wallet(db, cid)
+    wallet.balance_inr = 13.0
     db.commit()
-    update_pricing(db, get_pricing(db).profit_percent, None, payg_max_concurrent_calls=1)
+    assert billing.client_concurrency_limit(db, cid) == 1
     assert campaigns.concurrency_cap(db, cid) == 1  # never below one campaign line
+    assert billing.check_call_allowed(db, cid)[2] == "NO_BALANCE"
 
 
 def test_ended_plan_falls_back_to_credits_instead_of_blocking(db: Session, telephony_setup, company, payg):

@@ -109,6 +109,12 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
             </span>
             {wallet.calls_blocked && <span className="ml-2 text-rose-300">Calls paused: {wallet.calls_blocked_reason}</span>}
             {!wallet.calls_blocked && wallet.low_balance && <span className="ml-2 text-amber-300">Low balance</span>}
+            {!wallet.subscription && wallet.balance_inr > 0 && wallet.max_concurrent_calls != null && (
+              <span className="block text-xs text-slate-500">
+                Covers up to {wallet.max_concurrent_calls} call{wallet.max_concurrent_calls === 1 ? '' : 's'} at a time
+                ({wallet.live_calls} live now)
+              </span>
+            )}
           </div>
           {isAdmin && (
             <div className="flex flex-wrap gap-2">

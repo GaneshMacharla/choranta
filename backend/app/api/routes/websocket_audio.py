@@ -173,6 +173,9 @@ class WebSocketMediaSession(TelephonyMediaSession):
     def _on_sentence_playing(self, turn, sentence) -> None:
         self._notify({"type": "assistant_text_delta", "text": sentence.text, "filler": bool(sentence.filler_kind)})
 
+    def _on_sentence_text(self, turn, sentence, text) -> None:
+        self._notify({"type": "assistant_text_delta", "text": text, "filler": False})
+
     def _emit(self, event_type: RuntimeEventType, payload: Dict[str, Any]) -> None:
         super()._emit(event_type, payload)
         if event_type == RuntimeEventType.USER_TRANSCRIPT_FINAL:

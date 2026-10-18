@@ -1,4 +1,4 @@
-import { request } from './api';
+import { markUtc, request } from './api';
 import { Call, CallDetail } from './telephony';
 import { AvailableNumber, CallUsage, NumberPrice, NumberType, PaymentOrder, Subscription } from './plans';
 import { CreditPack } from './pricing';
@@ -22,6 +22,9 @@ export interface Wallet {
   low_balance: boolean;
   calls_blocked: boolean;
   calls_blocked_reason: string | null;
+  /** Calls at a time the balance covers (each live call holds a full-length call's credits); null = no limit */
+  max_concurrent_calls: number | null;
+  live_calls: number;
   /** False until the company is GST-registered: no GST is charged and payments get a receipt */
   gst_registered: boolean;
   subscription: Subscription | null;
@@ -154,7 +157,7 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
   const response = await fetch(`/api${path}`, { method: 'POST', body: form, headers: token ? { Authorization: `Bearer ${token}` } : {} });
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(data?.error || data?.detail || response.statusText || 'Upload failed.');
-  return data as T;
+  return markUtc(data) as T;
 }
 
 export interface PaymentInstructions {

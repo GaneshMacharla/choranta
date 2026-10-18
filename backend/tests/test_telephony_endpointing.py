@@ -117,3 +117,16 @@ def test_utterance_without_pause_is_not_marked_same_as_pause():
     events = _feed(ep, SILENCE, 800)
     assert [e.kind for e in events] == ["utterance"]
     assert events[0].same_as_pause is False
+
+
+def test_quiet_phone_line_voice_is_heard_with_call_settings():
+    # Speech on a phone line can arrive at RMS ~200 over a near-silent floor: the call settings must hear it
+    from app.runtime.telephony.session import _endpointer_config
+
+    quiet_speech = _tone(350, freq=300.0)
+    assert [e.kind for e in _feed(SpeechEndpointer(EndpointerConfig()), quiet_speech, 800)] == []  # old 350 floor
+    ep = SpeechEndpointer(_endpointer_config())
+    _feed(ep, NOISE, 1000)
+    events = _feed(ep, quiet_speech, 800) + _feed(ep, SILENCE, 1000)
+    assert "speech_start" in [e.kind for e in events]
+    assert [e for e in events if e.kind == "utterance"]

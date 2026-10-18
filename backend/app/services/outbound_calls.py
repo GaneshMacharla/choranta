@@ -22,7 +22,7 @@ from app.runtime.events.types import RuntimeEventType
 from app.runtime.providers.registry import default_registry
 from app.runtime.readiness.checker import RuntimeReadinessChecker
 from app.services import phone_numbers
-from app.services.billing import check_call_allowed
+from app.services.billing import agent_max_call_seconds, call_budget, check_call_allowed
 
 logger = logging.getLogger("choranta.services.outbound_calls")
 
@@ -129,7 +129,9 @@ def place_outbound_call(
     if not client_id:
         client_id = db.get(Agent, agent_id).client_id
 
-    allowed, block_reason, block_code = (True, None, None) if is_test else check_call_allowed(db, client_id)
+    # Quick check first (no lock); the credit budget is reserved under the wallet lock just before dialing
+    max_duration_s = agent_max_call_seconds(db, agent_version_id)
+    allowed, block_reason, block_code = (True, None, None) if is_test else check_call_allowed(db, client_id, max_duration_s)
     if not allowed:
         raise OutboundCallError(block_code or "NOT_ALLOWED", block_reason, 429 if block_code == "CONCURRENCY" else 402)
 
@@ -147,6 +149,38 @@ def place_outbound_call(
     flow_url = f"http://my.exotel.com/{account_sid}/exoml/start_voice/{flow_id}"
     status_callback_url = with_webhook_token(f"{base_url}/api/telephony/exotel/status")
 
+    metadata = {
+        "custom_field": custom_field,
+        "variables": variables or {},
+        "is_test": is_test,
+        **(extra_metadata or {}),
+    }
+    if not is_test:
+        # Reserve this call's credit budget and save the call before dialing, under the wallet lock,
+        # so calls started at the same moment can't spend the same credits
+        allowed, block_reason, block_code, budget = call_budget(db, client_id, max_duration_s, lock=True)
+        if not allowed:
+            db.commit()  # releases the wallet lock
+            raise OutboundCallError(block_code or "NOT_ALLOWED", block_reason, 429 if block_code == "CONCURRENCY" else 402)
+        if budget is not None:
+            metadata["credit_budget"] = budget
+    saved_call = CallRepository(db).create(Call(
+        id=generate_unique_id("call", 10),
+        client_id=client_id,
+        agent_id=agent_id,
+        agent_version_id=agent_version_id,
+        phone_number_id=phone_record.id if phone_record else None,
+        provider=provider_name,
+        provider_call_id=generate_unique_id("pending", 12),  # replaced by the carrier's id once dialed
+        direction="OUTBOUND",
+        caller_number=caller_number,
+        destination_number=destination_number,
+        status="INITIATED",
+        started_at=datetime.now(timezone.utc),
+        duration_seconds=0.0,
+        metadata_=metadata,
+    ))
+
     telephony_provider = default_registry.get_telephony(provider_name)
     try:
         call_result = telephony_provider.initiate_outbound_call(
@@ -158,34 +192,17 @@ def place_outbound_call(
         )
     except Exception as exc:
         logger.error(f"Failed to initiate outbound call: {exc}")
+        # Releases the reserved budget: failed calls don't hold credits
+        saved_call.status = "FAILED"
+        saved_call.termination_reason = "carrier_error"
+        saved_call.ended_at = datetime.now(timezone.utc)
+        db.commit()
         raise OutboundCallError("CARRIER", f"Carrier error: {exc}", 502)
 
     exotel_call_obj = call_result.get("Call") or {}
-    provider_call_id = exotel_call_obj.get("Sid") or generate_unique_id("call", 12)
-
-    metadata = {
-        "exotel_response": call_result,
-        "custom_field": custom_field,
-        "variables": variables or {},
-        "is_test": is_test,
-        **(extra_metadata or {}),
-    }
-    saved_call = CallRepository(db).create(Call(
-        id=generate_unique_id("call", 10),
-        client_id=client_id,
-        agent_id=agent_id,
-        agent_version_id=agent_version_id,
-        phone_number_id=phone_record.id if phone_record else None,
-        provider=provider_name,
-        provider_call_id=provider_call_id,
-        direction="OUTBOUND",
-        caller_number=caller_number,
-        destination_number=destination_number,
-        status="INITIATED",
-        started_at=datetime.now(timezone.utc),
-        duration_seconds=0.0,
-        metadata_=metadata,
-    ))
+    saved_call.provider_call_id = exotel_call_obj.get("Sid") or generate_unique_id("call", 12)
+    saved_call.metadata_ = {"exotel_response": call_result, **metadata}
+    saved_call = CallRepository(db).update(saved_call)
 
     EventEmitter(db).emit(
         RuntimeEventType.CALL_INITIATED,
@@ -193,6 +210,6 @@ def place_outbound_call(
         agent_id=agent_id,
         agent_version_id=agent_version_id,
         client_id=client_id,
-        payload={"call_id": saved_call.id, "direction": "OUTBOUND", "provider_call_id": provider_call_id}
+        payload={"call_id": saved_call.id, "direction": "OUTBOUND", "provider_call_id": saved_call.provider_call_id}
     )
     return saved_call

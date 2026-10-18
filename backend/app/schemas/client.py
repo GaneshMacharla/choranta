@@ -2,7 +2,18 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field, field_validator, ConfigDict
+
+
+def _valid_timezone(v: str) -> str:
+    """An IANA timezone name such as Asia/Kolkata (calling windows and dates use it)."""
+    clean = (v or "").strip()
+    try:
+        ZoneInfo(clean)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError(f"Unknown timezone '{clean}'. Use a name like Asia/Kolkata.")
+    return clean
 
 
 class BusinessTypeEnum(str, Enum):
@@ -49,7 +60,7 @@ class ClientBase(BaseModel):
     contact_name: Optional[str] = Field(None, max_length=255)
     contact_email: Optional[str] = Field(None, max_length=255)
     contact_phone: Optional[str] = Field(None, max_length=64)
-    timezone: str = Field("UTC", max_length=64)
+    timezone: str = Field("Asia/Kolkata", max_length=64)
 
     @field_validator("name")
     @classmethod
@@ -84,7 +95,10 @@ class ClientBase(BaseModel):
 
 
 class ClientCreate(ClientBase):
-    pass
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        return _valid_timezone(v)
 
 
 class ClientUpdate(BaseModel):
@@ -96,8 +110,6 @@ class ClientUpdate(BaseModel):
     contact_phone: Optional[str] = Field(None, max_length=64)
     timezone: Optional[str] = Field(None, max_length=64)
     status: Optional[ClientStatusEnum] = None
-    max_concurrent_calls: Optional[int] = Field(
-        None, ge=0, le=500, description="Simultaneous call limit for this client; 0 = use the platform default")
 
     @field_validator("name")
     @classmethod
@@ -131,12 +143,16 @@ class ClientUpdate(BaseModel):
             return phone
         return None
 
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        return _valid_timezone(v) if v is not None else None
+
 
 class ClientResponse(ClientBase):
     id: str
     client_code: Optional[str] = None
     status: ClientStatusEnum
-    max_concurrent_calls: Optional[int] = None
     agent_count: int = 0
     created_at: datetime
     updated_at: datetime

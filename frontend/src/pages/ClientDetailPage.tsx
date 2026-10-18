@@ -11,14 +11,15 @@ import {
   Plus,
   Edit2,
   UserCheck,
+  Trash2,
 } from 'lucide-react';
 import { clientsService } from '../services/clients';
 import { agentsService } from '../services/agents';
+import { useAuth } from '../context/AuthContext';
 import { Client, Agent, ClientUpdateInput, BusinessType } from '../types';
 import { Card } from '../components/common/Card';
 import { PropertyInventoryCard } from '../components/inventory/PropertyInventoryCard';
 import { ClientBillingCard } from '../components/billing/ClientBillingCard';
-import { ClientCallLimitCard } from '../components/billing/ClientCallLimitCard';
 import { ClientKnowledgeCard } from '../components/knowledge/ClientKnowledgeCard';
 import { ClientCoursesCard } from '../components/courses/ClientCoursesCard';
 import { Button } from '../components/common/Button';
@@ -27,6 +28,7 @@ import { Table, Column } from '../components/common/Table';
 import { Modal } from '../components/common/Modal';
 import { Input } from '../components/common/Input';
 import { Select } from '../components/common/Select';
+import { timezoneOptions } from '../constants/timezones';
 import { LoadingState } from '../components/common/LoadingState';
 import { ErrorState } from '../components/common/ErrorState';
 import { EmptyState } from '../components/common/EmptyState';
@@ -34,6 +36,8 @@ import { EmptyState } from '../components/common/EmptyState';
 export const ClientDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
 
   const [client, setClient] = useState<Client | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -46,6 +50,26 @@ export const ClientDetailPage: React.FC = () => {
   const [editForm, setEditForm] = useState<ClientUpdateInput>({});
   const [editError, setEditError] = useState<string | null>(null);
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
+  // Delete AI employee (admins only)
+  const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleDeleteAgent = async () => {
+    if (!deletingAgent) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await agentsService.delete(deletingAgent.id);
+      setAgents((prev) => prev.filter((a) => a.id !== deletingAgent.id));
+      setDeletingAgent(null);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Could not delete this AI employee.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   // New AI employees go through the full wizard, with this client pre-selected
   const openAgentWizard = () => navigate(`/agents/new?client=${id}`);
@@ -150,13 +174,25 @@ export const ClientDetailPage: React.FC = () => {
       header: 'Actions',
       className: 'text-right',
       render: (a) => (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => navigate(`/agents/${a.id}`)}
-        >
-          View Details
-        </Button>
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => navigate(`/agents/${a.id}`)}
+          >
+            View Details
+          </Button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setDeleteError(null); setDeletingAgent(a); }}
+              className="rounded p-1.5 text-slate-500 hover:bg-red-950/30 hover:text-red-400"
+              title="Delete AI employee"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       ),
     },
   ];
@@ -300,10 +336,39 @@ export const ClientDetailPage: React.FC = () => {
       {id && client.business_type === 'COACHING' && <ClientCoursesCard clientId={id} />}
       {id && <ClientKnowledgeCard clientId={id} />}
 
-      <ClientCallLimitCard client={client} onSaved={setClient} />
       {id && <ClientBillingCard key={billingVersion} clientId={id} />}
 
       {id && <PropertyInventoryCard clientId={id} />}
+
+      {/* DELETE AI EMPLOYEE MODAL */}
+      <Modal
+        isOpen={!!deletingAgent}
+        onClose={() => !isDeleting && setDeletingAgent(null)}
+        title="Delete AI Employee"
+        description="All its versions, configuration, calls and test history are removed. Phone numbers assigned to it are kept and become unassigned."
+        maxWidth="sm"
+      >
+        <div className="space-y-4">
+          <div className="rounded-lg border border-red-900/40 bg-red-950/20 p-3 text-xs text-red-300">
+            You are about to delete <span className="font-semibold text-white">{deletingAgent?.name}</span> ({deletingAgent?.id}). This cannot be undone.
+          </div>
+          {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#102d38]">
+            <Button type="button" variant="ghost" onClick={() => setDeletingAgent(null)} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              className="bg-red-600 hover:bg-red-500 text-white"
+              isLoading={isDeleting}
+              onClick={handleDeleteAgent}
+            >
+              Confirm Delete
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* EDIT CLIENT MODAL */}
       <Modal
@@ -337,8 +402,9 @@ export const ClientDetailPage: React.FC = () => {
               value={editForm.status || 'ACTIVE'}
               onChange={(e) => setEditForm({ ...editForm, status: e.target.value as any })}
             />
-            <Input
+            <Select
               label="Timezone"
+              options={timezoneOptions(editForm.timezone)}
               value={editForm.timezone || 'UTC'}
               onChange={(e) => setEditForm({ ...editForm, timezone: e.target.value })}
             />

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import ValidationException
+from app.models.agent_version import AgentVersion
 from app.models.billing import ClientBillingProfile, ClientWallet, Invoice, WalletTransaction
 from app.models.call import Call
 from app.models.client import Client
@@ -28,7 +29,7 @@ from app.models.runtime_session import RuntimeSession
 from app.models.subscription import CallUsage, Plan
 from app.services import notifications, subscriptions
 from app.services.call_costing import estimate_call_cost
-from app.services.pricing import get_pricing
+from app.services.pricing import budget_credits_per_minute, get_pricing
 
 logger = logging.getLogger("choranta.services.billing")
 
@@ -69,10 +70,49 @@ def live_call_count(db: Session, client_id: str) -> int:
     )
 
 
+def call_hold_credits(db: Session, max_duration_s: Optional[float] = None) -> float:
+    """Credits a full-length call can cost: the budget rate x the call's longest allowed length."""
+    seconds = max(60.0, float(max_duration_s or settings.CALL_MAX_DURATION_S))
+    return budget_credits_per_minute(db) * seconds / 60.0
+
+
+def agent_max_call_seconds(db: Session, agent_version_id: Optional[str]) -> int:
+    """The agent version's own maximum call length, else the platform default."""
+    version = db.get(AgentVersion, agent_version_id) if agent_version_id else None
+    config = (version.configuration_json or {}) if version else {}
+    limits = (config.get("conversation") or {}).get("limits") or {}
+    return int(limits.get("max_call_duration_s") or settings.CALL_MAX_DURATION_S)
+
+
+def held_credits(db: Session, client_id: str) -> Tuple[int, float]:
+    """Live calls and the credits their budgets hold. Calls from before budgets hold a full-length call."""
+    since = subscriptions.utcnow() - LIVE_CALL_WINDOW
+    calls = (
+        db.query(Call.metadata_)
+        .filter(Call.client_id == client_id, Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= since)
+        .all()
+    )
+    held = 0.0
+    for (meta,) in calls:
+        meta = meta or {}
+        if meta.get("is_test"):
+            continue
+        budget = meta.get("credit_budget")
+        held += float(budget) if budget is not None else call_hold_credits(db)
+    return len(calls), held
+
+
+def _spendable(wallet: Optional[ClientWallet], sub, plan, on_plan: bool) -> float:
+    """Credits a client can spend on calls: this period's plan credits plus bought credits."""
+    plan_left = max(0.0, subscriptions.remaining_credits(sub, plan)) if on_plan else 0.0
+    return plan_left + max(0.0, wallet.balance_inr if wallet else 0.0)
+
+
 def client_concurrency_limit(db: Session, client_id: str) -> Optional[int]:
     """
-    Most calls a client may have live at once: their usable plan's limit, else the admin's per-client
-    override, else the platform default for pay-as-you-go clients. None = unlimited.
+    Most calls a client may have live at once: their usable plan's limit, else as many full-length calls
+    as their credits cover (at least one; call budgets decide whether that one may start), up to the
+    platform cap. None = unlimited.
     """
     sub = subscriptions.get_subscription(db, client_id)
     plan = db.get(Plan, sub.plan_id) if sub else None
@@ -80,45 +120,67 @@ def client_concurrency_limit(db: Session, client_id: str) -> Optional[int]:
         return plan.max_concurrent_calls or None
     if not settings.PAYG_ONLY:
         return None  # with plans on sale, clients without one aren't limited
-    client = db.get(Client, client_id)
-    if client and client.max_concurrent_calls:
-        return client.max_concurrent_calls
-    return get_pricing(db).payg_max_concurrent_calls
+    wallet = db.query(ClientWallet).filter(ClientWallet.client_id == client_id).first()
+    hold = call_hold_credits(db)
+    covered = int(_spendable(wallet, sub, plan, False) // hold) if hold > 0 else settings.MAX_CONCURRENT_CALLS_PER_CLIENT
+    return min(settings.MAX_CONCURRENT_CALLS_PER_CLIENT, max(1, covered))
 
 
-def check_call_allowed(db: Session, client_id: Optional[str]) -> Tuple[bool, Optional[str], Optional[str]]:
+def call_budget(
+    db: Session, client_id: Optional[str], max_duration_s: Optional[float] = None, lock: bool = False,
+) -> Tuple[bool, Optional[str], Optional[str], Optional[float]]:
     """
-    Whether a new billable call may start, as (allowed, reason, code). Codes: PLAN_EXPIRED, NO_BALANCE,
-    CONCURRENCY. Plan clients need plan credits or bought credits; others need bought credits.
+    Whether a new billable call may start, and the credits it may spend: (allowed, reason, code, budget).
+    Codes: PLAN_EXPIRED, NO_BALANCE, CONCURRENCY. A call's budget is a full-length call's cost, or what is
+    left after the budgets of calls already live; it must cover CALL_MIN_BUDGET_MINUTES. The session hangs
+    up before spending more, so the balance never goes below zero.
+
+    With lock=True the wallet row stays locked until the caller commits: create the Call (with its
+    budget) before committing, so concurrent call starts can't spend the same credits twice.
     """
     if not settings.BILLING_ENFORCED or not client_id:
-        return True, None, None
-    wallet = db.query(ClientWallet).filter(ClientWallet.client_id == client_id).first()
-    has_balance = bool(wallet and wallet.balance_inr > 0)
+        return True, None, None, None
+    if lock:
+        wallet = get_wallet(db, client_id, lock=True)
+    else:
+        wallet = db.query(ClientWallet).filter(ClientWallet.client_id == client_id).first()
     sub = subscriptions.get_subscription(db, client_id)
     plan = db.get(Plan, sub.plan_id) if sub else None
-    limit = client_concurrency_limit(db, client_id)
+    on_plan = bool(sub and plan and subscriptions.is_usable(sub))
+    if not on_plan and sub and plan and sub.status == "PAST_DUE" and not settings.PAYG_ONLY:
+        return False, f"The {plan.name} plan has expired. Renew it to resume calls.", "PLAN_EXPIRED", None
 
-    if sub and plan and subscriptions.is_usable(sub):
-        if subscriptions.remaining_credits(sub, plan) <= 0 and not has_balance:
-            return False, "This month's plan credits are used up. Buy credits to keep calling.", "NO_BALANCE"
-        if limit and live_call_count(db, client_id) >= limit:
+    live, held = held_credits(db, client_id)
+    limit = client_concurrency_limit(db, client_id)
+    if limit and live >= limit:
+        if on_plan:
             return False, (f"The {plan.name} plan allows {limit} call(s) at a time. "
-                           "Wait for a call to finish or upgrade the plan."), "CONCURRENCY"
-        return True, None, None
-    if sub and plan and sub.status == "PAST_DUE" and not settings.PAYG_ONLY:
-        return False, f"The {plan.name} plan has expired. Renew it to resume calls.", "PLAN_EXPIRED"
-    # No plan, or one that has ended: bought credits only
-    if not has_balance:
+                           "Wait for a call to finish or upgrade the plan."), "CONCURRENCY", None
+        return False, (f"Your balance covers {limit} call(s) at a time. "
+                       "Wait for a call to finish, or add credits to run more calls at once."), "CONCURRENCY", None
+
+    available = _spendable(wallet, sub, plan, on_plan) - held
+    if available < budget_credits_per_minute(db) * settings.CALL_MIN_BUDGET_MINUTES:
+        if held > 0:
+            return False, ("Your credits are reserved for the calls already running. "
+                           "Wait for a call to finish, or add credits to run more calls at once."), "CONCURRENCY", None
+        if on_plan:
+            return False, "This month's plan credits are used up. Buy credits to keep calling.", "NO_BALANCE", None
         hint = "Buy credits" if settings.PAYG_ONLY else "Choose a plan or buy credits"
-        return False, f"You're out of credits. {hint} to resume calls.", "NO_BALANCE"
-    if limit and live_call_count(db, client_id) >= limit:
-        return False, f"Your account allows {limit} call(s) at a time. Wait for a call to finish.", "CONCURRENCY"
-    return True, None, None
+        return False, f"You're out of credits. {hint} to resume calls.", "NO_BALANCE", None
+    # Rounded down, so a budget never exceeds what is really left
+    return True, None, None, math.floor(min(call_hold_credits(db, max_duration_s), available) * 100) / 100
+
+
+def check_call_allowed(
+    db: Session, client_id: Optional[str], max_duration_s: Optional[float] = None,
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Whether a new billable call may start, as (allowed, reason, code); see call_budget."""
+    return call_budget(db, client_id, max_duration_s)[:3]
 
 
 def can_place_call(db: Session, client_id: Optional[str]) -> bool:
-    """New billable calls need plan minutes or a positive balance (when balance enforcement is on)."""
+    """New billable calls need credits for at least a short call (when balance enforcement is on)."""
     return check_call_allowed(db, client_id)[0]
 
 
@@ -311,7 +373,7 @@ def billed_minutes(duration_seconds: float) -> float:
 
 
 def _debit(db: Session, call: Call, amount: float) -> WalletTransaction:
-    """Takes bought credits for a call; the balance may dip below zero for the call that ran it out."""
+    """Takes bought credits for a call. Callers never take more than the balance."""
     wallet = get_wallet(db, call.client_id, lock=True)
     wallet.balance_inr = _money(wallet.balance_inr - amount)
     txn = WalletTransaction(
@@ -333,13 +395,17 @@ def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     """
     if not call.client_id:
         return None
+    if (call.metadata_ or {}).get("is_test") or call.status != "COMPLETED" or not call.duration_seconds:
+        return None
+    # Lock the wallet first: the session and the carrier's status callback may both try to charge the
+    # call, and the second must see the first one's charge
+    wallet = get_wallet(db, call.client_id, lock=True)
     already = (
         db.query(CallUsage.id).filter(CallUsage.call_id == call.id).first()
         or db.query(WalletTransaction.id).filter(WalletTransaction.call_id == call.id).first()
     )
     if already:
-        return None
-    if (call.metadata_ or {}).get("is_test") or call.status != "COMPLETED" or not call.duration_seconds:
+        db.commit()
         return None
 
     credits = call_charge(db, call)
@@ -357,7 +423,15 @@ def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     if on_plan:
         sub.credits_used = round(float(sub.credits_used or 0.0) + from_plan, 4)
         sub.minutes_used = round(float(sub.minutes_used or 0.0) + minutes, 4)
-    wallet_before = get_wallet(db, call.client_id).balance_inr
+    wallet_before = wallet.balance_inr
+    # The balance never goes below zero. Call budgets end calls before they overspend, so an unpaid
+    # remainder means a budget was too small: it is recorded on the call and logged for the admin.
+    paid = _money(min(from_wallet, max(0.0, wallet_before)))
+    unpaid = _money(from_wallet - paid)
+    if unpaid > 0:
+        call.metadata_ = {**(call.metadata_ or {}), "unpaid_credits": unpaid}
+        logger.error(f"Call {call.id} cost {unpaid} credits more than client {call.client_id} had; not charged")
+    from_wallet = paid
     txn = _debit(db, call, from_wallet) if from_wallet > 0 else None
     _notify_low_credits(db, call.client_id, plan, plan_left_before, plan_left_before - from_plan if on_plan else 0.0,
                         wallet_before, wallet_before - from_wallet)
@@ -370,6 +444,51 @@ def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     db.commit()
     logger.info(f"Charged call {call.id}: {credits} credits ({from_plan} plan, {from_wallet} bought)")
     return txn
+
+
+# A finished call's session charges it within seconds; one still unbilled after this was missed (e.g.
+# the server restarted mid-call and only the carrier's completed status arrived) and is charged by the sweep
+UNBILLED_GRACE = timedelta(minutes=2)
+UNBILLED_LOOKBACK = timedelta(days=7)
+
+
+def charge_unbilled_calls(db: Session, now: Optional[datetime] = None) -> int:
+    """Charges completed calls nothing has billed yet. Safe to run repeatedly; returns how many it charged."""
+    now = now or subscriptions.utcnow()
+    candidates = (
+        db.query(Call)
+        .outerjoin(CallUsage, CallUsage.call_id == Call.id)
+        .outerjoin(WalletTransaction, WalletTransaction.call_id == Call.id)
+        .filter(
+            Call.status == "COMPLETED", Call.client_id.isnot(None), Call.duration_seconds > 0,
+            Call.ended_at <= now - UNBILLED_GRACE, Call.ended_at >= now - UNBILLED_LOOKBACK,
+            CallUsage.id.is_(None), WalletTransaction.id.is_(None),
+        )
+        .all()
+    )
+    charged = 0
+    for call in candidates:
+        if (call.metadata_ or {}).get("is_test") or (call.metadata_ or {}).get("mock"):
+            continue
+        try:
+            charge_call(db, call)
+            charged += 1
+        except Exception as exc:
+            db.rollback()
+            logger.error(f"Could not charge unbilled call {call.id}: {type(exc).__name__}: {exc}")
+    if charged:
+        logger.warning(f"Charged {charged} call(s) that ended without being billed")
+    return charged
+
+
+def run_billing_sweep_job(session_factory) -> None:
+    from app.services.carrier_costs import record_carrier_prices
+    db = session_factory()
+    try:
+        charge_unbilled_calls(db)
+        record_carrier_prices(db)
+    finally:
+        db.close()
 
 
 def _notify_low_credits(db: Session, client_id: str, plan: Optional[Plan], plan_before: float, plan_after: float,

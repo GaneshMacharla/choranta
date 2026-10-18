@@ -39,7 +39,8 @@ class EndpointerConfig:
 @dataclass
 class EndpointerEvent:
     kind: str                           # "speech_start", "pause", "utterance" or "speech_discarded"
-    audio: bytes = b""                  # utterance audio so far (pre-roll included) for "pause" / "utterance"
+    audio: bytes = b""                  # utterance audio so far (pre-roll included) for "speech_start" / "pause" /
+                                        # "utterance"
     speech_ms: float = 0.0
     same_as_pause: bool = False         # "utterance" only: no speech since the last "pause", so its audio
                                         # holds the same words (plus trailing silence)
@@ -111,7 +112,7 @@ class SpeechEndpointer:
                 self._candidate_pitched_ms += pitched_ms
                 if self._candidate_voiced_ms >= self.config.min_speech_start_ms:
                     self._begin_speech()
-                    events.append(EndpointerEvent(kind="speech_start"))
+                    events.append(EndpointerEvent(kind="speech_start", audio=bytes(self._utterance)))
             else:
                 if self._candidate:
                     # A short blip that never became speech: fold it back into pre-roll

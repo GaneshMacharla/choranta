@@ -169,6 +169,12 @@ export const PortalBillingPage: React.FC = () => {
             <div>
               <span className="block font-mono text-2xl font-bold text-slate-100">{creditsLabel(wallet.balance_inr)}</span>
               <span className="text-xs text-slate-500">1 credit = ₹1{gst ? ' (excl. GST)' : ''} · about {inr(perMinute)} per call minute</span>
+              {!sub && wallet.balance_inr > 0 && wallet.max_concurrent_calls != null && (
+                <span className="block text-xs text-slate-400">
+                  Your balance covers up to {wallet.max_concurrent_calls} call{wallet.max_concurrent_calls === 1 ? '' : 's'} at a time.
+                  Add credits to run more at once.
+                </span>
+              )}
             </div>
           </div>
           <Button

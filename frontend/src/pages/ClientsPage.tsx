@@ -8,6 +8,7 @@ import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Input } from '../components/common/Input';
 import { Select } from '../components/common/Select';
+import { DEFAULT_TIMEZONE, timezoneOptions } from '../constants/timezones';
 import { Modal } from '../components/common/Modal';
 import { StatusBadge } from '../components/common/Badge';
 import { LoadingState } from '../components/common/LoadingState';
@@ -50,7 +51,7 @@ export const ClientsPage: React.FC = () => {
     contact_name: '',
     contact_email: '',
     contact_phone: '',
-    timezone: 'UTC',
+    timezone: DEFAULT_TIMEZONE,
   });
 
   // Edit Modal State
@@ -116,7 +117,7 @@ export const ClientsPage: React.FC = () => {
         contact_name: '',
         contact_email: '',
         contact_phone: '',
-        timezone: 'UTC',
+        timezone: DEFAULT_TIMEZONE,
       });
       navigate(`/clients/${created.id}`);
     } catch (err: any) {
@@ -385,10 +386,10 @@ export const ClientsPage: React.FC = () => {
               value={createForm.contact_phone || ''}
               onChange={(e) => setCreateForm({ ...createForm, contact_phone: e.target.value })}
             />
-            <Input
+            <Select
               label="Timezone"
-              placeholder="America/New_York or UTC"
-              value={createForm.timezone || 'UTC'}
+              options={timezoneOptions(createForm.timezone)}
+              value={createForm.timezone || DEFAULT_TIMEZONE}
               onChange={(e) => setCreateForm({ ...createForm, timezone: e.target.value })}
             />
           </div>
@@ -484,8 +485,9 @@ export const ClientsPage: React.FC = () => {
               value={editForm.contact_phone || ''}
               onChange={(e) => setEditForm({ ...editForm, contact_phone: e.target.value })}
             />
-            <Input
+            <Select
               label="Timezone"
+              options={timezoneOptions(editForm.timezone)}
               value={editForm.timezone || 'UTC'}
               onChange={(e) => setEditForm({ ...editForm, timezone: e.target.value })}
             />

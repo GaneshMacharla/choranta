@@ -1,5 +1,5 @@
 import { fetchAuthedBlob } from './portal';
-import { request } from './api';
+import { markUtc, request } from './api';
 import { KnowledgeSource, Tool, Integration, CartesiaVoice } from '../types';
 
 export const catalogsService = {
@@ -33,7 +33,7 @@ export const catalogsService = {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok) throw new Error(data?.error || data?.detail || response.statusText || 'Upload failed.');
-    return data as KnowledgeSource;
+    return markUtc(data) as KnowledgeSource;
   },
 
   getAgentKnowledge: async (agentId: string): Promise<KnowledgeSource[]> => {

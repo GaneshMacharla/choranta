@@ -144,7 +144,8 @@ def _register(router: APIRouter, scope_dep: Callable[..., Scope]) -> None:
                 agents.append({
                     "id": agent.id,
                     "name": agent.name,
-                    "versions": [{"id": v.id, "version_number": v.version_number, "created_at": v.created_at} for v in versions],
+                    "versions": [{"id": v.id, "version_number": v.version_number, "created_at": v.created_at,
+                                  "campaign_inputs": svc.version_campaign_inputs(v)} for v in versions],
                 })
         numbers = []
         for number in db.query(PhoneNumber).filter(PhoneNumber.client_id == client_id).order_by(PhoneNumber.created_at).all():

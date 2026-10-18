@@ -35,8 +35,6 @@ export interface Client {
   contact_phone?: string | null;
   timezone: string;
   status: ClientStatus;
-  /** Admin override of simultaneous calls; null = the platform default */
-  max_concurrent_calls?: number | null;
   agent_count: number;
   created_at: string;
   updated_at: string;

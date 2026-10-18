@@ -323,17 +323,23 @@ def activate_without_test(db: Session, pn: PhoneNumber) -> PhoneNumber:
 def start_test_call(db: Session, pn: PhoneNumber, to_number: str):
     """Calls the client's phone from the new number with its AI employee; a connected call activates it."""
     from app.services.outbound_calls import place_outbound_call
-    if pn.status not in TESTABLE_STATUSES:
-        raise ValidationException("This number can't be tested.")
+    # Test calls are free, so they are only for a number that isn't active yet, short and few
+    if pn.status != "READY_TO_TEST":
+        raise ValidationException("Only a new number can be tested. This one is already active.")
     if not pn.agent_id or not pn.agent_version_id:
         raise ValidationException("Assign an AI employee to this number first.")
+    attempts = int((pn.metadata_ or {}).get("test_attempts") or 0)
+    if attempts >= settings.NUMBER_TEST_MAX_ATTEMPTS:
+        raise ValidationException("This number has used all its test calls. Activate it without a test instead.")
     to = (to_number or "").strip()
     if len("".join(ch for ch in to if ch.isdigit())) < 10:
         raise ValidationException("Enter the phone number to call for the test.")
     call = place_outbound_call(db, destination_number=to, phone_number_id=pn.id, is_test=True,
-                               extra_metadata={"number_test": pn.id})
+                               extra_metadata={"number_test": pn.id,
+                                               "max_duration_s": settings.NUMBER_TEST_MAX_DURATION_S})
     meta = dict(pn.metadata_ or {})
-    meta.update(test_call_id=call.id, test_started_at=utcnow().isoformat(), test_result=None)
+    meta.update(test_call_id=call.id, test_started_at=utcnow().isoformat(), test_result=None,
+                test_attempts=attempts + 1)
     pn.metadata_ = meta
     db.commit()
     return call

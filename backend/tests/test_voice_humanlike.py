@@ -304,6 +304,6 @@ def test_every_template_has_a_valid_call_script():
     from app.schemas.agent_spec import AgentConfigurationData
     from app.services.agent_templates import get_all_agent_templates
 
-    for tpl in get_all_agent_templates():
+    for tpl in get_all_agent_templates(include_hidden=True):
         cfg = AgentConfigurationData(**tpl["default_config"])
         assert cfg.instructions.discovery_questions and cfg.instructions.next_step, tpl["id"]

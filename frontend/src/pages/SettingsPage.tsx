@@ -6,6 +6,7 @@ import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
 import { request } from '../services/api';
 import { PricingSettingsCard } from '../components/settings/PricingSettingsCard';
+import { CarrierCostCheckCard } from '../components/settings/CarrierCostCheckCard';
 
 export const SettingsPage: React.FC = () => {
   const { user } = useAuth();
@@ -131,6 +132,7 @@ export const SettingsPage: React.FC = () => {
         </Card>
 
         {user?.role === 'ADMIN' && <PricingSettingsCard />}
+        {user?.role === 'ADMIN' && <CarrierCostCheckCard />}
       </div>
 
       {/* Security Notice */}

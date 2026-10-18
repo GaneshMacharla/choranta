@@ -65,6 +65,16 @@ export interface Campaign extends CampaignSettings {
   updated_at: string;
   stats: CampaignStats;
   webhook_secret?: string | null;
+  /** Campaign details every call receives (e.g. course_name), keyed by the agent's input names */
+  variables?: Record<string, string> | null;
+}
+
+/** An agent input typed once per campaign, e.g. the course and demo timings of a batch announcement */
+export interface CampaignInput {
+  name: string;
+  description: string;
+  required: boolean;
+  example?: string;
 }
 
 export interface CampaignRecipient {
@@ -93,7 +103,11 @@ export interface CampaignRecipient {
 export interface CampaignOptions {
   client_id: string;
   timezone: string;
-  agents: Array<{ id: string; name: string; versions: Array<{ id: string; version_number: number; created_at: string }> }>;
+  agents: Array<{
+    id: string;
+    name: string;
+    versions: Array<{ id: string; version_number: number; created_at: string; campaign_inputs?: CampaignInput[] }>;
+  }>;
   numbers: Array<{ id: string; phone_number: string; provider: string; usable: boolean; reason?: string | null }>;
   connections: Array<{ id: string; name: string }>;
   concurrency_cap: number | null;

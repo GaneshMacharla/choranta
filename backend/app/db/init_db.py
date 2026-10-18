@@ -413,6 +413,7 @@ _ADDED_COLUMNS = [
     ("campaigns", "kind", "VARCHAR(16) NOT NULL DEFAULT 'BULK'"),
     ("campaigns", "webhook_url", "TEXT"),
     ("campaigns", "webhook_secret", "VARCHAR(64)"),
+    ("campaigns", "variables", "JSON"),
     ("campaign_recipients", "source", "VARCHAR(64)"),
     ("leads", "consent_given", "BOOLEAN"),
     ("leads", "consent_at", "TIMESTAMP"),

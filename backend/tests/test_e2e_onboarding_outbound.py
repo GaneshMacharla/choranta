@@ -96,9 +96,9 @@ def test_onboarding_to_bulk_and_instant_outbound(client: TestClient, auth_header
     queue = _ok(client.get("/api/agent-requests", headers=auth_headers, params={"status": "OPEN"}))
     assert request["id"] in [r["id"] for r in queue]
     _ok(client.post(f"/api/agent-requests/{request['id']}/start", headers=auth_headers))
-    templates = _ok(client.get("/api/catalogs/agent-templates", headers=auth_headers))
-    template = next(t for t in templates if "CLINIC" in t.get("business_types", []))
-    assert template["id"] == "clinic_receptionist"
+    # The clinic template is hidden from the gallery but still loads by id
+    template = _ok(client.get("/api/catalogs/agent-templates/clinic_receptionist", headers=auth_headers))
+    assert "CLINIC" in template["business_types"]
 
     config = template["default_config"]
     config["identity"].update(name="Meera", organization="Smile Dental Care")

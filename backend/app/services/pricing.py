@@ -12,7 +12,6 @@ from app.models.pricing_settings import PricingSettings
 
 PRICING_ROW_ID = "default"
 MAX_PROFIT_PERCENT = 1000.0
-MAX_CONCURRENT_CALLS = 500
 # Plan cards estimate minutes from what recent calls actually cost per minute (recomputed at most this often)
 ESTIMATE_WINDOW_DAYS = 30
 ESTIMATE_CACHE_S = 600
@@ -21,7 +20,6 @@ ESTIMATE_CACHE_S = 600
 @dataclass(frozen=True)
 class PricingSnapshot:
     profit_percent: float
-    payg_max_concurrent_calls: int = settings.DEFAULT_PAYG_MAX_CONCURRENT_CALLS
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
 
@@ -33,7 +31,6 @@ def get_pricing(db: Session) -> PricingSnapshot:
         return PricingSnapshot(profit_percent=settings.DEFAULT_PROFIT_PERCENT)
     return PricingSnapshot(
         profit_percent=row.profit_percent,
-        payg_max_concurrent_calls=row.payg_max_concurrent_calls or settings.DEFAULT_PAYG_MAX_CONCURRENT_CALLS,
         updated_at=row.updated_at,
         updated_by=row.updated_by,
     )
@@ -120,25 +117,42 @@ def credit_packs_out(db: Session) -> list:
     return packs
 
 
+_budget_rate: Dict[str, Any] = {"value": None, "at": 0.0}
+
+
+def budget_credits_per_minute(db: Session) -> float:
+    """
+    Credits per minute used to size call budgets. Errs high: the recent average counts only once
+    enough calls back it, and never goes below the configured default.
+    """
+    now = time.monotonic()
+    with _estimate_lock:
+        if _budget_rate["value"] is not None and now - _budget_rate["at"] < ESTIMATE_CACHE_S:
+            return _budget_rate["value"]
+    recent = recent_charge_per_minute(db)
+    value = settings.DEFAULT_CREDITS_PER_MINUTE
+    if recent["calls"] >= settings.BUDGET_MIN_CALLS_FOR_AVERAGE and recent["avg_charge_per_minute"]:
+        value = max(value, round(recent["avg_charge_per_minute"], 2))
+    with _estimate_lock:
+        _budget_rate.update(value=value, at=now)
+    return value
+
+
 def clear_estimate_cache() -> None:
     with _estimate_lock:
         _estimate.update(value=None, at=0.0)
+        _budget_rate.update(value=None, at=0.0)
 
 
-def update_pricing(db: Session, profit_percent: float, user_id: Optional[str],
-                   payg_max_concurrent_calls: Optional[int] = None) -> PricingSnapshot:
+def update_pricing(db: Session, profit_percent: float, user_id: Optional[str]) -> PricingSnapshot:
     if not 0 <= profit_percent <= MAX_PROFIT_PERCENT:
         raise ValidationException(f"Profit percent must be between 0 and {MAX_PROFIT_PERCENT:.0f}.")
-    if payg_max_concurrent_calls is not None and not 1 <= payg_max_concurrent_calls <= MAX_CONCURRENT_CALLS:
-        raise ValidationException(f"Concurrent calls must be between 1 and {MAX_CONCURRENT_CALLS}.")
 
     row = db.get(PricingSettings, PRICING_ROW_ID)
     if row is None:
         row = PricingSettings(id=PRICING_ROW_ID)
         db.add(row)
     row.profit_percent = float(profit_percent)
-    if payg_max_concurrent_calls is not None:
-        row.payg_max_concurrent_calls = int(payg_max_concurrent_calls)
     row.infra_cost_per_minute_inr = 0.0  # infra cost no longer used; column kept for existing databases
     row.updated_by = user_id
     row.updated_at = datetime.now(timezone.utc)

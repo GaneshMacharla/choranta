@@ -95,7 +95,67 @@ def test_batch_announcement_template_is_valid():
     from app.schemas.agent_spec import AgentConfigurationData
     tpl = get_agent_template_by_id("course_batch_announcement")
     assert tpl is not None and tpl["call_direction"] == "outbound"
-    assert "Snowflake" in tpl["default_config"]["conversation"]["greeting"]
-    assert "19 October 2026" in tpl["default_config"]["instructions"]["primary_goal"]
-    assert tpl["preview"]["enabled_tools"] == tpl["default_config"]["tools"]
-    AgentConfigurationData(**tpl["default_config"])
+    config = tpl["default_config"]
+    # No course is baked in: the course, batch and demo come from the campaign
+    assert "Snowflake" not in str([config["instructions"], config["conversation"], tpl["description"]])
+    assert "{{course_name}}" in config["conversation"]["greeting"]
+    campaign_inputs = {v["name"]: v["required"] for v in config["variables"]["inputs"] if v["source"] == "Campaign details"}
+    assert campaign_inputs == {"course_name": True, "batch_start_date": True, "batch_timings": True, "demo_class": True,
+                               "batch_mode": False, "course_duration": False, "course_fees": False, "course_highlights": False}
+    assert "book_appointment" not in config["tools"]  # the demo is a fixed group session, not a booked slot
+    assert tpl["preview"]["enabled_tools"] == config["tools"]
+    AgentConfigurationData(**config)
+
+
+def test_batch_announcement_greeting_and_prompt_use_campaign_details(db):
+    client = Client(id=f"client_batch_{uuid.uuid4().hex[:8]}", name="Naresh IT", business_type="Education",
+                    timezone="Asia/Kolkata", status="ACTIVE")
+    db.add(client)
+    db.commit()
+    agent = AgentService(db).create_agent(AgentCreate(
+        client_id=client.id, name="Batch Caller", role="Batch Enrolment Caller",
+        description="Announces new batches", template_id="course_batch_announcement",
+    ))
+    config_res = AgentConfigurationService(db).get_configuration(agent.id)
+    spec = AgentSpecBuilder.build_from_draft(
+        agent=db.query(Agent).filter(Agent.id == agent.id).first(), client=client, draft=config_res.configuration,
+        attached_knowledge_ids=config_res.configuration.knowledge_sources,
+        attached_tool_ids=config_res.configuration.tools,
+        attached_integration_ids=config_res.configuration.integrations,
+    )
+    assert not AgentSpecValidator.validate(spec, db).errors
+
+    # What the campaign wizard collected arrives as call variables
+    metadata = {"company_name": client.name, "origin": "telephony_outbound", "course_name": "Snowflake and DBT",
+                "batch_start_date": "Monday, 19 October", "demo_class": "Saturday, 25 October at 11 am"}
+    ctx = RuntimeContext(session_id="sess_batch", client_id=client.id, agent_id=agent.id,
+                         agent_version_id="ver_draft", agent_spec=spec, metadata=metadata)
+    assert ctx.resolved_greeting == ("Hi, this is Naresh IT. We're starting a new Snowflake and DBT batch from "
+                                     "Monday, 19 October. Do you have a minute?")
+    prompt = ctx.instruction_for_turn()
+    assert "demo_class: 'Saturday, 25 October at 11 am' (known" in prompt
+    assert "batch_timings: (not known" in prompt
+
+
+def test_system_prompt_endpoint_shows_what_the_llm_receives(client, auth_headers, db):
+    owner = Client(id=f"client_sp_{uuid.uuid4().hex[:8]}", name="Naresh IT", business_type="Education",
+                   timezone="Asia/Kolkata", status="ACTIVE")
+    db.add(owner)
+    db.commit()
+    agent = AgentService(db).create_agent(AgentCreate(
+        client_id=owner.id, name="Batch Caller", role="Batch Enrolment Caller",
+        description="Announces new batches", template_id="course_batch_announcement",
+    ))
+    res = client.post(f"/api/agents/{agent.id}/system-prompt", json={"outbound": True}, headers=auth_headers)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["system_prompt"].startswith(body["fixed_instructions"])
+    assert "Naresh IT" in body["system_prompt"] and "Call Flow" in body["system_prompt"]
+    assert "2. Good time?" in body["system_prompt"]  # outbound call flow
+    assert {"create_lead", "schedule_callback"} <= {t["name"] for t in body["tools"]}
+
+    # Unsaved edits are previewed without saving them
+    config = AgentConfigurationService(db).get_configuration(agent.id).configuration.model_dump(mode="json")
+    config["instructions"]["primary_goal"] = "Sell the weekend Azure batch."
+    edited = client.post(f"/api/agents/{agent.id}/system-prompt", json={"configuration": config}, headers=auth_headers).json()
+    assert "Sell the weekend Azure batch." in edited["system_prompt"]

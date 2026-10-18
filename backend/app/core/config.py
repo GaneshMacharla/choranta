@@ -4,6 +4,9 @@ from typing import List, Optional
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# backend/.env, so settings load the same whichever folder the server is started from
+ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env")
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Choranta Internal Agent Studio"
@@ -112,7 +115,20 @@ class Settings(BaseSettings):
     GST_REGISTERED: bool = False
     # Monthly plans are retired: clients buy credits and pay per call (existing plans run out, then stop)
     PAYG_ONLY: bool = True
-    DEFAULT_PAYG_MAX_CONCURRENT_CALLS: int = 3  # until an admin sets it in Settings
+    # Calls at a time follow the wallet (each live call holds a full-length call's credits); this caps it
+    # for any one client, matched to the channels the Exotel account can carry
+    MAX_CONCURRENT_CALLS_PER_CLIENT: int = 50
+    # Each call gets a credit budget when it starts and hangs up politely before overspending it.
+    # Budgets use the recent average charge per minute only once this many calls back it, and never
+    # less than DEFAULT_CREDITS_PER_MINUTE; a call needs at least this many minutes' worth to start.
+    BUDGET_MIN_CALLS_FOR_AVERAGE: int = 20
+    CALL_MIN_BUDGET_MINUTES: float = 2.0
+    NUMBER_TEST_MAX_DURATION_S: int = 120     # number activation test calls are free, so keep them short
+    NUMBER_TEST_MAX_ATTEMPTS: int = 3
+    BILLING_SWEEP_S: int = 60                 # how often finished-but-unbilled calls are charged
+    # Exotel's per-call Price is checked against the telephony estimate; alert when Exotel costs this much more
+    CARRIER_COST_ALERT_PERCENT: float = 5.0
+    EXOTEL_PRICE_INCLUDES_GST: bool = False   # Exotel's Price excludes GST; GST is added while it can't be claimed
     PAYMENT_UPI_ID: str = ""
     PAYMENT_BANK_DETAILS: str = ""
     BILLING_ENFORCED: bool = True             # block new billable calls when the wallet balance is <= 0
@@ -148,7 +164,10 @@ class Settings(BaseSettings):
     CALL_MAX_DURATION_S: int = 600            # wrap up and hang up after this many seconds
 
     # Human-like turn-taking
-    VOICE_END_SILENCE_MS: int = 550           # caller silence that ends their turn (unfinished sentences get VOICE_INCOMPLETE_HOLD_MS more)
+    VOICE_LIVE_STT: bool = True               # transcribe the caller as they speak (Sarvam streaming); off = per-utterance REST
+    VOICE_END_SILENCE_MS: int = 450           # caller silence that ends their turn (unfinished sentences get VOICE_INCOMPLETE_HOLD_MS more)
+    VOICE_MIN_SPEECH_ENERGY: float = 150.0    # quietest caller voice counted as speech (RMS, 16-bit); phone lines often carry
+                                              # speech at 150-350 over a ~15 noise floor; noise is still screened by pitch and floor
     VOICE_INCOMPLETE_HOLD_MS: int = 900       # extra wait when the caller trailed off mid-thought ("my budget is..."); 0 = off
     VOICE_SLOW_REPLY_ACK_MS: int = 1800       # say a short "Okay." if the reply hasn't started by then; 0 = off
     VOICE_TOOL_FILLER: bool = True            # say "One moment, let me check." while a tool runs (unless the agent already did)
@@ -193,7 +212,7 @@ class Settings(BaseSettings):
         return self.GST_RATE_PERCENT if self.GST_REGISTERED else 0.0
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore"

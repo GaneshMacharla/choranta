@@ -108,3 +108,21 @@ def test_existing_unchanged_template_copies_are_linked_once(db: Session):
     assert source(linked) == RE_KEY
     assert source(edited) == ""
     assert source(unlinked) == ""
+
+
+def test_untouched_superseded_script_is_upgraded_but_edited_one_is_kept(db: Session):
+    key = "course_batch_announcement"
+    old_questions, old_points, old_next = call_scripts._SUPERSEDED_SCRIPTS[key]
+    script = db.get(StandardCallScript, key)
+    script.discovery_questions, script.offer_points, script.next_step = list(old_questions), list(old_points), old_next
+    db.commit()
+    call_scripts.seed_standard_scripts(db)
+    db.refresh(script)
+    assert script.discovery_questions == CALL_SCRIPTS[key]["discovery_questions"]
+    assert script.name == "IT Course Batch Announcement"
+
+    script.discovery_questions = ["Which cloud do you use?"]
+    db.commit()
+    call_scripts.seed_standard_scripts(db)
+    db.refresh(script)
+    assert script.discovery_questions == ["Which cloud do you use?"]

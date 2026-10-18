@@ -70,7 +70,9 @@ export const PortalLayout: React.FC = () => {
         </div>
         <nav className="flex flex-1 gap-1 overflow-x-auto md:flex-col">
           {NAV.filter((item) => hasPlans || item.to !== '/portal/plans')
-            // Courses are for coaching and training centres
+            // Industry catalogues follow the client's business type: properties for real estate, courses for
+            // coaching and training centres
+            .filter((item) => item.to !== '/portal/inventory' || account?.business_type === 'REAL_ESTATE')
             .filter((item) => item.to !== '/portal/courses' || account?.business_type === 'COACHING')
             .map(({ to, label, icon: Icon, end }) => (
             <NavLink

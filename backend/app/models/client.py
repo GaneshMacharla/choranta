@@ -19,9 +19,9 @@ class Client(Base):
     contact_name = Column(String(255), nullable=True)
     contact_email = Column(String(255), nullable=True)
     contact_phone = Column(String(64), nullable=True)
-    timezone = Column(String(64), nullable=False, default="UTC")
+    timezone = Column(String(64), nullable=False, default="Asia/Kolkata")
     status = Column(String(32), nullable=False, default="ACTIVE", index=True)
-    max_concurrent_calls = Column(Integer, nullable=True)  # admin override; None = the platform default
+    max_concurrent_calls = Column(Integer, nullable=True)  # unused: calls at a time follow the wallet
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 

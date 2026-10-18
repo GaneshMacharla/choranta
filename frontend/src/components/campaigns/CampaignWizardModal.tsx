@@ -6,6 +6,7 @@ import { Input } from '../common/Input';
 import { Select } from '../common/Select';
 import { MultiSelect } from '../common/MultiSelect';
 import { clientsService } from '../../services/clients';
+import { timezoneOptions } from '../../constants/timezones';
 import {
   Campaign,
   CampaignKind,
@@ -51,7 +52,6 @@ const DAY_END = '24:00';
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const DEFAULT_WINDOWS: WindowDraft[] = [{ start: '10:00', end: '19:00' }];
 const DEFAULT_DAYS = [0, 1, 2, 3, 4, 5];
-const TIMEZONES = ['Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Europe/London', 'America/New_York', 'UTC'];
 const AVG_CALL_MIN = 2;
 
 interface WindowDraft {
@@ -126,6 +126,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
   // Step 4: review
   const [purpose, setPurpose] = useState<'SERVICE' | 'PROMOTIONAL'>('SERVICE');
   const [consent, setConsent] = useState(false);
+  const [details, setDetails] = useState<Record<string, string>>({});
 
   const effectiveClientId = isAdmin ? clientId : options?.client_id || '';
 
@@ -142,6 +143,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       setName('');
       setWebhookUrl('');
       setConsent(false);
+      setDetails({});
     }
     if (editCampaign) {
       const c = editCampaign;
@@ -157,6 +159,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       setRetryMax(Math.max(1, c.retry_max));
       setRetryIntervals(c.retry_intervals_min.length ? c.retry_intervals_min : [5, 30]);
       setWebhookUrl(c.webhook_url || '');
+      setDetails(c.variables || {});
       setConsent(true);
       if (isAdmin) setClientId(c.client_id);
     }
@@ -196,6 +199,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
   };
 
   const agent = options?.agents.find((a) => a.id === agentId);
+  const campaignInputs = agent?.versions.find((v) => v.id === versionId)?.campaign_inputs || [];
 
   // Leads for the picker
   useEffect(() => {
@@ -270,6 +274,9 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
         if (isAdmin && !clientId) return 'Choose a client.';
         if (!agentId || !versionId) return 'Choose an AI Employee and version.';
         if (numberIds.length === 0) return 'Choose at least one phone number to call from.';
+        for (const input of campaignInputs) {
+          if (input.required && !details[input.name]?.trim()) return `Enter ${input.description.toLowerCase()}.`;
+        }
         return null;
       case 'recipients':
         if (isTrigger) return null;
@@ -294,7 +301,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       default:
         return null;
     }
-  }, [step, name, isAdmin, clientId, agentId, versionId, numberIds, recipientCount, source, windows, days, maxConcurrent, cap, startMode, startAt, isTrigger, webhookUrl]);
+  }, [step, name, isAdmin, clientId, agentId, versionId, numberIds, campaignInputs, details, recipientCount, source, windows, days, maxConcurrent, cap, startMode, startAt, isTrigger, webhookUrl]);
 
   const settingsPayload = () => ({
     name: name.trim(),
@@ -313,6 +320,10 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
     retry_intervals_min: retryEnabled ? retryIntervals.slice(0, Math.max(1, retryMax)) : [],
     retry_on: retryEnabled ? ['no-answer', 'busy', 'failed'] : [],
     webhook_url: webhookUrl.trim() || (isEdit ? '' : null),
+    // Only the selected agent's campaign details (switching agents leaves stale ones behind)
+    variables: Object.fromEntries(
+      campaignInputs.map((input) => [input.name, (details[input.name] || '').trim()]).filter(([, v]) => v),
+    ),
   });
 
   const save = async (mode: 'draft' | 'launch') => {
@@ -426,6 +437,26 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
           <p className="text-xs text-amber-400">Publish an AI Employee before creating a campaign.</p>
         )}
       </div>
+
+      {campaignInputs.length > 0 && (
+        <div className="space-y-1.5">
+          <label className="block text-xs font-medium text-slate-300">Campaign details</label>
+          <p className="text-xs text-slate-500">The AI Employee tells every person called about these, and answers questions from them only.</p>
+          <div className={`${panel} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
+            {campaignInputs.map((input) => (
+              <Input
+                key={input.name}
+                id={`campaign-${input.name}`}
+                label={input.description}
+                required={input.required}
+                placeholder={input.example ? `e.g. ${input.example}` : undefined}
+                value={details[input.name] || ''}
+                onChange={(e) => setDetails((d) => ({ ...d, [input.name]: e.target.value }))}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-1.5">
         <label className="block text-xs font-medium text-slate-300">
@@ -714,7 +745,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
           label="Timezone"
           value={timezone}
           onChange={(e) => setTimezone(e.target.value)}
-          options={Array.from(new Set([timezone, ...TIMEZONES])).map((tz) => ({ value: tz, label: tz }))}
+          options={timezoneOptions(timezone)}
           helperText="Calling windows use this timezone."
         />
       </div>
@@ -874,6 +905,9 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       ['Campaign', name],
       ...(isAdmin ? ([['Client', clients.find((c) => c.id === clientId)?.name || '']] as Array<[string, string]>) : []),
       ['AI Employee', `${agent?.name || ''} · v${agent?.versions.find((v) => v.id === versionId)?.version_number ?? ''}`],
+      ...campaignInputs
+        .filter((input) => details[input.name]?.trim())
+        .map((input) => [input.description, details[input.name].trim()] as [string, string]),
       ['Calling from', `${numbers.join(', ')} (${connection === 'exotel' ? 'Exotel' : connection})`],
       isTrigger
         ? ['Recipients', 'Website form submissions (leads API), called within seconds']

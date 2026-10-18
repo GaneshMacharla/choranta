@@ -64,9 +64,6 @@ class ClientService:
             update_dict["timezone"] = data.timezone.strip()
         if data.status is not None:
             update_dict["status"] = data.status.value
-        if data.max_concurrent_calls is not None:
-            # 0 clears the override; the repository skips None values, so set it directly
-            client.max_concurrent_calls = data.max_concurrent_calls or None
 
         updated = self.client_repo.update(client, update_dict)
         return self._to_response(updated)
@@ -102,7 +99,6 @@ class ClientService:
             contact_phone=client.contact_phone,
             timezone=client.timezone,
             status=client.status,
-            max_concurrent_calls=client.max_concurrent_calls,
             agent_count=agent_count,
             created_at=client.created_at,
             updated_at=client.updated_at

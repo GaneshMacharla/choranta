@@ -170,15 +170,15 @@ REAL_ESTATE_LEAD_QUALIFICATION_TEMPLATE: Dict[str, Any] = {
             ]
         },
         "voice": {
-            "provider": "cartesia",
-            "voice_id": "4459a9a5-69d6-4680-b970-e13dc51845b6",
+            "provider": "sarvam",
+            "voice_id": "ishita",
             "language": "en",
             "speed": 1.0
         },
         "providers": {
             "stt": "sarvam",
             "llm": "sarvam",
-            "tts": "cartesia",
+            "tts": "sarvam",
             "telephony": None
         }
     }
@@ -361,15 +361,15 @@ COACHING_ADMISSION_COUNSELLOR_TEMPLATE: Dict[str, Any] = {
             ]
         },
         "voice": {
-            "provider": "cartesia",
-            "voice_id": "4459a9a5-69d6-4680-b970-e13dc51845b6",
+            "provider": "sarvam",
+            "voice_id": "ishita",
             "language": "en",
             "speed": 1.0
         },
         "providers": {
             "stt": "sarvam",
             "llm": "sarvam",
-            "tts": "cartesia",
+            "tts": "sarvam",
             "telephony": None
         }
     }
@@ -401,9 +401,15 @@ def _complete(tpl: Dict[str, Any]) -> Dict[str, Any]:
     return {**tpl, "default_config": full}
 
 
-def get_all_agent_templates() -> List[Dict[str, Any]]:
-    """Return all available preconfigured agent templates."""
-    return [_complete(tpl) for tpl in AVAILABLE_AGENT_TEMPLATES]
+# Templates offered in the gallery. The others stay defined (agents built from them keep working, and their
+# call scripts stay seeded) but are hidden until they have been reviewed.
+GALLERY_TEMPLATE_IDS = {"course_batch_announcement", "real_estate_site_visit_caller"}
+
+
+def get_all_agent_templates(include_hidden: bool = False) -> List[Dict[str, Any]]:
+    """Return the preconfigured agent templates offered in the gallery (or every template)."""
+    return [_complete(tpl) for tpl in AVAILABLE_AGENT_TEMPLATES
+            if include_hidden or tpl["id"] in GALLERY_TEMPLATE_IDS]
 
 
 def get_agent_template_by_id(template_id: str) -> Optional[Dict[str, Any]]:

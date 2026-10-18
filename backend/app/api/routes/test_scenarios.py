@@ -1,20 +1,28 @@
+import asyncio
+import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import numpy as np
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_operator
 from app.core.config import settings
+from app.core.exceptions import ValidationException
 from app.core.security import generate_unique_id
+from app.db.session import SessionLocal
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 from app.models.test_scenario import TestRun, TestRunEvent, TestScenario
 from app.runtime.testing.regression import compare_test_runs
 from app.runtime.testing.scenario_runner import TestScenarioRunner
 from app.runtime.testing.templates import get_all_templates, get_template_by_id
+from app.runtime.testing.voice_runner import MAX_CONCURRENT_VOICE_RUNS, VoiceScenarioRunner, active_voice_runs
+
+logger = logging.getLogger("choranta.api.test_scenarios")
 
 router = APIRouter(prefix="/test-scenarios", tags=["Voice Agent Test Scenarios"])
 
@@ -26,7 +34,8 @@ class ScenarioPayload(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = ""
     caller_goal: str = ""
-    turns: List[str] = Field(min_length=1, max_length=50)
+    # A caller line, or an object for voice runs: {"text", "behavior": interrupt|backchannel|silence|hangup, ...}
+    turns: List[Union[str, Dict[str, Any]]] = Field(min_length=1, max_length=50)
     initial_mock_state: Dict[str, Any] = Field(default_factory=dict)
     expected: Dict[str, Any] = Field(default_factory=dict)
     provider_config: Dict[str, Any] = Field(default_factory=dict)
@@ -39,7 +48,7 @@ class ScenarioUpdatePayload(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None
     caller_goal: Optional[str] = None
-    turns: Optional[List[str]] = Field(default=None, min_length=1, max_length=50)
+    turns: Optional[List[Union[str, Dict[str, Any]]]] = Field(default=None, min_length=1, max_length=50)
     initial_mock_state: Optional[Dict[str, Any]] = None
     expected: Optional[Dict[str, Any]] = None
     provider_config: Optional[Dict[str, Any]] = None
@@ -332,20 +341,59 @@ def delete_scenario(
 # ---------------------------------------------------------------------------
 
 @router.post("/{scenario_id}/runs")
-def run_scenario(
+async def run_scenario(
     scenario_id: str,
     provider_mode: str = Query(default="mock", pattern="^(mock|real|hybrid)$"),
+    channel: str = Query(default="text", pattern="^(text|voice)$"),
     db: Session = Depends(get_db),
     current_user=Depends(require_operator),
 ) -> Dict[str, Any]:
-    _require_mock_mode()
+    """Runs a scenario. Text runs finish before responding; voice runs are real-time calls, so they start in the
+    background and the response is the RUNNING run (poll GET /test-scenarios/runs/{run_id})."""
     scenario = db.query(TestScenario).filter(TestScenario.id == scenario_id, TestScenario.status == "ACTIVE").first()
     if not scenario:
         raise HTTPException(status_code=404, detail="Active test scenario not found.")
 
-    runner = TestScenarioRunner(db)
-    run = runner.run(scenario=scenario, provider_mode=provider_mode)
+    if channel == "text":
+        _require_mock_mode()
+        run = await run_in_threadpool(TestScenarioRunner(db).run, scenario=scenario, provider_mode=provider_mode)
+        return _run_response(run)
+
+    if len(active_voice_runs) >= MAX_CONCURRENT_VOICE_RUNS:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail=f"{MAX_CONCURRENT_VOICE_RUNS} voice test calls are already running; try again shortly.")
+    try:
+        run = VoiceScenarioRunner(db).create_run(scenario, provider_mode=provider_mode)
+    except ValidationException as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e.message if hasattr(e, "message") else e))
+    task = asyncio.create_task(_execute_voice_run(run.id))
+    _voice_tasks.add(task)
+    task.add_done_callback(_voice_tasks.discard)
     return _run_response(run)
+
+
+# Voice runs in the background, kept referenced until they finish
+_voice_tasks: set = set()
+
+
+async def _execute_voice_run(run_id: str) -> None:
+    db = SessionLocal()
+    try:
+        await VoiceScenarioRunner(db).execute(run_id)
+    except Exception as e:
+        logger.error(f"Voice test run {run_id} failed: {type(e).__name__}: {e}", exc_info=True)
+        try:
+            db.rollback()
+            run = db.get(TestRun, run_id)
+            if run and run.status == "RUNNING":
+                run.status = "ERROR"
+                run.ended_at = datetime.now(timezone.utc)
+                run.summary_json = {**(run.summary_json or {}), "error": f"{type(e).__name__}: {e}"}
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
 @router.get("/{scenario_id}/runs")

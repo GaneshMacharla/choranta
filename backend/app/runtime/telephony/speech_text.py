@@ -98,6 +98,41 @@ _EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿️‍]")
 _STAGE_MARKERS = re.compile(r"\[[^\]]*interrupt[^\]]*\]", re.IGNORECASE)
 
 
+# Unicode blocks of the Indian scripts the voices speak, and the language each is read in
+_SCRIPT_LANGUAGES = (
+    (0x0900, 0x097F, "hi"), (0x0980, 0x09FF, "bn"), (0x0A00, 0x0A7F, "pa"), (0x0A80, 0x0AFF, "gu"),
+    (0x0B00, 0x0B7F, "od"), (0x0B80, 0x0BFF, "ta"), (0x0C00, 0x0C7F, "te"), (0x0C80, 0x0CFF, "kn"),
+    (0x0D00, 0x0D7F, "ml"),
+)
+
+
+def speech_language(text: str, primary: Optional[str], supported: Optional[List[str]] = None) -> Optional[str]:
+    """
+    The language to voice a sentence in: the Indian script most of its letters are written in, else the
+    agent's primary language. A Telugu reply read with English rules (or the reverse) sounds badly accented,
+    and agents switch to the caller's language mid-call.
+    """
+    counts: dict = {}
+    for ch in text:
+        code = ord(ch)
+        if code < 0x0900 or code > 0x0D7F:
+            continue
+        for start, end, lang in _SCRIPT_LANGUAGES:
+            if start <= code <= end:
+                counts[lang] = counts.get(lang, 0) + 1
+                break
+    if not counts:
+        return primary
+    lang = max(counts, key=counts.get)
+    known = {c.split("-")[0].lower() for c in [primary, *(supported or [])] if c}
+    if lang == "hi" and "mr" in known and "hi" not in known:
+        lang = "mr"  # Marathi is written in Devanagari too
+    # Keep the agent's own regional code (e.g. 'te-IN') when the sentence is in its primary language
+    if primary and primary.split("-")[0].lower() == lang:
+        return primary
+    return lang
+
+
 def clean_for_speech(text: str) -> str:
     """
     Removes things that shouldn't be read aloud (markdown, list markers, emojis, URLs, history

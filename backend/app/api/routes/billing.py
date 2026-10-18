@@ -94,6 +94,9 @@ def wallet_out(db: Session, client_id: str, limit: int = 100) -> Dict[str, Any]:
         "low_balance": wallet.balance_inr <= wallet.low_balance_threshold_inr,
         "calls_blocked": not allowed,
         "calls_blocked_reason": reason,
+        # Calls at a time the balance covers (each live call holds a full-length call's credits)
+        "max_concurrent_calls": billing.client_concurrency_limit(db, client_id),
+        "live_calls": billing.live_call_count(db, client_id),
         "gst_registered": settings.GST_REGISTERED,
         "subscription": subscriptions.subscription_out(db, client_id),
         "transactions": [transaction_out(t) for t in txns],

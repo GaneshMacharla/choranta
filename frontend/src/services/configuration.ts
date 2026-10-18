@@ -13,7 +13,28 @@ export interface AgentConfigurationResponse {
   status: string;
 }
 
+export interface SystemPromptPreview {
+  /** Exactly what the LLM receives as its system instruction on the first reply */
+  system_prompt: string;
+  fixed_instructions: string;
+  call_details: string;
+  greeting: string;
+  tools: Array<{ name: string; description: string }>;
+}
+
 export const configurationService = {
+  /** The system prompt built from the draft; pass the configuration to include unsaved edits */
+  getSystemPrompt: async (
+    agentId: string,
+    configuration: AgentConfigurationData | null,
+    outbound: boolean
+  ): Promise<SystemPromptPreview> => {
+    return request<SystemPromptPreview>(`/agents/${agentId}/system-prompt`, {
+      method: 'POST',
+      body: JSON.stringify({ configuration, outbound }),
+    });
+  },
+
   getConfiguration: async (agentId: string): Promise<AgentConfigurationResponse> => {
     return request<AgentConfigurationResponse>(`/agents/${agentId}/configuration`);
   },

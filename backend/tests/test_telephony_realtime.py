@@ -291,7 +291,8 @@ async def test_hello_on_pickup_does_not_cancel_greeting(db: Session, telephony_s
         await _until(lambda: s._turn_task.done(), timeout=10)
         assert _events(s, "ASSISTANT_RESPONSE")[-1]["interrupted"] is False
         assert fakes["llm"].calls == []  # no LLM turn for the pickup "Hello?"
-        assert fakes["tts"].spoken == ["Hi Rahul, this is Apex Realty.", "Do you have a minute?"]
+        # The greeting is one utterance, voiced once: the pickup "Hello?" resumed it, nothing was re-synthesized
+        assert fakes["tts"].spoken == ["Hi Rahul, this is Apex Realty. Do you have a minute?"]
     finally:
         await _shutdown(s)
 
