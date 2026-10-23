@@ -35,8 +35,6 @@ export const billingService = {
   saveProfile: (clientId: string, data: Partial<BillingProfile>) =>
     request<BillingProfile>(`${c(clientId)}/billing-profile`, { method: 'PUT', body: JSON.stringify(data) }),
   wallet: (clientId: string) => request<Wallet>(`${c(clientId)}/wallet`),
-  setThreshold: (clientId: string, low_balance_threshold_inr: number) =>
-    request<Wallet>(`${c(clientId)}/wallet`, { method: 'PUT', body: JSON.stringify({ low_balance_threshold_inr }) }),
   previewPayment: (clientId: string, amount_received_inr: number) =>
     request<GstSplit>(`${c(clientId)}/wallet/payments/preview`, { method: 'POST', body: JSON.stringify({ amount_received_inr }) }),
   recordPayment: (clientId: string, amount_received_inr: number, reference: string) =>

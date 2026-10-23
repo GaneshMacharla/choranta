@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Bot, Plus, Search, Eye, Edit2, Trash2, Building2, Sparkles, ArrowRight, ArrowLeft, Check, Layers, Wrench, Sliders, ShieldCheck } from 'lucide-react';
+import { Bot, Plus, Search, Eye, Edit2, Trash2, Sparkles, ArrowRight, ArrowLeft, Wrench, Sliders } from 'lucide-react';
 import { agentsService } from '../services/agents';
 import { clientsService } from '../services/clients';
 import { catalogsService } from '../services/catalogs';

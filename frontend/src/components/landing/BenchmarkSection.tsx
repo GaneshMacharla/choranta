@@ -9,11 +9,9 @@ import {
   MinusCircle,
   ArrowRight,
   ShieldCheck,
-  Zap,
-  Sparkles,
   ArrowLeftRight,
 } from 'lucide-react';
-import { BENCHMARK_FACTORS, BenchmarkFactor } from './landingData';
+import { BENCHMARK_FACTORS } from './landingData';
 
 interface BenchmarkSectionProps {
   onOpenDemo: () => void;

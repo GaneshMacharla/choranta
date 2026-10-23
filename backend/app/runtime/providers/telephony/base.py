@@ -85,3 +85,7 @@ class TelephonyProvider(BaseProvider):
         """Initiates an outbound call connecting the customer to an AI voice flow."""
         raise NotImplementedError("Outbound calling not implemented for this provider.")
 
+    def outbound_call_id(self, result: Dict[str, Any]) -> Optional[str]:
+        """The carrier's id for a call placed with initiate_outbound_call (Exotel's Call.Sid by default)."""
+        return (result.get("Call") or {}).get("Sid")
+

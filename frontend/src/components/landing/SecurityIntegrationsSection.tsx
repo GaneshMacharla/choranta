@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, Zap, Globe, Lock, Cpu, Server, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Shield, Cpu, CheckCircle2, ArrowRight } from 'lucide-react';
 
 export const SecurityIntegrationsSection: React.FC<{ onOpenDemo: () => void }> = ({ onOpenDemo }) => {
   const integrations = [

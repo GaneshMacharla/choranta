@@ -47,7 +47,7 @@ export const LandingPage: React.FC = () => {
         <PricingSection onOpenDemo={() => handleOpenDemo('sales')} />
 
         {/* Real Audio Showcase & Speech Nuances */}
-        <AudioShowcaseSection onOpenDemo={handleOpenDemo} />
+        <AudioShowcaseSection />
 
         {/* Enterprise Security & CRM Integrations */}
         <SecurityIntegrationsSection onOpenDemo={() => handleOpenDemo('integrations')} />

@@ -32,7 +32,6 @@ export const ClientsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [clients, setClients] = useState<Client[]>([]);
-  const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,7 +67,6 @@ export const ClientsPage: React.FC = () => {
         business_type: businessTypeFilter || undefined,
       });
       setClients(res.items);
-      setTotal(res.total);
     } catch (err: any) {
       setError(err.message || 'Failed to load clients');
     } finally {

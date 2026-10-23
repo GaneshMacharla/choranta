@@ -1,10 +1,10 @@
-from typing import Optional, List
+from typing import Optional
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
-from app.api.deps import get_db, get_current_user, require_admin
+from app.api.deps import get_db, get_current_user
 from app.models.user import User
 from app.schemas.client import ClientCreate, ClientUpdate, ClientResponse, ClientListResponse
-from app.schemas.agent import AgentResponse, AgentListResponse
+from app.schemas.agent import AgentListResponse
 from app.services.client_service import ClientService
 from app.services.agent_service import AgentService
 

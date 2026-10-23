@@ -4,7 +4,7 @@ Client notifications: short, plain-language messages under the bell in the clien
 notify() only adds the row; the caller's transaction commits it together with the change it describes.
 """
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session

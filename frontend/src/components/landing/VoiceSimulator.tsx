@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, Volume2, Sparkles, MessageSquare, Check, Phone, ArrowUpRight } from 'lucide-react';
+import { Play, Pause, RotateCcw, Check, Phone, ArrowUpRight } from 'lucide-react';
 import { AUDIO_SAMPLES, AudioSample } from './landingData';
 
 export const VoiceSimulator: React.FC<{ onOpenDemo: () => void }> = ({ onOpenDemo }) => {

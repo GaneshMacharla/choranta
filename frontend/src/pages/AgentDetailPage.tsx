@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import {
   Bot,
   ArrowLeft,
@@ -20,7 +20,6 @@ import {
   GitCompare,
   FlaskConical,
   Copy,
-  Database,
   MoreHorizontal,
   FileText,
 } from 'lucide-react';
@@ -55,8 +54,6 @@ import { Select } from '../components/common/Select';
 import { LoadingState } from '../components/common/LoadingState';
 import { ErrorState } from '../components/common/ErrorState';
 import { EmptyState } from '../components/common/EmptyState';
-import { runtimeService } from '../services/runtime';
-
 const AGENT_STATUSES: { value: AgentStatus; label: string }[] = [
   { value: 'DRAFT', label: 'Draft' },
   { value: 'TESTING', label: 'Testing' },
@@ -145,7 +142,6 @@ const normalizeConfig = (raw: any): AgentConfigurationData => ({
 
 export const AgentDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
 
   const [agent, setAgent] = useState<Agent | null>(null);
   const [versions, setVersions] = useState<AgentVersion[]>([]);
@@ -210,7 +206,7 @@ export const AgentDetailPage: React.FC = () => {
   const [isComparing, setIsComparing] = useState(false);
 
   // Auth & Voice Catalog State
-  const { token, user } = useAuth();
+  const { user } = useAuth();
   // Only admins publish versions (the server enforces it too)
   const isAdmin = user?.role === 'ADMIN';
 
@@ -223,9 +219,6 @@ export const AgentDetailPage: React.FC = () => {
   const [editForm, setEditForm] = useState<AgentUpdateInput>({});
   const [editError, setEditError] = useState<string | null>(null);
   const [isSubmittingMeta, setIsSubmittingMeta] = useState(false);
-
-  // List Item Draft Inputs
-  const [newOutputVariable, setNewOutputVariable] = useState('');
 
   // Variable Token Copying & Creation Modals
   const [copiedToken, setCopiedToken] = useState<string | null>(null);

@@ -3,10 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Building2,
   Bot,
-  Plus,
   ArrowUpRight,
-  Clock,
-  Sparkles,
   CheckCircle2,
   Radio,
 } from 'lucide-react';

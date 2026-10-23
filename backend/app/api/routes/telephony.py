@@ -4,7 +4,6 @@ import logging
 import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from urllib.parse import urlencode
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, Response, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
@@ -30,6 +29,7 @@ from app.runtime.runtime import AgentRuntime
 from app.runtime.readiness.checker import RuntimeReadinessChecker
 from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony import TelephonyProvider
+from app.runtime.providers.telephony.vobiz import vobiz_call_status
 from app.runtime.telephony.session import TelephonyMediaSession, active_telephony_calls
 from app.services.call_costing import estimate_call_cost
 from app.services.pricing import PricingSnapshot, get_pricing
@@ -157,7 +157,7 @@ def _format_call_response(
 
 
 # -------------------------------------------------------------
-# 1. INBOUND CALL WEBHOOKS (EXOTEL)
+# 1. CALL WEBHOOKS (EXOTEL, VOBIZ)
 # -------------------------------------------------------------
 
 async def _collect_webhook_params(request: Request) -> Dict[str, Any]:
@@ -176,7 +176,7 @@ async def _collect_webhook_params(request: Request) -> Dict[str, Any]:
 _with_token = with_webhook_token
 
 
-# Exotel CallSid -> background task finishing that call's session setup (see exotel_inbound_call_webhook)
+# Carrier call id -> background task finishing that call's session setup (see _answer_call)
 _pending_call_setups: Dict[str, "asyncio.Task[None]"] = {}
 
 
@@ -227,7 +227,7 @@ def _finish_call_setup(
         metadata = {
             "origin": "telephony_inbound",
             "call_id": call_record.id,
-            "provider": "exotel",
+            "provider": call_record.provider or "exotel",
             "caller": caller,
             "destination": destination,
             "phone_number_id": call_record.phone_number_id
@@ -331,12 +331,25 @@ async def exotel_inbound_call_webhook(
     request: Request,
     db: Session = Depends(get_db)
 ):
+    """Dynamic URL endpoint for Exotel's Voicebot applet; answers with the media WebSocket URL."""
+    return await _answer_call(request, db, "exotel")
+
+
+@router.api_route("/vobiz/answer", methods=["GET", "POST"], response_class=Response)
+async def vobiz_answer_webhook(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Answer URL for Vobiz calls (inbound to a Vobiz number, or outbound ones we placed); answers with Stream XML."""
+    return await _answer_call(request, db, "vobiz")
+
+
+async def _answer_call(request: Request, db: Session, provider_name: str) -> Response:
     """
-    Dynamic URL endpoint for Exotel's Voicebot applet.
     Authenticates the shared-secret token, resolves PhoneNumber to pinned AgentVersion,
-    verifies runtime readiness, initiates Call and RuntimeSession, and returns the media WebSocket URL.
+    verifies runtime readiness, initiates Call and RuntimeSession, and connects the call to the media WebSocket.
     """
-    telephony_provider = default_registry.get_telephony("exotel")
+    telephony_provider = default_registry.get_telephony(provider_name)
     media_type = telephony_provider.response_media_type
 
     # 1. Parse webhook parameters
@@ -346,17 +359,24 @@ async def exotel_inbound_call_webhook(
 
     # 2. Shared-secret validation
     if not telephony_provider.validate_webhook(request_url, params, token):
-        logger.warning(f"Rejecting Exotel webhook: invalid token for url '{request_url}'")
-        return Response(status_code=status.HTTP_403_FORBIDDEN, content="Invalid Exotel webhook token")
+        logger.warning(f"Rejecting {provider_name} webhook: invalid token for url '{request_url}'")
+        return Response(status_code=status.HTTP_403_FORBIDDEN, content=f"Invalid {provider_name} webhook token")
 
     payload = telephony_provider.parse_inbound_call_webhook(params)
     logger.info(f"Inbound call received: {payload.caller_number} -> {payload.destination_number} (CallSid={payload.provider_call_id})")
 
     # 3. Resolve which agent handles the call.
-    # A call we placed ourselves (outbound) already has a Call record keyed by Exotel's CallSid
+    # A call we placed ourselves (outbound) already has a Call record keyed by the carrier's call id
     # that pins the agent version; anything else is routed by the dialled phone number.
     call_repo = CallRepository(db)
     existing_call = call_repo.get_by_provider_call_id(payload.provider_call_id)
+    placed_call_id = params.get("call_id")
+    if not existing_call and placed_call_id:
+        # Vobiz only learns the call's id when it's answered: our Answer URL names the Call instead
+        placed = db.get(Call, placed_call_id)
+        if placed and placed.direction == "OUTBOUND" and placed.provider == provider_name and not placed.runtime_session_id:
+            placed.provider_call_id = payload.provider_call_id
+            existing_call = call_repo.update(placed)
 
     if existing_call:
         route = SimpleNamespace(
@@ -434,7 +454,7 @@ async def exotel_inbound_call_webhook(
                 agent_id=route.agent_id,
                 agent_version_id=route.agent_version_id,
                 phone_number_id=route.id,
-                provider="exotel",
+                provider=provider_name,
                 provider_call_id=payload.provider_call_id,
                 direction="INBOUND",
                 caller_number=payload.caller_number,
@@ -445,7 +465,7 @@ async def exotel_inbound_call_webhook(
                            **({"credit_budget": credit_budget} if credit_budget is not None else {})},
             ))
 
-        # 6. Start the RuntimeSession. Exotel hangs up if this webhook takes more than a few
+        # 6. Start the RuntimeSession. The carrier hangs up if this webhook takes more than a few
         # seconds, so on a live server it runs after we reply; the media stream waits for it.
         setup_args = dict(
             call_id=call_id,
@@ -463,8 +483,13 @@ async def exotel_inbound_call_webhook(
     # 7. Return the bidirectional media stream URL
     base_url = settings.TELEPHONY_BASE_URL or str(request.base_url).rstrip("/")
     ws_base = base_url.replace("https://", "wss://").replace("http://", "ws://")
-    stream_url = _with_token(f"{ws_base}/ws/telephony/exotel/media")
-    status_callback_url = _with_token(f"{base_url}/api/telephony/exotel/status")
+    if provider_name == "vobiz":
+        # The stream's start event may not name the call, so its URL does
+        stream_url = _with_token(f"{ws_base}/ws/telephony/vobiz/media", "vobiz", call=payload.provider_call_id)
+        status_callback_url = _with_token(f"{base_url}/api/telephony/vobiz/hangup", "vobiz")
+    else:
+        stream_url = _with_token(f"{ws_base}/ws/telephony/exotel/media")
+        status_callback_url = _with_token(f"{base_url}/api/telephony/exotel/status")
 
     connect_response = telephony_provider.generate_connect_response(
         stream_url=stream_url,
@@ -511,6 +536,32 @@ async def exotel_call_status_callback(
     return {"status": "processed", "call_id": call_record.id}
 
 
+@router.api_route("/vobiz/hangup", methods=["GET", "POST"])
+async def vobiz_hangup_callback(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Vobiz hangup URL: the call ended (completed, busy, no answer...) with its duration."""
+    telephony_provider = default_registry.get_telephony("vobiz")
+    token = request.query_params.get("token", "")
+    params = await _collect_webhook_params(request)
+    if not telephony_provider.validate_webhook(str(request.url.remove_query_params("token")), params, token):
+        return Response(status_code=status.HTTP_403_FORBIDDEN, content="Invalid vobiz webhook token")
+
+    call_repo = CallRepository(db)
+    call_record = db.get(Call, params["call_id"]) if params.get("call_id") else None
+    for key in ("CallUUID", "RequestUUID"):
+        if not call_record and params.get(key):
+            call_record = call_repo.get_by_provider_call_id(params[key])
+    if not call_record or call_record.provider != "vobiz":
+        return {"status": "not_found"}
+
+    call_status, call_duration = vobiz_call_status(params)
+    apply_call_status(db, call_record, call_status, call_duration, params.get("RecordUrl"))
+
+    return {"status": "processed", "call_id": call_record.id}
+
+
 # -------------------------------------------------------------
 # 2. BIDIRECTIONAL TELEPHONY WEBSOCKET AUDIO TRANSPORT
 # -------------------------------------------------------------
@@ -522,19 +573,31 @@ async def exotel_telephony_media_websocket(
     websocket: WebSocket,
     db: Session = Depends(get_db)
 ):
-    """
-    Exotel Voicebot (AgentStream) WebSocket endpoint.
-    Transcodes full-duplex 8kHz PCM16 audio to 16kHz PCM16, bridging Exotel with AgentRuntime.
-    """
+    """Exotel Voicebot (AgentStream) WebSocket endpoint."""
+    await _run_media_stream(websocket, db, "exotel")
+
+
+@ws_router.websocket("/ws/telephony/vobiz/media")
+@router.websocket("/vobiz/media")
+async def vobiz_telephony_media_websocket(
+    websocket: WebSocket,
+    db: Session = Depends(get_db)
+):
+    """Vobiz bidirectional <Stream> WebSocket endpoint."""
+    await _run_media_stream(websocket, db, "vobiz")
+
+
+async def _run_media_stream(websocket: WebSocket, db: Session, provider_name: str) -> None:
+    """Transcodes the carrier's full-duplex 8kHz PCM16 audio to 16kHz PCM16, bridging the call with AgentRuntime."""
     await websocket.accept()
-    telephony_provider = default_registry.get_telephony("exotel")
+    telephony_provider = default_registry.get_telephony(provider_name)
     # Exotel may drop query parameters from the stream URL, so a missing token isn't fatal here:
     # the stream must then belong to a call already routed through the token-checked Voicebot
     # webhook (an unguessable CallSid with a live runtime session), which is enforced on "start".
     token = websocket.query_params.get("token", "")
     token_valid = bool(token) and telephony_provider.validate_webhook(str(websocket.url), {}, token)
     if token and not token_valid:
-        logger.warning("Rejecting Exotel media stream: invalid token.")
+        logger.warning(f"Rejecting {provider_name} media stream: invalid token.")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -548,21 +611,23 @@ async def exotel_telephony_media_websocket(
             event_type = data.get("event")
 
             if event_type == "connected":
-                logger.info("Exotel media stream connected.")
+                logger.info(f"{provider_name} media stream connected.")
 
             elif event_type == "start":
                 stream_sid, call_sid = telephony_provider.parse_stream_start(data)
+                call_sid = call_sid or websocket.query_params.get("call", "")
                 start_info = data.get("start") or {}
                 logger.info(
-                    f"Exotel media stream starting: stream_sid={stream_sid}, call_sid={call_sid}, "
-                    f"media_format={start_info.get('media_format')}, start_keys={sorted(start_info.keys())}"
+                    f"{provider_name} media stream starting: stream_sid={stream_sid}, call_sid={call_sid}, "
+                    f"media_format={start_info.get('media_format') or start_info.get('mediaFormat')}, "
+                    f"start_keys={sorted(start_info.keys())}"
                 )
 
                 await _wait_for_call_setup(call_sid)
                 call_repo = CallRepository(db)
                 call_record = call_repo.get_by_provider_call_id(call_sid)
                 if not call_record:
-                    logger.error(f"Cannot find active Call record for Exotel CallSid '{call_sid}'")
+                    logger.error(f"Cannot find active Call record for {provider_name} call '{call_sid}'")
                     await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                     break
 
@@ -570,7 +635,7 @@ async def exotel_telephony_media_websocket(
                     custom_token = (start_info.get("custom_parameters") or {}).get("token", "")
                     routed = bool(call_record.runtime_session_id) and call_record.status in ("ANSWERED", "RINGING")
                     if not (custom_token and telephony_provider.validate_webhook(str(websocket.url), {}, custom_token)) and not routed:
-                        logger.warning(f"Rejecting Exotel media stream for call '{call_sid}': not routed via the Voicebot webhook.")
+                        logger.warning(f"Rejecting {provider_name} media stream for call '{call_sid}': not routed via the answer webhook.")
                         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                         break
 
@@ -590,15 +655,15 @@ async def exotel_telephony_media_websocket(
                         await media_session.handle_media_payload(media_payload)
 
             elif event_type == "stop":
-                logger.info("Exotel media stream received stop event (caller hangup).")
+                logger.info(f"{provider_name} media stream received stop event (caller hangup).")
                 if media_session:
                     await media_session.close(reason="caller_hangup")
                 break
 
     except WebSocketDisconnect:
-        logger.info("Exotel media stream disconnected.")
+        logger.info(f"{provider_name} media stream disconnected.")
     except Exception as e:
-        logger.error(f"Error in Exotel media websocket loop: {e}")
+        logger.error(f"Error in {provider_name} media websocket loop: {e}")
     finally:
         if media_session:
             await media_session.close(reason="disconnect")
@@ -963,14 +1028,16 @@ def get_telephony_overview(
     completed_calls = sum(1 for c in recent_calls if c.status == "COMPLETED")
     active_calls_count = len(active_telephony_calls)
 
-    has_exotel_credentials = all(
-        getattr(settings, key, None)
-        for key in ("EXOTEL_ACCOUNT_SID", "EXOTEL_API_KEY", "EXOTEL_API_TOKEN", "EXOTEL_WEBHOOK_SECRET")
+    provider = settings.TELEPHONY_PROVIDER
+    credential_keys = (
+        ("VOBIZ_AUTH_ID", "VOBIZ_AUTH_TOKEN", "VOBIZ_WEBHOOK_SECRET") if provider == "vobiz"
+        else ("EXOTEL_ACCOUNT_SID", "EXOTEL_API_KEY", "EXOTEL_API_TOKEN", "EXOTEL_WEBHOOK_SECRET")
     )
-    provider_status = "CONFIGURED" if has_exotel_credentials or settings.RUNTIME_MODE == "mock" else "UNCONFIGURED"
+    has_credentials = all(getattr(settings, key, None) for key in credential_keys)
+    provider_status = "CONFIGURED" if has_credentials or settings.RUNTIME_MODE == "mock" else "UNCONFIGURED"
 
     return TelephonyOverviewResponse(
-        provider="exotel",
+        provider=provider,
         provider_status=provider_status,
         total_phone_numbers=total_numbers,
         active_phone_numbers=active_numbers,

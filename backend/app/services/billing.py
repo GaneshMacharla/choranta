@@ -70,6 +70,23 @@ def live_call_count(db: Session, client_id: str) -> int:
     )
 
 
+def platform_live_call_count(db: Session) -> int:
+    since = subscriptions.utcnow() - LIVE_CALL_WINDOW
+    return (
+        db.query(func.count(Call.id))
+        .filter(Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= since)
+        .scalar() or 0
+    )
+
+
+def platform_headroom(db: Session) -> int:
+    """Calls that may still start across all clients before the speech providers' limits are reached."""
+    return max(0, settings.MAX_CONCURRENT_CALLS_PLATFORM - platform_live_call_count(db))
+
+
+PLATFORM_BUSY_REASON = "All lines are busy right now. Please try again in a few minutes."
+
+
 def call_hold_credits(db: Session, max_duration_s: Optional[float] = None) -> float:
     """Credits a full-length call can cost: the budget rate x the call's longest allowed length."""
     seconds = max(60.0, float(max_duration_s or settings.CALL_MAX_DURATION_S))
@@ -131,13 +148,15 @@ def call_budget(
 ) -> Tuple[bool, Optional[str], Optional[str], Optional[float]]:
     """
     Whether a new billable call may start, and the credits it may spend: (allowed, reason, code, budget).
-    Codes: PLAN_EXPIRED, NO_BALANCE, CONCURRENCY. A call's budget is a full-length call's cost, or what is
+    Codes: PLAN_EXPIRED, NO_BALANCE, CONCURRENCY (the client's limit or the platform's). A call's budget is a full-length call's cost, or what is
     left after the budgets of calls already live; it must cover CALL_MIN_BUDGET_MINUTES. The session hangs
     up before spending more, so the balance never goes below zero.
 
     With lock=True the wallet row stays locked until the caller commits: create the Call (with its
     budget) before committing, so concurrent call starts can't spend the same credits twice.
     """
+    if platform_headroom(db) <= 0:
+        return False, PLATFORM_BUSY_REASON, "CONCURRENCY", None
     if not settings.BILLING_ENFORCED or not client_id:
         return True, None, None, None
     if lock:
@@ -177,11 +196,6 @@ def check_call_allowed(
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     """Whether a new billable call may start, as (allowed, reason, code); see call_budget."""
     return call_budget(db, client_id, max_duration_s)[:3]
-
-
-def can_place_call(db: Session, client_id: Optional[str]) -> bool:
-    """New billable calls need credits for at least a short call (when balance enforcement is on)."""
-    return check_call_allowed(db, client_id)[0]
 
 
 def gst_split(total_received: float, client_state_code: Optional[str]) -> Dict[str, Any]:

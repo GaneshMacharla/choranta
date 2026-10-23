@@ -3,7 +3,6 @@ import {
   ReadinessCheckResult,
   RuntimeSession,
   RuntimeEvent,
-  SimulateTurnResult,
   StreamTurnEvent,
 } from '../types';
 
@@ -12,21 +11,6 @@ export type MockCallOutcome = 'completed' | 'no-answer' | 'busy' | 'failed';
 export const runtimeService = {
   /** How many test or live conversations an AI employee has had. */
   sessionCount: (agentId: string) => request<{ sessions: number }>(`/runtime/agents/${agentId}/session-count`),
-
-  simulateMockCall: async (
-    agentId: string,
-    agentVersionId: string,
-    utterances: string[]
-  ): Promise<{ label: string; call_id: string; session_id: string; status: string; event_count: number; usage: Record<string, any>; billing_excluded: boolean }> => {
-    return request(`/mock/calls/simulate`, {
-      method: 'POST',
-      body: JSON.stringify({
-        agent_id: agentId,
-        agent_version_id: agentVersionId,
-        utterances,
-      }),
-    });
-  },
 
   completePendingMockCalls: async (body: {
     status: MockCallOutcome;
@@ -75,20 +59,6 @@ export const runtimeService = {
   endSession: async (sessionId: string): Promise<RuntimeSession> => {
     return request<RuntimeSession>(`/runtime/sessions/${sessionId}/end`, {
       method: 'POST',
-    });
-  },
-
-  simulateTurn: async (
-    sessionId: string,
-    inputText: string,
-    options: { synthesizeAudio?: boolean } = {}
-  ): Promise<SimulateTurnResult> => {
-    return request<SimulateTurnResult>(`/runtime/sessions/${sessionId}/simulate_turn`, {
-      method: 'POST',
-      body: JSON.stringify({
-        input_text: inputText,
-        synthesize_audio: options.synthesizeAudio ?? true,
-      }),
     });
   },
 

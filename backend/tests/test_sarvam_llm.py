@@ -107,3 +107,17 @@ def test_sarvam_call_cost_uses_inr_rates(monkeypatch):
     cost = estimate_call_cost(60, {"llm_provider": "sarvam", "llm_input_tokens": 1_000_000, "llm_output_tokens": 1_000_000})
     assert cost["breakdown"]["llm"] == 100.0
     assert cost["llm_provider"] == "sarvam"
+
+
+def test_rate_limited_request_is_retried(monkeypatch):
+    monkeypatch.setattr("app.runtime.providers.sarvam.llm.time.sleep", lambda s: None)
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"retry-after": "1"}, content=b"rate limited")
+        return httpx.Response(200, content=_sse({"choices": [{"delta": {"content": "Hi"}, "finish_reason": "stop"}]}))
+
+    items = list(_provider(handler).generate_stream("You are helpful.", [{"role": "user", "content": "Hi"}]))
+    assert len(calls) == 2 and items[0] == "Hi"

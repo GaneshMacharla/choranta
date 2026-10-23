@@ -12,7 +12,6 @@ class MockTelephonyProvider(TelephonyProvider):
 
     def __init__(self, name: str = "mock_telephony"):
         self._name = name
-        self._reject_signatures = False
 
     @property
     def provider_name(self) -> str:
@@ -28,11 +27,8 @@ class MockTelephonyProvider(TelephonyProvider):
     def close(self) -> None:
         pass
 
-    def set_reject_signatures(self, reject: bool) -> None:
-        self._reject_signatures = reject
-
     def validate_webhook(self, request_url: str, params: Dict[str, Any], signature: str) -> bool:
-        return not self._reject_signatures
+        return True
 
     def parse_inbound_call_webhook(self, params: Dict[str, Any]) -> InboundCallPayload:
         call_sid = params.get("CallSid") or params.get("call_sid") or "CA_mock_call"

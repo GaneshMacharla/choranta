@@ -46,11 +46,6 @@ def get(db: Session, client_id: str) -> Optional[ClientVerification]:
     return db.get(ClientVerification, client_id)
 
 
-def is_approved(db: Session, client_id: str) -> bool:
-    v = get(db, client_id)
-    return bool(v and v.status == "APPROVED")
-
-
 def require_approved(db: Session, client_id: str) -> None:
     v = get(db, client_id)
     if not v or v.status != "APPROVED":
@@ -162,7 +157,7 @@ def document_path(v: ClientVerification, index: int) -> Tuple[str, Dict[str, Any
     return path, doc
 
 
-def out(db: Session, v: Optional[ClientVerification], include_paths: bool = False) -> Dict[str, Any]:
+def out(db: Session, v: Optional[ClientVerification]) -> Dict[str, Any]:
     if not v:
         return {"status": "NOT_STARTED", "document_kinds": DOCUMENT_KINDS}
     client = db.get(Client, v.client_id)

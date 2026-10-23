@@ -116,6 +116,10 @@ def test_validation_rejects_bad_settings(db: Session, telephony_setup):
     svc.add_recipients_from_csv(db, campaign, CSV)
     with pytest.raises(svc.CampaignError, match="Confirm"):
         svc.launch(db, campaign, "usr_test", consent=False)
+    campaign.purpose = "PROMOTIONAL"
+    db.commit()
+    with pytest.raises(svc.CampaignError, match="Promotional campaigns are not supported"):
+        svc.launch(db, campaign, "usr_test", consent=True)
 
 
 def test_instant_outbound_may_call_24_7_but_bulk_may_not(db: Session, telephony_setup):

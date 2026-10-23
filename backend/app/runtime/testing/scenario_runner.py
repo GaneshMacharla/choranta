@@ -143,7 +143,6 @@ class TestScenarioRunner:
 
                 # Process turn through actual runtime
                 turn_start = perf_counter()
-                stt_start = perf_counter()
                 # Run turn through runtime.process_turn
                 turn_result = runtime.process_turn(runtime_session.id, caller_turn.text)
                 turn_duration = (perf_counter() - turn_start) * 1000

@@ -28,8 +28,3 @@ class ValidationException(ChorantaException):
 class AuthenticationException(ChorantaException):
     def __init__(self, message: str = "Invalid credentials or unauthorized access."):
         super().__init__(message, status_code=401)
-
-
-class ForbiddenException(ChorantaException):
-    def __init__(self, message: str = "Insufficient permissions to perform this operation."):
-        super().__init__(message, status_code=403)

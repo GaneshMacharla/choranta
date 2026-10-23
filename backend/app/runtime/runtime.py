@@ -14,9 +14,7 @@ from app.schemas.agent_spec import CanonicalAgentSpec
 from app.runtime.exceptions import (
     AgentVersionNotFound,
     AgentVersionNotPublished,
-    InvalidSessionTransition,
     SessionNotActiveError,
-    RuntimeInitializationError,
 )
 from app.runtime.lifecycle import SessionStatus, validate_session_transition
 from app.runtime.context import RuntimeContext
@@ -401,7 +399,6 @@ class AgentRuntime:
                         payload={"call_id": tc.id, "success": tool_result.success, "data": tool_result.data, "error": tool_result.error}
                     )
                     yield {"type": "tool", "status": "completed", "tool_name": tc.tool_name, "success": tool_result.success}
-                    import json
                     context.conversation.add_tool_result(
                         tool_call_id=tc.id,
                         content=compact_json(tool_result.data if tool_result.success else {"error": tool_result.error}),
@@ -574,7 +571,6 @@ class AgentRuntime:
                     )
 
                     # Add tool result to conversation
-                    import json
                     result_content = compact_json(tool_result.data if tool_result.success else {"error": tool_result.error})
                     context.conversation.add_tool_result(
                         tool_call_id=tc.id,
@@ -746,31 +742,4 @@ class AgentRuntime:
         )
 
         logger.info(f"RuntimeSession '{session_id}' completed successfully.")
-        return updated
-
-    def fail_session(self, session_id: str, error_message: str) -> RuntimeSession:
-        """
-        Marks session as FAILED and logs failure reason.
-        """
-        session_record = self.session_repo.get_by_id(session_id)
-        if not session_record:
-            raise NotFoundException("RuntimeSession", session_id)
-
-        validate_session_transition(session_record.status, SessionStatus.FAILED.value)
-        session_record.status = SessionStatus.FAILED.value
-        session_record.error_message = error_message
-        session_record.ended_at = datetime.now(timezone.utc)
-        updated = self.session_repo.update(session_record)
-
-        self.emitter.emit(
-            RuntimeEventType.SESSION_FAILED,
-            session_id=session_id,
-            agent_id=session_record.agent_id,
-            agent_version_id=session_record.agent_version_id,
-            client_id=session_record.client_id,
-            payload={"error": error_message}
-        )
-
-        self._contexts.pop(session_id, None)
-        logger.error(f"RuntimeSession '{session_id}' failed: {error_message}")
         return updated

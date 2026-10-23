@@ -428,6 +428,9 @@ def launch(db: Session, campaign: Campaign, user_id: Optional[str], consent: boo
         raise CampaignError("This campaign has already been launched.", 409)
     if not consent:
         raise CampaignError("Confirm that recipients agreed to be contacted before launching.")
+    # Calls go out from regular +91 numbers, which TRAI allows only for existing customers and enquiries
+    if campaign.purpose == "PROMOTIONAL":
+        raise CampaignError("Promotional campaigns are not supported. Only call your existing customers or people who enquired.")
     if campaign.kind == "BULK" and not _recipient_count(db, campaign.id):
         raise CampaignError("Add recipients before launching.")
     validate_config(db, campaign)
@@ -756,7 +759,7 @@ def _dial_campaign(db: Session, campaign: Campaign, now: datetime, budget: int,
                    dial: Callable[..., Call]) -> int:
     """Places calls for one running campaign; returns how many were placed."""
     live = _recipient_count(db, campaign.id, ("DIALING",))
-    free = min(campaign.max_concurrent - live, budget)
+    free = min(campaign.max_concurrent - live, budget, billing.platform_headroom(db))
     if free > 0 and campaign.kind == "BULK":
         free = min(free, _bulk_headroom(db, campaign))
     if free <= 0:

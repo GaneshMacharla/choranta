@@ -1,6 +1,6 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from app.models.knowledge_source import KnowledgeSource, agent_knowledge_sources
+from app.models.knowledge_source import KnowledgeSource
 from app.models.agent import Agent
 
 

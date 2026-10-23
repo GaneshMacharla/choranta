@@ -1,5 +1,5 @@
 import { request } from './api';
-import { Agent, AgentCreateInput, AgentDraftRequest, AgentDraftResponse, AgentUpdateInput, AgentVersion } from '../types';
+import { Agent, AgentCreateInput, AgentUpdateInput, AgentVersion } from '../types';
 
 export interface AgentListResponse {
   items: Agent[];
@@ -17,13 +17,6 @@ export const agentsService = {
 
     const queryString = query.toString() ? `?${query.toString()}` : '';
     return request<AgentListResponse>(`/agents${queryString}`);
-  },
-
-  draftConfiguration: async (payload: AgentDraftRequest): Promise<AgentDraftResponse> => {
-    return request<AgentDraftResponse>('/agents/draft-configuration', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
   },
 
   get: async (id: string): Promise<Agent> => {
@@ -46,12 +39,6 @@ export const agentsService = {
 
   getVersions: async (id: string): Promise<AgentVersion[]> => {
     return request<AgentVersion[]>(`/agents/${id}/versions`);
-  },
-
-  publishVersion: async (id: string): Promise<AgentVersion> => {
-    return request<AgentVersion>(`/agents/${id}/versions`, {
-      method: 'POST',
-    });
   },
 
   delete: async (id: string): Promise<void> => {

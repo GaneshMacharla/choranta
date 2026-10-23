@@ -16,12 +16,13 @@ from app.runtime.providers.sarvam.llm import SarvamLLMProvider
 from app.runtime.providers.sarvam.stt import SarvamSTTProvider
 from app.runtime.providers.sarvam.tts import SarvamTTSProvider
 from app.runtime.providers.telephony.exotel import ExotelTelephonyProvider
+from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
 
 
 class ProviderRegistry:
     """
     Registry resolving STT, LLM, TTS, and Telephony providers by name.
-    Supports development/test mock mode as well as real Cartesia, Gemini, and Exotel integrations.
+    Supports development/test mock mode as well as real Cartesia, Gemini, Exotel and Vobiz integrations.
     """
 
     def __init__(self, mode: Optional[str] = None):
@@ -61,6 +62,7 @@ class ProviderRegistry:
             self.register_stt("sarvam", SarvamSTTProvider())
             self.register_tts("sarvam", SarvamTTSProvider())
             self.register_telephony("exotel", ExotelTelephonyProvider())
+            self.register_telephony("vobiz", VobizTelephonyProvider())
         else:
             # Mock mode: alias canonical provider names to mock implementations for fast local test execution
             self.register_stt("cartesia", MockSTTProvider("cartesia"))
@@ -70,6 +72,7 @@ class ProviderRegistry:
             self.register_tts("sarvam", MockTTSProvider("sarvam"))
             self.register_tts("cartesia", MockTTSProvider("cartesia"))
             self.register_telephony("exotel", MockTelephonyProvider("exotel"))
+            self.register_telephony("vobiz", MockTelephonyProvider("vobiz"))
 
     def enable_real_providers(self) -> None:
         """Switch to real external providers."""
@@ -81,6 +84,7 @@ class ProviderRegistry:
         self.register_stt("sarvam", SarvamSTTProvider())
         self.register_tts("sarvam", SarvamTTSProvider())
         self.register_telephony("exotel", ExotelTelephonyProvider())
+        self.register_telephony("vobiz", VobizTelephonyProvider())
 
     def enable_mock_providers(self) -> None:
         """Switch to mock providers for test isolation."""
@@ -92,6 +96,7 @@ class ProviderRegistry:
         self.register_tts("sarvam", MockTTSProvider("sarvam"))
         self.register_tts("cartesia", MockTTSProvider("cartesia"))
         self.register_telephony("exotel", MockTelephonyProvider("exotel"))
+        self.register_telephony("vobiz", MockTelephonyProvider("vobiz"))
 
     def register_stt(self, name: str, provider: STTProvider) -> None:
         self._stt_providers[name.lower()] = provider
@@ -137,9 +142,6 @@ class ProviderRegistry:
 
     def has_tts(self, name: str) -> bool:
         return name.lower() in self._tts_providers
-
-    def has_telephony(self, name: str) -> bool:
-        return name.lower() in self._telephony_providers
 
 
 # Global default registry instance

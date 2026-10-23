@@ -13,9 +13,6 @@ class CallRepository:
     def get_by_provider_call_id(self, provider_call_id: str) -> Optional[Call]:
         return self.db.query(Call).filter(Call.provider_call_id == provider_call_id).first()
 
-    def get_by_session_id(self, runtime_session_id: str) -> Optional[Call]:
-        return self.db.query(Call).filter(Call.runtime_session_id == runtime_session_id).first()
-
     def list_by_client(self, client_id: str, skip: int = 0, limit: int = 50) -> List[Call]:
         return (
             self.db.query(Call)

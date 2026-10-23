@@ -3,7 +3,7 @@ Preconfigured Agent Templates Registry.
 Contains production-grade blueprints such as the Sarvam-inspired Real Estate Lead Qualification Agent.
 """
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from app.schemas.agent_spec import AgentConfigurationData
 from app.services.agent_templates_business import BUSINESS_TEMPLATES, CALL_SCRIPTS
 
@@ -15,17 +15,6 @@ class TemplatePreview(BaseModel):
     input_variables: List[str]
     output_variables: List[str]
     enabled_tools: List[str]
-
-
-class AgentTemplate(BaseModel):
-    id: str
-    name: str
-    role: str
-    description: str
-    category: str
-    capabilities: List[str]
-    preview: TemplatePreview
-    default_config: Dict[str, Any]
 
 
 REAL_ESTATE_LEAD_QUALIFICATION_TEMPLATE: Dict[str, Any] = {

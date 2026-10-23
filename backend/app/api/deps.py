@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import Dict, Generator, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -61,7 +61,7 @@ def _verify_token_and_get_user(token: str, db: Session) -> User:
             detail=str(e),
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed. Unable to verify credentials.",

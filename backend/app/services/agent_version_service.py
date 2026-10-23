@@ -2,7 +2,6 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from app.core.exceptions import NotFoundException, ValidationException
 from app.core.security import generate_unique_id
-from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.agent_version_repository import AgentVersionRepository
@@ -13,10 +12,9 @@ from app.repositories.tool_repository import ToolRepository
 from app.repositories.integration_repository import IntegrationRepository
 from app.schemas.agent_spec import (
     AgentVersionResponse,
-    CanonicalAgentSpec,
     VersionComparisonResponse,
     FieldDiff,
-    AgentConfigurationData
+    AgentConfigurationData,
 )
 from app.services.agent_spec_builder import AgentSpecBuilder
 from app.services.agent_spec_validator import AgentSpecValidator

@@ -1,6 +1,6 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from app.models.tool import Tool, agent_tools
+from app.models.tool import Tool
 from app.models.agent import Agent
 
 

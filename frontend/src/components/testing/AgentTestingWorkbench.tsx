@@ -1,9 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  FlaskConical,
   Play,
-  Square,
   Send,
   CheckCircle,
   AlertTriangle,
@@ -14,7 +12,6 @@ import {
   Radio,
   Hand,
   Volume2,
-  VolumeX,
   Sparkles,
   Layers,
   Sliders,
@@ -27,7 +24,6 @@ import { agentsService } from '../../services/agents';
 import { runtimeService } from '../../services/runtime';
 import { catalogsService } from '../../services/catalogs';
 import { request } from '../../services/api';
-import { testScenariosService, TestRun, TestScenario } from '../../services/testScenarios';
 import { VoiceScenarioSuite } from './VoiceScenarioSuite';
 import { PhoneCallTester } from './PhoneCallTester';
 import { BrowserCallTester } from './BrowserCallTester';
@@ -122,12 +118,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
   const [showRuntimeDiagnostics, setShowRuntimeDiagnostics] = useState(false);
   const [testLanguage, setTestLanguage] = useState('en');
   const [runtimeMode, setRuntimeMode] = useState<'mock' | 'real' | null>(null);
-  const [scenarios, setScenarios] = useState<TestScenario[]>([]);
-  const [selectedScenarioId, setSelectedScenarioId] = useState('');
-  const [scenarioName, setScenarioName] = useState('New conversation scenario');
-  const [scenarioTurn, setScenarioTurn] = useState('I want to check appointment availability');
-  const [scenarioRun, setScenarioRun] = useState<TestRun | null>(null);
-  const [isScenarioActionRunning, setIsScenarioActionRunning] = useState(false);
 
   // Turn Simulator State (HTTP)
   const [userInput, setUserInput] = useState('');
@@ -188,14 +178,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
       .then((response) => setRuntimeMode(response.mode))
       .catch(() => setRuntimeMode(null));
   }, []);
-
-  useEffect(() => {
-    if (!selectedAgentId) return;
-    testScenariosService.list(selectedAgentId).then((items) => {
-      setScenarios(items);
-      setSelectedScenarioId((current) => current || items[0]?.id || '');
-    }).catch(() => setScenarios([]));
-  }, [selectedAgentId]);
 
   useEffect(() => {
     if (!selectedAgentId || agents.length === 0) return;
@@ -375,39 +357,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
       console.warn('Session termination notice:', err?.message || err);
     } finally {
       setIsEndingSession(false);
-    }
-  };
-
-  const handleCreateScenario = async () => {
-    if (!selectedAgentId || !selectedVersionId || !scenarioName.trim() || !scenarioTurn.trim()) return;
-    setIsScenarioActionRunning(true);
-    try {
-      const created = await testScenariosService.create({
-        agent_id: selectedAgentId,
-        agent_version_id: selectedVersionId,
-        name: scenarioName.trim(),
-        caller_goal: scenarioTurn.trim(),
-        turns: scenarioTurn.split('\n').map((turn) => turn.trim()).filter(Boolean),
-        expected: {},
-      });
-      setScenarios((current) => [created, ...current]);
-      setSelectedScenarioId(created.id);
-    } catch (err: any) {
-      alert(`Scenario save failed: ${err.message || 'Unable to save scenario.'}`);
-    } finally {
-      setIsScenarioActionRunning(false);
-    }
-  };
-
-  const handleRunScenario = async () => {
-    if (!selectedScenarioId) return;
-    setIsScenarioActionRunning(true);
-    try {
-      setScenarioRun(await testScenariosService.run(selectedScenarioId));
-    } catch (err: any) {
-      alert(`Scenario run failed: ${err.message || 'Unable to run scenario.'}`);
-    } finally {
-      setIsScenarioActionRunning(false);
     }
   };
 
@@ -1005,9 +954,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
             <VoiceScenarioSuite
               selectedAgentId={selectedAgentId}
               selectedVersionId={selectedVersionId}
-              runtimeMode={runtimeMode}
-              agents={agents}
-              versions={versions}
             />
           </div>
         ) : testMode === 'phone' ? (
@@ -1136,9 +1082,6 @@ export const AgentTestingWorkbench: React.FC<AgentTestingWorkbenchProps> = ({ ag
         <VoiceScenarioSuite
           selectedAgentId={selectedAgentId}
           selectedVersionId={selectedVersionId}
-          runtimeMode={runtimeMode}
-          agents={agents}
-          versions={versions}
         />
       )}
 

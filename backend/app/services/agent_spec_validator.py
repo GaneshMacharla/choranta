@@ -1,4 +1,4 @@
-from typing import List, Set
+from typing import List
 from sqlalchemy.orm import Session
 from app.schemas.agent_spec import CanonicalAgentSpec, ValidationResult, ValidationErrorItem
 from app.models.knowledge_source import KnowledgeSource

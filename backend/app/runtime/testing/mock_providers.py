@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import logging
 from typing import Any, Dict, List, Optional
 from app.runtime.providers.base import AudioResult, LLMResult, ToolCallRequest, TranscriptResult
@@ -7,7 +6,7 @@ from app.runtime.providers.llm import LLMProvider
 from app.runtime.providers.stt import STTProvider
 from app.runtime.providers.tts import TTSProvider
 from app.runtime.tools.executor import ToolExecutor
-from app.runtime.tools.mock import BaseToolHandler, ToolResult
+from app.runtime.tools.mock import BaseToolHandler
 from app.runtime.testing.business_state import MockBusinessState
 
 logger = logging.getLogger("choranta.testing.providers")

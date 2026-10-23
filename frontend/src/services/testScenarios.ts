@@ -146,8 +146,6 @@ export interface TestMetricsSummary {
 export const testScenariosService = {
   list: (agentId?: string) =>
     request<TestScenario[]>(`/test-scenarios${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''}`),
-  get: (id: string) =>
-    request<TestScenario>(`/test-scenarios/${id}`),
   create: (payload: Partial<TestScenario>) =>
     request<TestScenario>('/test-scenarios', { method: 'POST', body: JSON.stringify(payload) }),
   update: (id: string, payload: Partial<TestScenario>) =>
@@ -167,10 +165,6 @@ export const testScenariosService = {
     }),
   listRuns: (scenarioId: string) =>
     request<TestRun[]>(`/test-scenarios/${scenarioId}/runs`),
-  getRun: (runId: string) =>
-    request<TestRun>(`/test-scenarios/runs/${runId}`),
-  cancelRun: (runId: string) =>
-    request<{ cancelled: boolean; run_id: string }>(`/test-scenarios/runs/${runId}/cancel`, { method: 'POST' }),
   compareRuns: (baselineRunId: string, comparisonRunId: string) =>
     request<RegressionComparison>(`/test-scenarios/runs/${comparisonRunId}/compare/${baselineRunId}`),
   getMetricsSummary: (agentId?: string) =>

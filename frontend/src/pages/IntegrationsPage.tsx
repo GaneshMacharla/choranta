@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Puzzle, RefreshCw, CheckCircle2, Globe, Key, ShieldCheck } from 'lucide-react';
+import { Puzzle, RefreshCw, Globe } from 'lucide-react';
 import { catalogsService } from '../services/catalogs';
 import { Integration } from '../types';
 import { Card } from '../components/common/Card';

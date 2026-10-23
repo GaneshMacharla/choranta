@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, ConfigDict, model_validator
 
 
@@ -82,10 +82,6 @@ class IntegrationResponse(BaseModel):
                 "updated_at": data.updated_at,
             }
         return data
-
-
-class AttachedItemIds(BaseModel):
-    ids: List[str]
 
 
 class VoiceResponse(BaseModel):

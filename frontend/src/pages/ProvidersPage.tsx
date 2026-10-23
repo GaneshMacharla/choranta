@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Cpu, ShieldCheck, Zap, Radio, Phone, FlaskConical, CheckCircle2, Lock } from 'lucide-react';
+import { Cpu, FlaskConical, CheckCircle2, Lock } from 'lucide-react';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';

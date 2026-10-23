@@ -16,7 +16,7 @@ from app.core.security import generate_unique_id
 from app.db.session import SessionLocal
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
-from app.models.test_scenario import TestRun, TestRunEvent, TestScenario
+from app.models.test_scenario import TestRun, TestScenario
 from app.runtime.testing.regression import compare_test_runs
 from app.runtime.testing.scenario_runner import TestScenarioRunner
 from app.runtime.testing.templates import get_all_templates, get_template_by_id

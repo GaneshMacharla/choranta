@@ -50,6 +50,7 @@ def test_pay_as_you_go_calls_at_a_time_follow_the_wallet(db: Session, telephony_
     monkeypatch.setattr(billing, "budget_credits_per_minute", lambda db: 7.0)
     monkeypatch.setattr(settings, "CALL_MAX_DURATION_S", 600, raising=False)
     monkeypatch.setattr(settings, "MAX_CONCURRENT_CALLS_PER_CLIENT", 50, raising=False)
+    monkeypatch.setattr(settings, "MAX_CONCURRENT_CALLS_PLATFORM", 100, raising=False)
     cid = telephony_setup["client"].id
     assert billing.call_hold_credits(db) == 70.0
 
@@ -78,6 +79,23 @@ def test_pay_as_you_go_calls_at_a_time_follow_the_wallet(db: Session, telephony_
     assert billing.client_concurrency_limit(db, cid) == 1
     assert campaigns.concurrency_cap(db, cid) == 1  # never below one campaign line
     assert billing.check_call_allowed(db, cid)[2] == "NO_BALANCE"
+
+
+def test_platform_cap_blocks_calls_across_all_clients(db: Session, telephony_setup, company, payg, monkeypatch):
+    monkeypatch.setattr(settings, "MAX_CONCURRENT_CALLS_PLATFORM", 3, raising=False)
+    cid = telephony_setup["client"].id
+    billing.record_payment(db, cid, 10000, None, None)
+    _live_calls(db, telephony_setup, 2)
+    assert billing.platform_headroom(db) == 1
+    assert billing.check_call_allowed(db, cid)[0]
+
+    # Live calls of any client count, test calls included
+    _live_calls(db, telephony_setup, 1)
+    db.query(Call).filter(Call.client_id == cid).first().client_id = "cli_other"
+    db.commit()
+    assert billing.platform_headroom(db) == 0
+    allowed, reason, code = billing.check_call_allowed(db, cid)
+    assert not allowed and code == "CONCURRENCY" and reason == billing.PLATFORM_BUSY_REASON
 
 
 def test_ended_plan_falls_back_to_credits_instead_of_blocking(db: Session, telephony_setup, company, payg):

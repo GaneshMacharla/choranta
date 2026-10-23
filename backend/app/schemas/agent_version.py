@@ -31,8 +31,3 @@ class AgentVersionResponse(BaseModel):
     created_by: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
-
-
-class AgentVersionListResponse(BaseModel):
-    items: List[AgentVersionResponse]
-    total: int

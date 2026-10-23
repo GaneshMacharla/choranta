@@ -1,4 +1,3 @@
-from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 from app.core.exceptions import NotFoundException
 from app.models.agent import Agent
@@ -12,8 +11,7 @@ from app.repositories.integration_repository import IntegrationRepository
 from app.schemas.agent_spec import (
     AgentConfigurationData,
     AgentConfigurationResponse,
-    CanonicalAgentSpec,
-    ValidationResult
+    ValidationResult,
 )
 from app.services.agent_spec_builder import AgentSpecBuilder
 from app.services.agent_spec_validator import AgentSpecValidator

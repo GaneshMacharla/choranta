@@ -348,7 +348,6 @@ class DeterministicQualityEvaluator:
             return results
 
         all_assistant_text = " ".join(t.get("assistant", "") for t in turns).lower()
-        all_caller_text = " ".join(t.get("caller", "") for t in turns).lower()
         final_assistant = turns[-1].get("assistant", "").lower()
 
         # Quality Metric 1: Caller Goal Achievement

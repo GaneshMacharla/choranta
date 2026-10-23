@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Wrench, RefreshCw, Terminal, Clock, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { Wrench, RefreshCw, Clock, CheckCircle2 } from 'lucide-react';
 import { catalogsService } from '../services/catalogs';
 import { Tool } from '../types';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
-import { Badge } from '../components/common/Badge';
 import { LoadingState } from '../components/common/LoadingState';
 import { ErrorState } from '../components/common/ErrorState';
 import { EmptyState } from '../components/common/EmptyState';

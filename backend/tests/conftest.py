@@ -30,6 +30,8 @@ for _override in ("STT_PROVIDER_OVERRIDE", "TTS_PROVIDER_OVERRIDE", "LLM_PROVIDE
     object.__setattr__(settings, _override, "")  # each test agent uses its own providers
 # Billing tests enable wallet enforcement explicitly; other tests place calls freely
 object.__setattr__(settings, "BILLING_ENFORCED", False)
+# Existing suites dial through the (mock) Exotel carrier; Vobiz tests switch this themselves
+object.__setattr__(settings, "TELEPHONY_PROVIDER", "exotel")
 from app.runtime.providers.registry import default_registry
 default_registry.enable_mock_providers()
 

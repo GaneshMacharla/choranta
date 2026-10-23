@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DollarSign, Clock, PhoneCall, FlaskConical, Info, ArrowUpRight } from 'lucide-react';
+import { DollarSign, PhoneCall, FlaskConical, Info, ArrowUpRight } from 'lucide-react';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';

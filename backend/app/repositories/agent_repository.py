@@ -1,8 +1,6 @@
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from app.models.agent import Agent
-from app.models.client import Client
 
 
 class AgentRepository:

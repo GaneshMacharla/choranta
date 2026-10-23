@@ -1,15 +1,10 @@
 import React, { useState } from 'react';
-import { Volume2, Play, Pause, Languages, Sparkles, MessageSquare, PhoneCall } from 'lucide-react';
+import { Volume2, Play, Pause, Languages, MessageSquare, PhoneCall } from 'lucide-react';
 import { AUDIO_SAMPLES, AudioSample } from './landingData';
 
-interface AudioShowcaseSectionProps {
-  onOpenDemo: (workflow?: string) => void;
-}
-
-export const AudioShowcaseSection: React.FC<AudioShowcaseSectionProps> = ({ onOpenDemo }) => {
+export const AudioShowcaseSection: React.FC = () => {
   const [activeSampleId, setActiveSampleId] = useState<string>(AUDIO_SAMPLES[0].id);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [activeStep, setActiveStep] = useState<number>(0);
 
   const sample = AUDIO_SAMPLES.find((s) => s.id === activeSampleId) || AUDIO_SAMPLES[0];
 
@@ -20,7 +15,6 @@ export const AudioShowcaseSection: React.FC<AudioShowcaseSectionProps> = ({ onOp
   const handleSelect = (s: AudioSample) => {
     setActiveSampleId(s.id);
     setIsPlaying(false);
-    setActiveStep(0);
   };
 
   return (

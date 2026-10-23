@@ -3,11 +3,6 @@ import { markUtc, request } from './api';
 import { KnowledgeSource, Tool, Integration, CartesiaVoice } from '../types';
 
 export const catalogsService = {
-  // Knowledge Sources
-  listKnowledge: async (): Promise<KnowledgeSource[]> => {
-    return request<KnowledgeSource[]>('/knowledge');
-  },
-
   // Each client's knowledge base (its AI employees answer from it)
   listClientKnowledge: (clientId: string) => request<KnowledgeSource[]>(`/clients/${clientId}/knowledge`),
 
@@ -63,10 +58,6 @@ export const catalogsService = {
     return request<Tool[]>('/tools');
   },
 
-  getAgentTools: async (agentId: string): Promise<Tool[]> => {
-    return request<Tool[]>(`/agents/${agentId}/tools`);
-  },
-
   attachTool: async (agentId: string, toolId: string): Promise<void> => {
     return request<void>(`/agents/${agentId}/tools/${toolId}`, {
       method: 'POST',
@@ -82,22 +73,6 @@ export const catalogsService = {
   // Integrations
   listIntegrations: async (): Promise<Integration[]> => {
     return request<Integration[]>('/integrations');
-  },
-
-  getAgentIntegrations: async (agentId: string): Promise<Integration[]> => {
-    return request<Integration[]>(`/agents/${agentId}/integrations`);
-  },
-
-  attachIntegration: async (agentId: string, integrationId: string): Promise<void> => {
-    return request<void>(`/agents/${agentId}/integrations/${integrationId}`, {
-      method: 'POST',
-    });
-  },
-
-  detachIntegration: async (agentId: string, integrationId: string): Promise<void> => {
-    return request<void>(`/agents/${agentId}/integrations/${integrationId}`, {
-      method: 'DELETE',
-    });
   },
 
   // Cartesia Voices Catalog
@@ -116,10 +91,6 @@ export const catalogsService = {
   },
 
   // Sarvam voices (the voices in use; the Cartesia catalog above is kept but not shown)
-  /** Sarvam voices best first for a language (Sarvam's picks for it, then by quality tier). */
-  rankedSarvamVoices: (language: string) =>
-    request<{ id: string; name: string; gender: string }[]>(`/catalogs/sarvam-voices?language=${encodeURIComponent(language)}`),
-
   listSarvamVoices: async (): Promise<CartesiaVoice[]> => {
     const voices = await request<Array<{ id: string; name: string; is_default: boolean }>>('/catalogs/sarvam-voices');
     return voices.map((v) => ({ ...v, provider: 'sarvam', language: null, description: 'Sarvam Bulbul v3 voice, made for Indian languages.' }));
@@ -140,9 +111,5 @@ export const catalogsService = {
   // Agent Templates
   listTemplates: async (): Promise<any[]> => {
     return request<any[]>('/catalogs/agent-templates');
-  },
-
-  getTemplate: async (templateId: string): Promise<any> => {
-    return request<any>(`/catalogs/agent-templates/${templateId}`);
   },
 };

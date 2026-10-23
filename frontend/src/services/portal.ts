@@ -1,6 +1,6 @@
 import { markUtc, request } from './api';
 import { Call, CallDetail } from './telephony';
-import { AvailableNumber, CallUsage, NumberPrice, NumberType, PaymentOrder, Subscription } from './plans';
+import { AvailableNumber, NumberPrice, NumberType, PaymentOrder, Subscription } from './plans';
 import { CreditPack } from './pricing';
 
 export interface WalletTransaction {
@@ -246,7 +246,6 @@ export const portalService = {
       avg_credits_per_minute: number;
       credit_packs: CreditPack[];
     }>('/portal/subscription'),
-  usage: () => request<CallUsage[]>('/portal/usage'),
   numbers: () =>
     request<{
       numbers: PortalNumber[];

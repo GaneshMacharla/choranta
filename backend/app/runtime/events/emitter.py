@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 from app.core.security import generate_unique_id
 from app.models.runtime_event import RuntimeEvent
@@ -33,7 +33,6 @@ class EventEmitter:
     def __init__(self, db: Optional[Session] = None):
         self.db = db
         self.event_repo = RuntimeEventRepository(db) if db else None
-        self._listeners: List[Callable[[RuntimeEventPayload], None]] = []
         # When set, events are collected here instead of being committed one by one
         self._buffer: Optional[List[RuntimeEvent]] = None
 
@@ -46,9 +45,6 @@ class EventEmitter:
         records = self._buffer or []
         self._buffer = None
         return records
-
-    def subscribe(self, listener: Callable[[RuntimeEventPayload], None]) -> None:
-        self._listeners.append(listener)
 
     def emit(
         self,
@@ -72,13 +68,6 @@ class EventEmitter:
             timestamp=datetime.now(timezone.utc),
             payload=safe_payload
         )
-
-        # Notify in-memory subscribers
-        for listener in self._listeners:
-            try:
-                listener(event_obj)
-            except Exception as e:
-                logger.error(f"Error in event listener for {event_type}: {e}")
 
         if not session_id:
             # runtime_events.session_id references runtime_sessions; events that happen before a

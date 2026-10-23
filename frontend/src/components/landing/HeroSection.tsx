@@ -1,5 +1,5 @@
 import React from 'react';
-import { Zap, Check, ArrowRight, PhoneCall, ShieldCheck, Headphones, Calendar, Sparkles } from 'lucide-react';
+import { Zap, Check, ArrowRight, PhoneCall } from 'lucide-react';
 import { VoiceSimulator } from './VoiceSimulator';
 
 interface HeroSectionProps {

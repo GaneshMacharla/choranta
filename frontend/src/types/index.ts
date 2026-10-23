@@ -429,22 +429,3 @@ export type StreamTurnEvent =
       events: RuntimeEvent[];
     }
   | { type: 'error'; message: string };
-
-
-
-export interface AgentDraftRequest {
-  client_id: string;
-  name: string;
-  role: string;
-  call_direction: CallDirection;
-  primary_language: string;
-  supported_languages: string[];
-  description: string;
-  business_notes: string;
-}
-
-export interface AgentDraftResponse {
-  configuration: AgentConfigurationData;
-  draft_source: 'ai' | 'fallback';
-  message?: string | null;
-}

@@ -1,6 +1,6 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
-from app.core.exceptions import NotFoundException, ValidationException, ConflictException
+from app.core.exceptions import NotFoundException, ValidationException
 from app.core.security import generate_unique_id
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
@@ -158,24 +158,6 @@ class AgentService:
             c = self.client_repo.get_by_id(a.client_id)
             responses.append(self._to_response(a, client_name=c.name if c else None))
         return AgentListResponse(items=responses, total=total)
-
-    def get_agent_versions(self, agent_id: str) -> List[AgentVersionResponse]:
-        agent = self.agent_repo.get_by_id(agent_id)
-        if not agent:
-            raise NotFoundException("Agent", agent_id)
-        versions = self.version_repo.list_by_agent(agent_id)
-        return [
-            AgentVersionResponse(
-                id=v.id,
-                agent_id=v.agent_id,
-                version_number=v.version_number,
-                configuration_json=v.configuration_json,
-                status=v.status,
-                created_at=v.created_at,
-                created_by=v.created_by
-            )
-            for v in versions
-        ]
 
     def publish_agent_version(
         self,

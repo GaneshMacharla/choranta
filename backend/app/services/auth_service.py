@@ -1,9 +1,8 @@
-from datetime import timedelta
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import verify_password, hash_password, create_access_token, generate_unique_id
-from app.core.exceptions import AuthenticationException, NotFoundException
+from app.core.exceptions import AuthenticationException
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.schemas.auth import TokenResponse, UserResponse
@@ -99,12 +98,6 @@ class AuthService:
             token_type="bearer",
             user=UserResponse.model_validate(user)
         )
-
-    def get_user_by_id(self, user_id: str) -> UserResponse:
-        user = self.user_repo.get_by_id(user_id)
-        if not user:
-            raise NotFoundException("User", user_id)
-        return UserResponse.model_validate(user)
 
     def seed_initial_admin(self) -> Optional[User]:
         """Ensure initial internal operations administrator exists."""

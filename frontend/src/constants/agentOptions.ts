@@ -16,13 +16,6 @@ export const AVAILABLE_LANGUAGES: { value: string; label: string }[] = [
   { value: 'ur', label: 'Urdu (اردو) - ur' },
 ];
 
-export const getLanguageOptions = (currentValue?: string): { value: string; label: string }[] => {
-  if (currentValue && !AVAILABLE_LANGUAGES.some((l) => l.value === currentValue)) {
-    return [{ value: currentValue, label: `${currentValue} (Current / Custom)` }, ...AVAILABLE_LANGUAGES];
-  }
-  return AVAILABLE_LANGUAGES;
-};
-
 export const STT_PROVIDER_OPTIONS: { value: string; label: string }[] = [
   { value: 'sarvam', label: 'Sarvam (Saaras v4, Indian languages)' },
   { value: 'cartesia', label: 'Cartesia (Realtime Streaming WebSocket STT)' },
@@ -39,12 +32,6 @@ export const TTS_PROVIDER_OPTIONS: { value: string; label: string }[] = [
   { value: 'cartesia', label: 'Cartesia (Sonic 3, Indian voices like Siya)' },
   { value: 'sarvam', label: 'Sarvam (Bulbul v3, Indian voices)' },
   { value: 'mock_tts', label: 'Mock TTS (Deterministic Test Mode)' },
-];
-
-export const TELEPHONY_PROVIDER_OPTIONS: { value: string; label: string }[] = [
-  { value: '', label: 'None (Browser WebRTC / WebSocket Audio Only)' },
-  { value: 'exotel', label: 'Exotel Voice (Inbound PSTN via Voicebot Applet)' },
-  { value: 'mock_telephony', label: 'Mock Telephony (Deterministic Call Runner)' },
 ];
 
 export const getProviderOptions = (

@@ -61,10 +61,6 @@ export const configurationService = {
     });
   },
 
-  getVersionDetail: async (agentId: string, versionId: string): Promise<AgentVersion> => {
-    return request<AgentVersion>(`/agents/${agentId}/versions/${versionId}`);
-  },
-
   compareVersions: async (
     agentId: string,
     baseVersion: number,

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Terminal, AlertTriangle, CheckCircle2, RefreshCw, Filter, ShieldAlert, Clock } from 'lucide-react';
+import { Terminal, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
 import { telephonyService, Call } from '../services/telephony';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';

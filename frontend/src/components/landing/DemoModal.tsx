@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, CheckCircle, PhoneCall, Sparkles, Send, ShieldCheck, ArrowRight, ChevronDown } from 'lucide-react';
+import { X, CheckCircle, PhoneCall, Sparkles, ShieldCheck, ArrowRight, ChevronDown } from 'lucide-react';
 
 interface DemoModalProps {
   isOpen: boolean;

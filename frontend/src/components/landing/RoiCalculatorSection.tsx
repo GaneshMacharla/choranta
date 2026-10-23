@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Calculator, ArrowRight, TrendingUp, IndianRupee, Clock, Zap } from 'lucide-react';
+import { Calculator, ArrowRight, Clock, Zap } from 'lucide-react';
 import { publicPricingService } from '../../services/pricing';
 
 interface RoiCalculatorSectionProps {

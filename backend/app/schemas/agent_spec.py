@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, ConfigDict
-from app.schemas.agent_version import AgentVersionResponse, AgentVersionListResponse
+from app.schemas.agent_version import AgentVersionResponse
 
 
 class AgentMetaSpec(BaseModel):

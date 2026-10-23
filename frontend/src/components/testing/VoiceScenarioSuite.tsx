@@ -16,15 +16,12 @@ import {
   Database,
   Terminal,
   Activity,
-  ArrowRight,
   TrendingUp,
   TrendingDown,
   Minus,
   Sliders,
-  FileText,
   User,
   Bot,
-  ExternalLink,
 } from 'lucide-react';
 import {
   testScenariosService,
@@ -34,26 +31,17 @@ import {
   RegressionComparison,
   TestMetricsSummary,
 } from '../../services/testScenarios';
-import { Agent, AgentVersion } from '../../types';
 import { Card } from '../common/Card';
 import { Button } from '../common/Button';
-import { Badge, StatusBadge } from '../common/Badge';
-import { LoadingState } from '../common/LoadingState';
-
+import { Badge } from '../common/Badge';
 interface VoiceScenarioSuiteProps {
   selectedAgentId: string;
   selectedVersionId: string;
-  runtimeMode: 'mock' | 'real' | null;
-  agents: Agent[];
-  versions: AgentVersion[];
 }
 
 export const VoiceScenarioSuite: React.FC<VoiceScenarioSuiteProps> = ({
   selectedAgentId,
   selectedVersionId,
-  runtimeMode,
-  agents,
-  versions,
 }) => {
   // Scenario Catalog State
   const [scenarios, setScenarios] = useState<TestScenario[]>([]);

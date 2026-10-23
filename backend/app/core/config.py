@@ -1,5 +1,4 @@
 import os
-import sys
 from typing import List, Optional
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -64,6 +63,7 @@ class Settings(BaseSettings):
     SARVAM_MAX_TOKENS: int = 400
     SARVAM_TIMEOUT_S: float = 10.0
     SARVAM_FALLBACK_TO_GEMINI: bool = True               # use Gemini for a turn if Sarvam errors
+    SARVAM_RATE_LIMIT_RETRIES: int = 1                   # retries after a 429/503 before falling back
     SARVAM_STT_MODEL: str = "saaras:v4"
     SARVAM_STT_LANGUAGE: str = "unknown"                 # "unknown" = auto-detect (Hindi/English/Telugu/...)
     SARVAM_TTS_MODEL: str = "bulbul:v3"
@@ -115,9 +115,14 @@ class Settings(BaseSettings):
     GST_REGISTERED: bool = False
     # Monthly plans are retired: clients buy credits and pay per call (existing plans run out, then stop)
     PAYG_ONLY: bool = True
+    # Live calls across all clients. Each call makes ~6-10 Sarvam LLM requests a minute, so Sarvam
+    # Starter (sarvam-105b: 40 req/min, STT stream: 20, bulbul:v3 stream: 30) carries about 5 at once.
+    # Raise with the Sarvam plan (Pro ~7, Business ~15); never above the Exotel account's concurrent
+    # calls or Voicebot channels.
+    MAX_CONCURRENT_CALLS_PLATFORM: int = 5
     # Calls at a time follow the wallet (each live call holds a full-length call's credits); this caps it
-    # for any one client, matched to the channels the Exotel account can carry
-    MAX_CONCURRENT_CALLS_PER_CLIENT: int = 50
+    # for any one client, at most the platform cap
+    MAX_CONCURRENT_CALLS_PER_CLIENT: int = 5
     # Each call gets a credit budget when it starts and hangs up politely before overspending it.
     # Budgets use the recent average charge per minute only once this many calls back it, and never
     # less than DEFAULT_CREDITS_PER_MINUTE; a call needs at least this many minutes' worth to start.
@@ -183,7 +188,7 @@ class Settings(BaseSettings):
     MAX_AUDIO_FRAME_SIZE: int = 65536  # 64 KB max per frame
     MAX_MESSAGE_SIZE: int = 1048576    # 1 MB max per WebSocket message
     MAX_SESSION_DURATION_SECONDS: int = 3600  # 1 hour max session
-    MAX_CONCURRENT_SESSIONS: int = 100
+    MAX_CONCURRENT_SESSIONS: int = 5  # browser test calls use Sarvam too; see MAX_CONCURRENT_CALLS_PLATFORM
 
     # --------------------------------------------------------
     # Telephony Integration (Phase 3C)
@@ -199,6 +204,15 @@ class Settings(BaseSettings):
     EXOTEL_CALLER_ID: Optional[str] = None
     DEMO_LEADS_API_KEY: Optional[str] = None  # dev-only: client key the /demo/lead-form page sends leads with
     EXOTEL_NUMBERS_MOCK: bool = False         # fake number search/purchase (no Exotel calls) for local testing
+    # Carrier for calls placed without one of the client's own numbers ("vobiz" or "exotel");
+    # calls from a phone number go through that number's own carrier
+    TELEPHONY_PROVIDER: str = "vobiz"
+    VOBIZ_AUTH_ID: Optional[str] = None
+    VOBIZ_AUTH_TOKEN: Optional[str] = None
+    VOBIZ_API_BASE: str = "https://api.vobiz.ai/api/v1"
+    VOBIZ_WEBHOOK_SECRET: Optional[str] = None
+    # Vobiz number shown as caller ID on test calls placed directly by an agent
+    VOBIZ_CALLER_ID: Optional[str] = None
     # Where phone call recordings (stereo WAV: caller left, agent right) are stored
     RECORDINGS_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "recordings")
     # Business verification (KYC) documents clients upload before buying numbers; private, admin download only

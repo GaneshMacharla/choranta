@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 from app.runtime.providers.base import BaseProvider, TranscriptResult
 
 

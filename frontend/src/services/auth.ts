@@ -29,10 +29,4 @@ export const authService = {
   refresh: async (): Promise<LoginResponse> => {
     return request<LoginResponse>('/auth/refresh', { method: 'POST' });
   },
-
-  getCurrentUser: async (): Promise<User> => {
-    return request<User>('/auth/me', {
-      method: 'GET',
-    });
-  },
 };

@@ -5,10 +5,7 @@ import {
   Play,
   Square,
   RefreshCw,
-  Bookmark,
-  ChevronDown,
   X,
-  Volume2,
 } from 'lucide-react';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';

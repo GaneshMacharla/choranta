@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import json
 import logging
+import time
 import uuid
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -13,6 +15,19 @@ from app.runtime.providers.llm import LLMProvider
 from app.runtime.providers.sarvam.common import CONNECT_RETRIES, CONNECT_TIMEOUT_S, KEEPALIVE_S
 
 logger = logging.getLogger("choranta.runtime.providers.sarvam.llm")
+
+# Sarvam answers 429 over the plan's requests/min and 503 when briefly overloaded; a caller is waiting,
+# so wait at most this long before retrying (Retry-After, else a short backoff)
+RATE_LIMIT_STATUSES = (429, 503)
+MAX_RETRY_WAIT_S = 2.0
+
+
+def _retry_wait(response: httpx.Response, attempt: int) -> float:
+    try:
+        wait = float(response.headers.get("retry-after") or 0)
+    except ValueError:
+        wait = 0.0
+    return min(MAX_RETRY_WAIT_S, wait or 0.5 * (2 ** attempt))
 
 
 def _estimate_tokens(text: str) -> int:
@@ -194,6 +209,23 @@ class SarvamLLMProvider(LLMProvider):
     ) -> LLMResult:
         return await asyncio.to_thread(self.generate, system_instruction, messages, available_tools, temperature, model)
 
+    def _open_stream(self, payload: Dict[str, Any]) -> httpx.Response:
+        """Starts a streamed completion, retrying when Sarvam is rate-limited or briefly overloaded."""
+        attempt = 0
+        while True:
+            response = self._client.send(self._client.build_request("POST", "/chat/completions", json=payload), stream=True)
+            if response.status_code < 400:
+                return response
+            body = response.read().decode("utf-8", "replace")[:500]
+            response.close()
+            if response.status_code in RATE_LIMIT_STATUSES and attempt < settings.SARVAM_RATE_LIMIT_RETRIES:
+                wait = _retry_wait(response, attempt)
+                logger.warning(f"Sarvam LLM returned {response.status_code}; retrying in {wait:.1f}s")
+                time.sleep(wait)
+                attempt += 1
+                continue
+            raise RuntimeError(f"Sarvam API error {response.status_code}: {body}")
+
     def generate_stream(
         self,
         system_instruction: str,
@@ -214,10 +246,7 @@ class SarvamLLMProvider(LLMProvider):
         emitted = False
 
         try:
-            with self._client.stream("POST", "/chat/completions", json=payload) as response:
-                if response.status_code >= 400:
-                    body = response.read().decode("utf-8", "replace")[:500]
-                    raise RuntimeError(f"Sarvam API error {response.status_code}: {body}")
+            with contextlib.closing(self._open_stream(payload)) as response:
                 for line in response.iter_lines():
                     if not line or not line.startswith("data:"):
                         continue

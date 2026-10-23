@@ -36,8 +36,4 @@ export const clientsService = {
       body: JSON.stringify(payload),
     });
   },
-
-  getAgents: async (clientId: string): Promise<{ items: any[]; total: number }> => {
-    return request<{ items: any[]; total: number }>(`/clients/${clientId}/agents`);
-  },
 };

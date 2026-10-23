@@ -15,7 +15,6 @@ import {
   Layers,
   Terminal,
   LogOut,
-  ShieldCheck,
   Zap,
   Inbox,
   BadgeCheck,

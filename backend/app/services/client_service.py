@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional
 from sqlalchemy.orm import Session
 from app.core.exceptions import NotFoundException, ConflictException
 from app.core.security import generate_unique_id

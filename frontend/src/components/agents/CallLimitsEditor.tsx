@@ -68,10 +68,3 @@ export const CallLimitsEditor: React.FC<CallLimitsEditorProps> = ({ limits, onCh
     </div>
   );
 };
-
-/** True when every numeric limit is blank or within its allowed range. */
-export const callLimitsValid = (limits: AgentCallLimits): boolean =>
-  FIELDS.every((f) => {
-    const value = limits[f.key];
-    return value === null || (value >= f.min && value <= f.max);
-  });

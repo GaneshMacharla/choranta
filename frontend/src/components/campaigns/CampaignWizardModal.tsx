@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Globe, Plus, Search, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Download, FileSpreadsheet, Globe, Plus, Search, Trash2, Upload } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
@@ -935,26 +935,10 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
           ))}
         </dl>
 
-        <Select
-          label="Purpose"
-          value={purpose}
-          onChange={(e) => setPurpose(e.target.value as 'SERVICE' | 'PROMOTIONAL')}
-          options={[
-            { value: 'SERVICE', label: 'Service / transactional (enquiry follow-up, reminders)' },
-            { value: 'PROMOTIONAL', label: 'Promotional (offers, marketing)' },
-          ]}
-        />
-        {purpose === 'PROMOTIONAL' && (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-800/50 bg-amber-950/30 p-3 text-xs text-amber-200">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            TRAI rules apply to AI calls too: promotional calls must not go to numbers on the national DND (NCPR) list. Scrub this
-            list against the DND registry before launching.
-          </div>
-        )}
         <label className="flex items-start gap-2 text-xs text-slate-300">
           <input type="checkbox" className="mt-0.5" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-          I confirm these people agreed to be contacted by {isAdmin ? 'this business' : 'us'}, and that anyone who asks not to be
-          called will be added to the do-not-call list.
+          I confirm everyone on this list is an existing customer of {isAdmin ? 'this business' : 'ours'} or enquired with{' '}
+          {isAdmin ? 'it' : 'us'}, and that anyone who asks not to be called will be added to the do-not-call list.
         </label>
       </div>
     );

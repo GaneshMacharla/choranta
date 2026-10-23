@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  Building2,
   Bot,
   ArrowLeft,
   Mail,
@@ -16,7 +15,7 @@ import {
 import { clientsService } from '../services/clients';
 import { agentsService } from '../services/agents';
 import { useAuth } from '../context/AuthContext';
-import { Client, Agent, ClientUpdateInput, BusinessType } from '../types';
+import { Client, Agent, ClientUpdateInput } from '../types';
 import { Card } from '../components/common/Card';
 import { PropertyInventoryCard } from '../components/inventory/PropertyInventoryCard';
 import { ClientBillingCard } from '../components/billing/ClientBillingCard';
@@ -43,7 +42,6 @@ export const ClientDetailPage: React.FC = () => {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [billingVersion, setBillingVersion] = useState(0);
 
   // Edit Client Modal
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -336,7 +334,7 @@ export const ClientDetailPage: React.FC = () => {
       {id && client.business_type === 'COACHING' && <ClientCoursesCard clientId={id} />}
       {id && <ClientKnowledgeCard clientId={id} />}
 
-      {id && <ClientBillingCard key={billingVersion} clientId={id} />}
+      {id && <ClientBillingCard clientId={id} />}
 
       {id && <PropertyInventoryCard clientId={id} />}
 

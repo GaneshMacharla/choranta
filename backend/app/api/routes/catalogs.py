@@ -4,14 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 from app.api.deps import get_db, get_current_user, get_current_user_from_header_or_query
 from app.models.user import User
-from app.models.agent import Agent
 from app.schemas.catalog import (
     KnowledgeSourceResponse,
     ToolResponse,
     IntegrationResponse,
-    AttachedItemIds,
     VoiceResponse
 )
+
 from app.repositories.knowledge_repository import KnowledgeRepository
 from app.repositories.tool_repository import ToolRepository
 from app.repositories.integration_repository import IntegrationRepository
