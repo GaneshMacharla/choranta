@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CallOutputsCard } from '../../components/calls/CallOutputsCard';
+import { WhatsAppThread } from '../../components/calls/WhatsAppThread';
 import { PhoneIncoming, PhoneOutgoing } from 'lucide-react';
 import { Card } from '../../components/common/Card';
 import { Modal } from '../../components/common/Modal';
@@ -107,6 +108,7 @@ export const PortalCallsPage: React.FC = () => {
             </div>
             {detail.has_recording && <CallRecordingPlayer callId={detail.id} fetchBlob={portalService.recording} />}
             <CallOutputsCard metadata={detail.metadata} />
+            <WhatsAppThread callId={detail.id} />
             <div className="max-h-64 space-y-2 overflow-y-auto rounded border border-[#1b2030] bg-[#090b12] p-3">
               {detail.conversation.length === 0 ? (
                 <p className="text-center text-slate-500">No conversation recorded.</p>

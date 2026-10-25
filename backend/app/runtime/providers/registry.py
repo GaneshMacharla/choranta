@@ -17,6 +17,7 @@ from app.runtime.providers.sarvam.stt import SarvamSTTProvider
 from app.runtime.providers.sarvam.tts import SarvamTTSProvider
 from app.runtime.providers.telephony.exotel import ExotelTelephonyProvider
 from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
+from app.runtime.providers.messaging import MessagingProvider, MetaWhatsAppProvider, MockMessagingProvider
 
 
 class ProviderRegistry:
@@ -36,6 +37,7 @@ class ProviderRegistry:
         self._llm_providers: Dict[str, LLMProvider] = {}
         self._tts_providers: Dict[str, TTSProvider] = {}
         self._telephony_providers: Dict[str, TelephonyProvider] = {}
+        self._messaging_providers: Dict[str, MessagingProvider] = {}
 
         self._register_default_providers()
 
@@ -63,6 +65,7 @@ class ProviderRegistry:
             self.register_tts("sarvam", SarvamTTSProvider())
             self.register_telephony("exotel", ExotelTelephonyProvider())
             self.register_telephony("vobiz", VobizTelephonyProvider())
+            self.register_messaging("whatsapp", MetaWhatsAppProvider())
         else:
             # Mock mode: alias canonical provider names to mock implementations for fast local test execution
             self.register_stt("cartesia", MockSTTProvider("cartesia"))
@@ -73,6 +76,7 @@ class ProviderRegistry:
             self.register_tts("cartesia", MockTTSProvider("cartesia"))
             self.register_telephony("exotel", MockTelephonyProvider("exotel"))
             self.register_telephony("vobiz", MockTelephonyProvider("vobiz"))
+            self.register_messaging("whatsapp", MockMessagingProvider("whatsapp"))
 
     def enable_real_providers(self) -> None:
         """Switch to real external providers."""
@@ -85,6 +89,7 @@ class ProviderRegistry:
         self.register_tts("sarvam", SarvamTTSProvider())
         self.register_telephony("exotel", ExotelTelephonyProvider())
         self.register_telephony("vobiz", VobizTelephonyProvider())
+        self.register_messaging("whatsapp", MetaWhatsAppProvider())
 
     def enable_mock_providers(self) -> None:
         """Switch to mock providers for test isolation."""
@@ -97,6 +102,7 @@ class ProviderRegistry:
         self.register_tts("cartesia", MockTTSProvider("cartesia"))
         self.register_telephony("exotel", MockTelephonyProvider("exotel"))
         self.register_telephony("vobiz", MockTelephonyProvider("vobiz"))
+        self.register_messaging("whatsapp", MockMessagingProvider("whatsapp"))
 
     def register_stt(self, name: str, provider: STTProvider) -> None:
         self._stt_providers[name.lower()] = provider
@@ -109,6 +115,9 @@ class ProviderRegistry:
 
     def register_telephony(self, name: str, provider: TelephonyProvider) -> None:
         self._telephony_providers[name.lower()] = provider
+
+    def register_messaging(self, name: str, provider: MessagingProvider) -> None:
+        self._messaging_providers[name.lower()] = provider
 
     def get_stt(self, name: str) -> STTProvider:
         key = name.lower()
@@ -133,6 +142,12 @@ class ProviderRegistry:
         if key not in self._telephony_providers:
             raise ProviderUnavailable("Telephony", name)
         return self._telephony_providers[key]
+
+    def get_messaging(self, name: str) -> MessagingProvider:
+        key = name.lower()
+        if key not in self._messaging_providers:
+            raise ProviderUnavailable("Messaging", name)
+        return self._messaging_providers[key]
 
     def has_stt(self, name: str) -> bool:
         return name.lower() in self._stt_providers

@@ -12,6 +12,7 @@ An AI employee answers business facts ONLY from its knowledge base (the client's
 
 Read live, so edits apply to the next conversation without publishing a new version.
 """
+import logging
 import math
 import re
 from collections import Counter
@@ -23,6 +24,8 @@ from sqlalchemy.orm import Session
 
 from app.runtime.courses import CATALOGUE_MARKER, course_catalogue
 from app.runtime.today import DEFAULT_TIMEZONE, client_today, today_line
+
+logger = logging.getLogger("choranta.knowledge")
 
 KNOWLEDGE_MARKER = "Business knowledge"
 RELEVANT_MARKER = "Relevant knowledge for the caller's latest message"
@@ -60,9 +63,23 @@ def _sources(db: Session, agent_id: str, spec: Any) -> List[Any]:
     if agent_id:
         ids |= {row.knowledge_source_id for row in db.query(agent_knowledge_sources.c.knowledge_source_id)
                 .filter(agent_knowledge_sources.c.agent_id == agent_id).all()}
-    if not ids:
+    # The client's own knowledge base (MongoDB): entries named in the spec, plus those ticked for this agent since
+    from app.services import knowledge_store
+    try:
+        ticked = knowledge_store.entries_for_agent(agent_id)
+    except Exception:  # MongoDB unreachable: the call still gets the library, per-agent knowledge and catalogue
+        logger.exception("Knowledge base unavailable for agent %s", agent_id)
+        ticked, knowledge_store = [], None
+    if not ids and not ticked:
         return []
-    return db.query(KnowledgeSource).filter(KnowledgeSource.id.in_(ids)).order_by(KnowledgeSource.created_at).all()
+    sql = db.query(KnowledgeSource).filter(KnowledgeSource.id.in_(ids)).order_by(KnowledgeSource.created_at).all() if ids else []
+    named = []
+    if knowledge_store is not None:
+        try:
+            named = knowledge_store.entries_by_ids(ids - {s.id for s in sql} - {e.id for e in ticked})
+        except Exception:
+            logger.exception("Knowledge base unavailable for agent %s", agent_id)
+    return sql + sorted(ticked + named, key=lambda e: e.created_at)
 
 
 def _chunks(title: str, content: str) -> List[Tuple[str, str]]:
@@ -175,6 +192,11 @@ def apply_knowledge(db: Session, context: Any) -> None:
     except Exception:  # knowledge is helpful, never a reason for a call to fail
         today = datetime.now(ZoneInfo(DEFAULT_TIMEZONE)).date()
         block, index = f"\n\n{KNOWLEDGE_MARKER}: unavailable right now. {GROUNDING_RULE}", None
+    try:
+        from app.services.whatsapp import prompt_line
+        block += prompt_line(db, context.agent_id)
+    except Exception:  # the WhatsApp offer is optional
+        pass
     context.knowledge_index = index
     conversation.system_instruction = (conversation.system_instruction or "") + block
     # The date changes daily, so it goes with the per-call details after the cacheable fixed instructions

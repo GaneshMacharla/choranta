@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Navigate, Outlet } from 'react-router-dom';
-import { LayoutDashboard, PhoneCall, Megaphone, KeyRound, Phone, Wallet, Building, LogOut, Layers, Zap, Bot, GraduationCap } from 'lucide-react';
+import { LayoutDashboard, PhoneCall, Megaphone, KeyRound, Phone, Wallet, Building, LogOut, Layers, Zap, Bot, GraduationCap, BookOpen } from 'lucide-react';
 import { portalAgentRequestsService } from '../../services/agentRequests';
 import { plansService } from '../../services/plans';
 import { NotificationBell } from './NotificationBell';
@@ -11,6 +11,7 @@ const NAV = [
   { to: '/portal', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/portal/plans', label: 'Plans', icon: Layers, end: false },
   { to: '/portal/employees', label: 'AI Employees', icon: Bot, end: false },
+  { to: '/portal/knowledge', label: 'Knowledge', icon: BookOpen, end: false },
   { to: '/portal/calls', label: 'Calls', icon: PhoneCall, end: false },
   { to: '/portal/campaigns', label: 'Campaigns', icon: Megaphone, end: false },
   { to: '/portal/instant-outbound', label: 'Instant Outbound', icon: Zap, end: false },

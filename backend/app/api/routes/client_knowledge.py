@@ -1,127 +1,145 @@
 """
-Each client's knowledge base: notes, FAQs and uploaded documents its AI employees answer from on calls.
-Admins manage it on the client's page; an AI employee can only use its own client's knowledge.
+Each client's knowledge base: business details, uploaded documents, notes and FAQs its AI employees answer from.
+Stored in MongoDB (app/services/knowledge_store.py). Only the client adds to it, in the portal. Choranta's team
+reviews it on the client's page and the AI employee's Build tab: checks the gaps, downloads documents and deletes
+what's wrong.
+An AI employee can only use its own client's knowledge.
 """
-import io
-import re
-from typing import List, Optional
+from typing import Any, Dict, List, NamedTuple, Tuple
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_operator
-from app.core.security import generate_unique_id
+from app.api.deps import get_db, require_client_user, require_operator
+from app.core.config import settings
+from app.db import mongo
+from app.models.agent import Agent
 from app.models.client import Client
-from app.models.knowledge_source import KnowledgeSource
 from app.models.user import User
 from app.schemas.catalog import KnowledgeSourceResponse
+from app.services import knowledge_store as store
 
 router = APIRouter(prefix="/clients/{client_id}/knowledge", tags=["Client Knowledge Base"])
-
-MAX_CONTENT_CHARS = 20000
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-TEXT_EXTENSIONS = (".txt", ".md", ".csv")
+portal_router = APIRouter(prefix="/portal/knowledge", tags=["Client Portal"])
 
 
 class ClientKnowledgeRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     type: str = Field("NOTES", pattern="^(NOTES|FAQ)$")
-    content: str = Field(..., min_length=1, max_length=MAX_CONTENT_CHARS)
+    content: str = Field(..., min_length=1, max_length=store.MAX_CONTENT_CHARS)
 
 
-def _client(db: Session, client_id: str) -> Client:
+class DetailValue(BaseModel):
+    value: str = Field("", max_length=2000)
+    in_documents: bool = False
+
+
+class DetailsRequest(BaseModel):
+    fields: Dict[str, DetailValue]
+
+
+class Scope(NamedTuple):
+    client: Client
+    actor: Dict[str, str]
+
+
+def _require_store() -> None:
+    try:
+        mongo.database()
+    except mongo.KnowledgeStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+def admin_scope(client_id: str, user: User = Depends(require_operator), db: Session = Depends(get_db)) -> Scope:
     client = db.get(Client, client_id)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found.")
-    return client
+    _require_store()
+    return Scope(client, store._actor("TEAM", user.name or user.email))
 
 
-def _entry(db: Session, client_id: str, knowledge_id: str) -> KnowledgeSource:
-    entry = db.get(KnowledgeSource, knowledge_id)
-    if not entry or entry.client_id != client_id:
-        raise HTTPException(status_code=404, detail="Knowledge entry not found for this client.")
-    return entry
+def portal_scope(account: Tuple[User, str] = Depends(require_client_user), db: Session = Depends(get_db)) -> Scope:
+    user, client_id = account
+    client = db.get(Client, client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found.")
+    _require_store()
+    return Scope(client, store._actor("CLIENT", user.name or user.email))
 
 
-def _extract_text(filename: str, data: bytes) -> str:
-    name = filename.lower()
-    if name.endswith(".pdf"):
-        from pypdf import PdfReader
-        try:
-            reader = PdfReader(io.BytesIO(data))
-            return "\n".join((page.extract_text() or "") for page in reader.pages)
-        except Exception:
-            raise HTTPException(status_code=422, detail="Couldn't read that PDF. Try another file or paste the text.")
-    if name.endswith(TEXT_EXTENSIONS):
-        for encoding in ("utf-8", "utf-16", "latin-1"):
-            try:
-                return data.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-    raise HTTPException(status_code=422, detail="Upload a PDF, TXT, MD or CSV file.")
+def _agent_ids(db: Session, client_id: str) -> List[str]:
+    """New knowledge is ticked for all the client's AI employees; the team can untick it per employee."""
+    return [row.id for row in db.query(Agent.id).filter(Agent.client_id == client_id).all()]
 
 
-@router.get("", response_model=List[KnowledgeSourceResponse])
-def list_client_knowledge(client_id: str, db: Session = Depends(get_db), _: User = Depends(require_operator)):
-    _client(db, client_id)
-    return (db.query(KnowledgeSource).filter(KnowledgeSource.client_id == client_id)
-            .order_by(KnowledgeSource.created_at).all())
+def _out(entry: Any) -> Dict[str, Any]:
+    return KnowledgeSourceResponse.model_validate(entry).model_dump(mode="json")
 
 
-@router.post("", response_model=KnowledgeSourceResponse, status_code=201)
-def create_client_knowledge(client_id: str, req: ClientKnowledgeRequest, db: Session = Depends(get_db),
-                            _: User = Depends(require_operator)):
-    _client(db, client_id)
-    entry = KnowledgeSource(id=generate_unique_id("knw", 12), name=req.name.strip(), type=req.type, status="READY",
-                            content=req.content.strip(), client_id=client_id, meta={})
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-    return entry
+def _call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except store.KnowledgeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
 
 
-@router.post("/upload", response_model=KnowledgeSourceResponse, status_code=201)
-async def upload_client_knowledge(client_id: str, file: UploadFile = File(...), name: Optional[str] = Form(None),
-                                  db: Session = Depends(get_db), _: User = Depends(require_operator)):
-    """A document (PDF, TXT, MD, CSV) whose text becomes a knowledge entry."""
-    _client(db, client_id)
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="That file is over 10 MB.")
-    # Tidy extracted text: PDFs often pad with spaces and leave runs of blank lines
-    text = re.sub(r"[ \t]+", " ", _extract_text(file.filename or "", data))
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    if not text.strip():
-        raise HTTPException(status_code=422, detail="No text found in that file (scanned PDFs need their text pasted in).")
-    truncated = len(text) > MAX_CONTENT_CHARS
-    entry = KnowledgeSource(
-        id=generate_unique_id("knw", 12), name=(name or file.filename or "Document").strip()[:255],
-        type="PDF" if (file.filename or "").lower().endswith(".pdf") else "TEXT", status="READY",
-        content=text[:MAX_CONTENT_CHARS], client_id=client_id,
-        meta={"file_name": file.filename, "file_size_kb": round(len(data) / 1024), "truncated": truncated},
-    )
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-    return entry
+def _register_review(r: APIRouter, scope_dep) -> None:
+    """Reading and deleting: the portal and the admin client page alike."""
+
+    @r.get("", response_model=List[KnowledgeSourceResponse])
+    def list_knowledge(scope: Scope = Depends(scope_dep)):
+        return store.list_entries(scope.client.id)
+
+    @r.get("/overview")
+    def knowledge_overview(scope: Scope = Depends(scope_dep)) -> Dict[str, Any]:
+        """The details sheet with its gaps, every entry, and document storage used."""
+        data = store.overview(scope.client.id, scope.client.business_type)
+        return {**data, "business_type": scope.client.business_type, "entries": [_out(e) for e in data["entries"]]}
+
+    @r.get("/{knowledge_id}/download")
+    def download_knowledge(knowledge_id: str, scope: Scope = Depends(scope_dep)):
+        name, mime, data = _call(store.download, scope.client.id, knowledge_id)
+        disposition = f"attachment; filename*=UTF-8''{quote(name)}"
+        return Response(content=data, media_type=mime, headers={"Content-Disposition": disposition, "Cache-Control": "private, no-store"})
+
+    @r.delete("/{knowledge_id}", status_code=204)
+    def delete_knowledge(knowledge_id: str, scope: Scope = Depends(scope_dep)):
+        """Deletes the entry and its stored file from the database."""
+        _call(store.delete_entry, scope.client.id, knowledge_id)
 
 
-@router.put("/{knowledge_id}", response_model=KnowledgeSourceResponse)
-def update_client_knowledge(client_id: str, knowledge_id: str, req: ClientKnowledgeRequest,
-                            db: Session = Depends(get_db), _: User = Depends(require_operator)):
-    entry = _entry(db, client_id, knowledge_id)
-    entry.name, entry.content = req.name.strip(), req.content.strip()
-    if entry.type in ("NOTES", "FAQ"):
-        entry.type = req.type
-    db.commit()
-    db.refresh(entry)
-    return entry
+def _register_additions(r: APIRouter, scope_dep) -> None:
+    """Adding and editing knowledge: the client, in the portal."""
+
+    @r.put("/details", response_model=KnowledgeSourceResponse)
+    def save_details(req: DetailsRequest, scope: Scope = Depends(scope_dep), db: Session = Depends(get_db)):
+        values = {k: v.model_dump() for k, v in req.fields.items()}
+        return store.save_details(scope.client.id, scope.client.business_type, values,
+                                  _agent_ids(db, scope.client.id), scope.actor)
+
+    @r.post("", response_model=KnowledgeSourceResponse, status_code=201)
+    def create_knowledge(req: ClientKnowledgeRequest, scope: Scope = Depends(scope_dep), db: Session = Depends(get_db)):
+        return _call(store.create_note, scope.client.id, req.type, req.name, req.content,
+                     _agent_ids(db, scope.client.id), scope.actor)
+
+    @r.post("/upload", response_model=List[KnowledgeSourceResponse], status_code=201)
+    async def upload_knowledge(files: List[UploadFile] = File(...), scope: Scope = Depends(scope_dep),
+                               db: Session = Depends(get_db)):
+        """Any number of documents of any type. Text is read from PDF, Word, Excel and text files."""
+        limit = 1024 * 1024 * settings.KNOWLEDGE_MAX_FILE_MB
+        read = []
+        for f in files:
+            data = await f.read(limit + 1)  # one byte over the limit is enough to refuse it
+            read.append((f.filename or "Document", f.content_type or "", data))
+        return _call(store.upload_documents, scope.client.id, read, _agent_ids(db, scope.client.id), scope.actor)
+
+    @r.put("/{knowledge_id}", response_model=KnowledgeSourceResponse)
+    def update_knowledge(knowledge_id: str, req: ClientKnowledgeRequest, scope: Scope = Depends(scope_dep)):
+        return _call(store.update_entry, scope.client.id, knowledge_id, req.name, req.content, req.type)
 
 
-@router.delete("/{knowledge_id}", status_code=204)
-def delete_client_knowledge(client_id: str, knowledge_id: str, db: Session = Depends(get_db),
-                            _: User = Depends(require_operator)):
-    """Deletes the entry; AI employees using it simply stop seeing it."""
-    db.delete(_entry(db, client_id, knowledge_id))
-    db.commit()
+_register_review(router, admin_scope)
+_register_review(portal_router, portal_scope)
+_register_additions(portal_router, portal_scope)

@@ -24,8 +24,15 @@ from app.models.notification import ClientNotification
 from app.models.verification import ClientVerification
 from app.models.course import Course, CourseBatch, CourseChange
 from app.models.call_script import StandardCallScript
+from app.models.whatsapp import WhatsAppAccount, WhatsAppFollowup, WhatsAppMessage
+from app.models.qualification import LeadQualificationSetup
+from app.models.numbers import ProviderNumber, NumberAssignment, NumberOperation, MockCarrierNumber
 
 __all__ = [
+    "ProviderNumber",
+    "NumberAssignment",
+    "NumberOperation",
+    "MockCarrierNumber",
     "User",
     "Client",
     "Agent",
@@ -71,4 +78,8 @@ __all__ = [
     "Course",
     "CourseBatch",
     "CourseChange",
+    "WhatsAppAccount",
+    "WhatsAppFollowup",
+    "WhatsAppMessage",
+    "LeadQualificationSetup",
 ]

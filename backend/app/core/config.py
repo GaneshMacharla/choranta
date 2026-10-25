@@ -213,11 +213,37 @@ class Settings(BaseSettings):
     VOBIZ_WEBHOOK_SECRET: Optional[str] = None
     # Vobiz number shown as caller ID on test calls placed directly by an agent
     VOBIZ_CALLER_ID: Optional[str] = None
+    # Number management (search, buy, assign, sync, release on Choranta's Vobiz account)
+    PHONE_NUMBER_MOCK_MODE: bool = False           # simulated carrier with sample numbers; never calls Vobiz; refused in production
+    VOBIZ_APPLICATION_ID: Optional[str] = None     # Vobiz XML application (answer URL) bought numbers are attached to for inbound calls
+    NUMBER_PURCHASE_CURRENCY: str = "INR"
+    NUMBER_PURCHASES_PER_HOUR: int = 10            # per staff user; the same limits cover the client portal
+    NUMBER_RELEASES_PER_HOUR: int = 10
+    NUMBER_SYNCS_PER_HOUR: int = 6
     # Where phone call recordings (stereo WAV: caller left, agent right) are stored
     RECORDINGS_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "recordings")
     # Business verification (KYC) documents clients upload before buying numbers; private, admin download only
     KYC_UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "kyc")
     RUN_REAL_TELEPHONY_TESTS: bool = False
+
+    # --------------------------------------------------------
+    # WhatsApp follow-ups (Meta Cloud API; each client connects its own WhatsApp Business number)
+    # --------------------------------------------------------
+    WHATSAPP_GRAPH_API: str = "https://graph.facebook.com/v21.0"
+    WHATSAPP_APP_SECRET: Optional[str] = None      # Meta app secret: verifies X-Hub-Signature-256 on webhooks
+    WHATSAPP_VERIFY_TOKEN: Optional[str] = None    # the token entered in Meta's webhook settings
+    WHATSAPP_ENCRYPTION_KEY: Optional[str] = None  # Fernet key that encrypts clients' access tokens; needed in production to connect WhatsApp
+    WHATSAPP_TICK_S: int = 5                       # how often queued follow-up messages are sent
+    WHATSAPP_UTILITY_COST_INR: float = 0.115       # Meta's price per utility template message to India
+    WHATSAPP_MARKETING_COST_INR: float = 0.7846    # ...and per marketing one (Meta may re-categorise a template)
+
+    # --------------------------------------------------------
+    # Knowledge base storage (MongoDB Atlas): clients' documents, notes, FAQs and business details
+    # --------------------------------------------------------
+    MONGODB_URI: Optional[str] = None              # mongodb+srv://... from Atlas; "mongomock://" keeps it in memory (tests)
+    MONGODB_DB: str = "choranta"
+    KNOWLEDGE_MAX_FILE_MB: int = 10                # per uploaded document (MongoDB documents top out at 16 MB)
+    KNOWLEDGE_CLIENT_QUOTA_MB: int = 100           # all of one client's documents together (Atlas free tier holds 512 MB)
 
 
     @property
@@ -274,6 +300,10 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "CRITICAL: Production CORS_ORIGINS cannot contain wildcard '*' when credentials are enabled."
                 )
+
+            # 5. Simulated phone numbers would look bought without existing at the carrier
+            if self.PHONE_NUMBER_MOCK_MODE:
+                raise ValueError("CRITICAL: PHONE_NUMBER_MOCK_MODE must be false in production.")
 
         # 4. If RUNTIME_MODE is provider, validate keys
         if mode == "real":

@@ -490,8 +490,8 @@ def release_number(number_id: str, now: bool = False, account: ClientAccount = D
     if not rental or rental.status == "RELEASED":
         raise HTTPException(status_code=400, detail="Only numbers rented from Choranta can be released here.")
     if now:
-        if not phone_numbers.release(db, rental):
-            raise HTTPException(status_code=502, detail="Exotel couldn't release the number. Please try again.")
+        if not phone_numbers.release(db, rental, reason="CLIENT_RELEASED"):
+            raise HTTPException(status_code=502, detail="The number couldn't be released right now. Please try again.")
     else:
         rental.cancel_at_period_end = True
         db.commit()

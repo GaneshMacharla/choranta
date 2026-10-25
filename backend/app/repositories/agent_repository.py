@@ -76,6 +76,8 @@ class AgentRepository:
         self.db.execute(text("DELETE FROM agent_tools WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("DELETE FROM agent_integrations WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("DELETE FROM agent_knowledge_sources WHERE agent_id = :aid"), {"aid": agent_id})
+        from app.services.knowledge_store import forget_agent
+        forget_agent(agent_id)
         self.db.execute(text("DELETE FROM agent_configurations WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("DELETE FROM agent_versions WHERE agent_id = :aid"), {"aid": agent_id})
         self.db.execute(text("UPDATE phone_numbers SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})

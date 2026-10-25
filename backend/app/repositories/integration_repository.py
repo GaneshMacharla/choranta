@@ -9,10 +9,13 @@ class IntegrationRepository:
         self.db = db
 
     def list_all(self) -> List[Integration]:
-        return self.db.query(Integration).order_by(Integration.name.asc()).all()
+        return (self.db.query(Integration).filter(Integration.connection_status != "DISABLED")
+                .order_by(Integration.name.asc()).all())
 
     def get_by_id(self, integration_id: str) -> Optional[Integration]:
-        return self.db.query(Integration).filter(Integration.id == integration_id).first()
+        """Disabled (not yet built) connectors can't be attached or looked up."""
+        return self.db.query(Integration).filter(Integration.id == integration_id,
+                                                 Integration.connection_status != "DISABLED").first()
 
     def get_for_agent(self, agent_id: str) -> List[Integration]:
         agent = self.db.query(Agent).filter(Agent.id == agent_id).first()

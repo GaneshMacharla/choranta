@@ -5,6 +5,7 @@ import { portalAgentRequestsService } from '../../services/agentRequests';
 import { Card } from '../../components/common/Card';
 import { Stat } from '../../components/portal/Stat';
 import { OutboundInsights } from '../../components/portal/OutboundInsights';
+import { InstantSetupCard } from '../../components/portal/InstantSetupCard';
 import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { inr, PaymentInstructions, PortalSummary, portalService } from '../../services/portal';
@@ -219,6 +220,8 @@ export const PortalDashboardPage: React.FC = () => {
           <DailyBars data={summary.daily} metric="spend_inr" color="bg-amber-500/70" format={(v) => creditsLabel(v)} />
         </Card>
       </div>
+
+      <InstantSetupCard />
 
       <OutboundInsights />
 

@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from datetime import timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,7 @@ from app.schemas.campaign import (
     UpdateCampaignRequest,
 )
 from app.services import campaigns as svc
+from app.services import recipient_files
 from app.services import phone_numbers
 
 
@@ -95,6 +97,10 @@ def _campaign_out(db: Session, campaign: Campaign) -> CampaignResponse:
     out.caller_numbers = [n.phone_number for n in numbers if n]
     out.stats = CampaignStats(**svc.stats(db, campaign))
     return out
+
+
+class SheetLinkRequest(BaseModel):
+    url: str = Field(..., max_length=2000)
 
 
 def _register(router: APIRouter, scope_dep: Callable[..., Scope]) -> None:
@@ -192,6 +198,23 @@ def _register(router: APIRouter, scope_dep: Callable[..., Scope]) -> None:
                 "created_at": l.created_at,
             } for l in leads],
         }
+
+    @router.post("/recipient-file")
+    async def convert_recipient_file(file: UploadFile = File(...), scope: Scope = Depends(scope_dep)):
+        """Turns an Excel or text file into the CSV text preview-csv and import take."""
+        data = await file.read(recipient_files.MAX_FILE_BYTES + 1)
+        try:
+            return recipient_files.file_to_csv(file.filename or "", data)
+        except svc.CampaignError as e:
+            raise _error(e)
+
+    @router.post("/recipient-sheet")
+    def convert_recipient_sheet(payload: SheetLinkRequest, scope: Scope = Depends(scope_dep)):
+        """Reads a Google Sheet shared as 'Anyone with the link can view'."""
+        try:
+            return recipient_files.google_sheet_to_csv(payload.url)
+        except svc.CampaignError as e:
+            raise _error(e)
 
     @router.post("/preview-csv", response_model=CsvPreviewResponse)
     def preview_csv(payload: CsvRecipientsRequest, scope: Scope = Depends(scope_dep)):

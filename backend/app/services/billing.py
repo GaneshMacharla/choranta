@@ -460,6 +460,45 @@ def charge_call(db: Session, call: Call) -> Optional[WalletTransaction]:
     return txn
 
 
+def message_charge(db: Session, category: Optional[str]) -> float:
+    """Credits one WhatsApp follow-up costs: Meta's price for its template category + the admin's profit %."""
+    cost = settings.WHATSAPP_MARKETING_COST_INR if (category or "").upper() == "MARKETING" else settings.WHATSAPP_UTILITY_COST_INR
+    return _money(cost * (1 + get_pricing(db).profit_percent / 100.0))
+
+
+def can_afford_message(db: Session, client_id: str, credits: float) -> bool:
+    if not settings.BILLING_ENFORCED:
+        return True
+    wallet = db.query(ClientWallet).filter(ClientWallet.client_id == client_id).first()
+    sub = subscriptions.get_subscription(db, client_id)
+    plan = db.get(Plan, sub.plan_id) if sub else None
+    on_plan = bool(sub and plan and subscriptions.is_usable(sub))
+    return _spendable(wallet, sub, plan, on_plan) >= credits
+
+
+def charge_message(db: Session, client_id: str, message_id: str, credits: float, note: str) -> float:
+    """
+    Bills a sent WhatsApp message once: plan credits first, then bought credits (never below zero).
+    Returns the credits taken. Only the message's sender (which claimed it) calls this; the caller commits.
+    """
+    reference = f"whatsapp:{message_id}"
+    wallet = get_wallet(db, client_id, lock=True)
+    if db.query(WalletTransaction.id).filter(WalletTransaction.reference == reference).first():
+        return 0.0
+    sub = subscriptions.get_subscription(db, client_id, lock=True)
+    plan = db.get(Plan, sub.plan_id) if sub else None
+    from_plan = 0.0
+    if sub and plan and subscriptions.is_usable(sub):
+        from_plan = _money(min(credits, subscriptions.remaining_credits(sub, plan)))
+        sub.credits_used = round(float(sub.credits_used or 0.0) + from_plan, 4)
+    from_wallet = _money(min(credits - from_plan, max(0.0, wallet.balance_inr)))
+    if from_wallet > 0:
+        wallet.balance_inr = _money(wallet.balance_inr - from_wallet)
+        db.add(WalletTransaction(client_id=client_id, type="DEBIT", amount_inr=-from_wallet,
+                                 balance_after_inr=wallet.balance_inr, reference=reference, note=note))
+    return _money(from_plan + from_wallet)
+
+
 # A finished call's session charges it within seconds; one still unbilled after this was missed (e.g.
 # the server restarted mid-call and only the carrier's completed status arrived) and is charged by the sweep
 UNBILLED_GRACE = timedelta(minutes=2)

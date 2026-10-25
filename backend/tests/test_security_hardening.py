@@ -225,6 +225,7 @@ def test_configuration_and_secret_validation():
         ENVIRONMENT="production",
         DATABASE_URL="postgresql://user:pass@db.project.supabase.co:5432/postgres",
         JWT_SECRET_KEY="super-secure-production-jwt-secret-min-32-chars-long",
-        CORS_ORIGINS=["https://choranta.internal"]
+        CORS_ORIGINS=["https://choranta.internal"],
+        PHONE_NUMBER_MOCK_MODE=False,  # the test run itself uses mock numbers
     )
     assert valid_prod.ENVIRONMENT == "production"

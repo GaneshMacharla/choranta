@@ -28,3 +28,19 @@ export const portalApiKeys = {
   revoke: (id: string) => request<ApiKey>(`/portal/api-keys/${id}`, { method: 'DELETE' }),
   info: () => request<IntegrationsInfo>('/portal/integrations'),
 };
+
+export interface InstantSetup {
+  leads_url: string;
+  /** A published AI employee exists */
+  has_agent: boolean;
+  campaigns: Array<{ id: string; name: string; status: string }>;
+  running: boolean;
+  /** The key created for the client automatically; null if the server can't store one */
+  key: { id: string; prefix: string; created_at: string; last_used_at?: string | null } | null;
+}
+
+export const portalInstantSetup = {
+  get: () => request<InstantSetup>('/portal/instant-setup'),
+  revealKey: () => request<{ key: string }>('/portal/instant-setup/key', { method: 'POST' }),
+  regenerateKey: () => request<InstantSetup>('/portal/instant-setup/key/regenerate', { method: 'POST' }),
+};

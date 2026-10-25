@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Clock, Flame, PhoneCall, PhoneForwarded, Sparkles, Timer, Zap } from 'lucide-react';
+import { CheckCircle2, Clock, Flame, MessageCircle, PhoneCall, PhoneForwarded, Sparkles, Timer, Zap } from 'lucide-react';
 import { Card } from '../common/Card';
 import { Button } from '../common/Button';
 import { Stat } from './Stat';
 import { CollectedAnswers } from '../campaigns/CollectedAnswers';
 import { HotLead, OutboundInsights as Insights, portalService } from '../../services/portal';
+import { portalWhatsApp } from '../../services/whatsapp';
 
 const PERIODS = [7, 30, 90];
 
@@ -54,6 +55,13 @@ const Funnel: React.FC<{ funnel: Insights['funnel'] }> = ({ funnel }) => {
 const HotLeads: React.FC<{ leads: HotLead[]; total: number; onFollowedUp: (id: string) => void }> = ({ leads, total, onFollowedUp }) => {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [whatsapp, setWhatsapp] = useState<Record<string, { status: string; replies: number }>>({});
+
+  const callIds = leads.map((l) => l.call_id).filter((id): id is string => !!id).join(',');
+  useEffect(() => {
+    if (!callIds) return;
+    portalWhatsApp.callSummaries(callIds.split(',')).then(setWhatsapp).catch(() => setWhatsapp({}));
+  }, [callIds]);
 
   const markDone = async (id: string) => {
     setBusy(id);
@@ -78,6 +86,9 @@ const HotLeads: React.FC<{ leads: HotLead[]; total: number; onFollowedUp: (id: s
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="font-semibold text-slate-100">{lead.name || 'Unknown'}</span>
               <span className="font-mono text-xs text-slate-400">{lead.phone}</span>
+              {lead.kind === 'inbound' && (
+                <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">Called in</span>
+              )}
               {lead.interest === 'callback' ? (
                 <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
                   Call back{lead.callback_time ? `: ${lead.callback_time}` : ''}
@@ -86,11 +97,28 @@ const HotLeads: React.FC<{ leads: HotLead[]; total: number; onFollowedUp: (id: s
                 <span className="rounded bg-[#00df8f]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[#00df8f]">Interested</span>
               )}
             </div>
+            {lead.call_id && whatsapp[lead.call_id] && (
+              <p className={`flex items-center gap-1 text-[11px] ${whatsapp[lead.call_id].replies ? 'text-[#00df8f]' : 'text-slate-400'}`}>
+                <MessageCircle className="h-3 w-3" />
+                {whatsapp[lead.call_id].replies
+                  ? `Replied on WhatsApp (${whatsapp[lead.call_id].replies})`
+                  : ['FAILED', 'SKIPPED'].includes(whatsapp[lead.call_id].status)
+                    ? 'WhatsApp follow-up not delivered'
+                    : `WhatsApp follow-up ${whatsapp[lead.call_id].status === 'READ' ? 'read' : 'sent'}`}
+              </p>
+            )}
+            {lead.reason && lead.reason !== lead.summary && (
+              <p className="text-xs text-[#00df8f]">Qualified: {lead.reason}</p>
+            )}
             {lead.summary && <p className="text-xs text-slate-300">{lead.summary}</p>}
             <p className="text-[11px] text-slate-500">
-              <Link to={campaignPath(lead.campaign_kind, lead.campaign_id)} className="hover:text-slate-300 hover:underline">
-                {lead.campaign_name}
-              </Link>{' '}
+              {lead.campaign_id && lead.campaign_kind ? (
+                <Link to={campaignPath(lead.campaign_kind, lead.campaign_id)} className="hover:text-slate-300 hover:underline">
+                  {lead.campaign_name}
+                </Link>
+              ) : (
+                lead.campaign_name
+              )}{' '}
               · {new Date(lead.called_at + 'Z').toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
             </p>
           </div>
@@ -169,11 +197,22 @@ export const OutboundInsights: React.FC = () => {
   useEffect(load, [load]);
 
   if (error) return <p className="text-xs text-rose-400">{error}</p>;
-  if (!data || !data.has_outbound) return null;
+  if (!data) return null;
   const { funnel, instant } = data;
 
   const removeHotLead = (id: string) =>
     setData((d) => d && { ...d, hot_leads: d.hot_leads.filter((l) => l.recipient_id !== id), hot_leads_total: d.hot_leads_total - 1 });
+
+  const hotLeadsCard = (
+    <Card
+      title={`Hot leads to follow up${data.hot_leads_total ? ` (${data.hot_leads_total})` : ''}`}
+      subtitle="Qualified leads from your calls (see who counts under AI Employees). Mark them once your team has followed up."
+    >
+      <HotLeads leads={data.hot_leads} total={data.hot_leads_total} onFollowedUp={removeHotLead} />
+    </Card>
+  );
+  // Clients without campaigns still get their qualified inbound callers
+  if (!data.has_outbound) return data.hot_leads_total > 0 ? <section className="space-y-4">{hotLeadsCard}</section> : null;
 
   return (
     <section className="space-y-4">
@@ -200,7 +239,7 @@ export const OutboundInsights: React.FC = () => {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat icon={<PhoneCall className="h-4 w-4 text-indigo-400" />} label="People called" value={funnel.called.toLocaleString('en-IN')} hint={`${funnel.minutes} min talked`} />
         <Stat icon={<PhoneForwarded className="h-4 w-4 text-sky-400" />} label="Answer rate" value={pct(funnel.answer_rate)} hint={`${funnel.answered} answered`} />
-        <Stat icon={<Flame className="h-4 w-4 text-[#00df8f]" />} label="Interested" value={String(funnel.interested)} hint={`${funnel.callbacks} want a call back`} />
+        <Stat icon={<Flame className="h-4 w-4 text-[#00df8f]" />} label="Qualified leads" value={String(funnel.qualified ?? funnel.interested)} hint={`${funnel.interested} interested · ${funnel.callbacks} want a call back`} />
         <Stat icon={<Clock className="h-4 w-4 text-amber-400" />} label="Avg. talk time" value={seconds(funnel.avg_talk_seconds)} hint="answered calls" />
       </div>
 
@@ -242,12 +281,7 @@ export const OutboundInsights: React.FC = () => {
         )}
       </div>
 
-      <Card
-        title={`Hot leads to follow up${data.hot_leads_total ? ` (${data.hot_leads_total})` : ''}`}
-        subtitle="Interested or asked for a call back. Mark them once your team has followed up."
-      >
-        <HotLeads leads={data.hot_leads} total={data.hot_leads_total} onFollowedUp={removeHotLead} />
-      </Card>
+      {hotLeadsCard}
 
       <div className="grid gap-4 md:grid-cols-2">
         {instant && (

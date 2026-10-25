@@ -81,6 +81,9 @@ class AgentSpecValidator:
             existing_knw_ids = set(
                 row[0] for row in db.query(KnowledgeSource.id).filter(KnowledgeSource.id.in_(spec.knowledge.sources)).all()
             )
+            # Clients' knowledge bases live in MongoDB
+            from app.services.knowledge_store import existing_ids
+            existing_knw_ids |= existing_ids(set(spec.knowledge.sources) - existing_knw_ids)
             for knw_id in spec.knowledge.sources:
                 if knw_id not in existing_knw_ids:
                     errors.append(ValidationErrorItem(

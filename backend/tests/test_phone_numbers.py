@@ -51,8 +51,14 @@ def verified_business(request, db: Session):
         db.commit()
 
 
-def _number() -> str:
-    return "+9140" + str(generate_unique_id("", 8)).replace("_", "")[-8:].translate(str.maketrans("abcdef", "123456"))
+def _number(db: Session, i: int = 0) -> str:
+    """A landline the (simulated) carrier is selling."""
+    return phone_numbers.search(db, "Landline")[i]["phone_number"]
+
+
+def _owned(db: Session, e164: str):
+    from app.models.numbers import ProviderNumber
+    return db.query(ProviderNumber).filter(ProviderNumber.e164 == e164).first()
 
 
 def _fund(db: Session, client_id: str, amount_with_gst: float) -> None:
@@ -64,17 +70,18 @@ def _rent_debits(db: Session, client_id: str):
         WalletTransaction.client_id == client_id, WalletTransaction.note.like("Rent for%")).all()
 
 
-def test_buy_needs_balance_and_charges_first_month(db: Session, telephony_setup, exotel, company):
+def test_buy_needs_balance_and_charges_first_month(db: Session, telephony_setup, company):
     cid = telephony_setup["client"].id
-    number = _number()
+    number = _number(db)
     with pytest.raises(phone_numbers.InsufficientBalance):
         phone_numbers.buy_number(db, cid, number, "Landline", None)
-    assert exotel["purchased"] == []  # nothing bought without the rent
+    assert _owned(db, number) is None  # nothing bought without the rent
 
     _fund(db, cid, 1180)  # Rs 1000 wallet
     pn = phone_numbers.buy_number(db, cid, number, "Landline", None)
     rental = phone_numbers.rental_for(db, pn.id)
-    assert pn.status == "READY_TO_TEST" and pn.provider_number_id == f"sid_{number.lstrip('+')}"
+    assert pn.status == "READY_TO_TEST" and pn.provider == "vobiz" and pn.provider_number_id == f"mock-{number.lstrip('+')}"
+    assert _owned(db, number).internal_status == "ASSIGNED"
     assert rental.monthly_rent_inr == 499.0 and rental.status == "ACTIVE"
     assert billing.get_wallet(db, cid).balance_inr == 501.0
     assert len(_rent_debits(db, cid)) == 1
@@ -83,21 +90,21 @@ def test_buy_needs_balance_and_charges_first_month(db: Session, telephony_setup,
         phone_numbers.buy_number(db, cid, number, "Landline", None)  # already taken
 
 
-def test_failed_exotel_purchase_charges_nothing(db: Session, telephony_setup, exotel, company):
+def test_failed_purchase_charges_nothing(db: Session, telephony_setup, company):
     cid = telephony_setup["client"].id
     _fund(db, cid, 1180)
-    exotel["fail_purchase"] = True
-    number = _number()
+    number = "+918040000404"  # the simulated carrier sells it to someone else first
     with pytest.raises(Exception):
         phone_numbers.buy_number(db, cid, number, "Landline", None)
     assert billing.get_wallet(db, cid).balance_inr == 1000.0
     assert db.query(PhoneNumber).filter(PhoneNumber.phone_number == number).count() == 0
 
 
-def test_rental_cycle_renews_lapses_and_releases(db: Session, telephony_setup, exotel, company):
+def test_rental_cycle_renews_lapses_and_returns_to_pool(db: Session, telephony_setup, company):
     cid = telephony_setup["client"].id
     _fund(db, cid, 1180)
-    pn = phone_numbers.buy_number(db, cid, _number(), "Landline", None)
+    number = _number(db)
+    pn = phone_numbers.buy_number(db, cid, number, "Landline", None)
     rental = phone_numbers.rental_for(db, pn.id)
     first_end = rental.current_period_end
 
@@ -116,21 +123,39 @@ def test_rental_cycle_renews_lapses_and_releases(db: Session, telephony_setup, e
     phone_numbers.run_rental_cycle(db, now=second_end + timedelta(days=1))
     assert rental.status == "ACTIVE" and rental.current_period_start == second_end
 
-    # Unpaid past the grace period: released on Exotel and retired here
+    # Unpaid past the grace period: back in Choranta's pool (not released at the carrier) and retired here
     third_end = rental.current_period_end
-    exotel["fail_release"] = True
     phone_numbers.run_rental_cycle(db, now=third_end + timedelta(days=settings.NUMBER_GRACE_DAYS + 1))
+    assert rental.status == "RELEASED"
+    db.refresh(pn)
+    assert pn.status == "RELEASED" and pn.agent_id is None and phone_numbers.display_number(pn) == number
+    pooled = _owned(db, number)
+    assert pooled.internal_status == "AVAILABLE" and "rent lapsed" in pooled.attention
+    debits = len(_rent_debits(db, cid))
+    phone_numbers.run_rental_cycle(db, now=third_end + timedelta(days=60))
+    assert rental.status == "RELEASED" and len(_rent_debits(db, cid)) == debits
+
+
+def test_legacy_exotel_number_is_released_on_exotel(db: Session, telephony_setup, exotel, company):
+    from app.models.subscription import NumberRental as Rental
+    cid = telephony_setup["client"].id
+    pn = PhoneNumber(id=generate_unique_id("phn_"), client_id=cid, phone_number="+914071239999", provider="exotel",
+                     provider_number_id="sid_legacy", country_code="IN", status="ACTIVE")
+    db.add(pn)
+    db.flush()
+    rental = Rental(phone_number_id=pn.id, client_id=cid, number_type="Landline", monthly_rent_inr=499, status="PAST_DUE",
+                    current_period_start=utcnow() - timedelta(days=40), current_period_end=utcnow() - timedelta(days=10))
+    db.add(rental)
+    db.commit()
+    exotel["fail_release"] = True
+    phone_numbers.run_rental_cycle(db)
     assert rental.status == "PAST_DUE"  # Exotel failed: kept, retried next cycle
     exotel["fail_release"] = False
-    phone_numbers.run_rental_cycle(db, now=third_end + timedelta(days=settings.NUMBER_GRACE_DAYS + 1))
-    assert rental.status == "RELEASED" and exotel["released"] == [pn.provider_number_id]
-    db.refresh(pn)
-    assert pn.status == "RELEASED" and pn.agent_id is None and phone_numbers.display_number(pn).startswith("+9140")
-    phone_numbers.run_rental_cycle(db, now=third_end + timedelta(days=60))
-    assert rental.status == "RELEASED" and exotel["released"] == [pn.provider_number_id]
+    phone_numbers.run_rental_cycle(db)
+    assert rental.status == "RELEASED" and exotel["released"] == ["sid_legacy"]
 
 
-def test_free_numbers_are_never_charged(db: Session, telephony_setup, exotel, company):
+def test_free_numbers_are_never_charged(db: Session, telephony_setup, company):
     cid = telephony_setup["client"].id
     _fund(db, cid, 1180)
     phone_numbers.run_rental_cycle(db, now=utcnow() + timedelta(days=400))
@@ -138,10 +163,10 @@ def test_free_numbers_are_never_charged(db: Session, telephony_setup, exotel, co
     assert phone_numbers.rental_for(db, telephony_setup["phone_number"].id) is None
 
 
-def test_inbound_call_to_overdue_number_is_rejected(client: TestClient, db: Session, telephony_setup, exotel, company):
+def test_inbound_call_to_overdue_number_is_rejected(client: TestClient, db: Session, telephony_setup, company):
     cid = telephony_setup["client"].id
     _fund(db, cid, 1180)
-    pn = phone_numbers.buy_number(db, cid, _number(), "Landline", None)
+    pn = phone_numbers.buy_number(db, cid, _number(db), "Landline", None)
     phone_numbers.assign_agent(db, pn, telephony_setup["agent"].id)
     rental = phone_numbers.rental_for(db, pn.id)
     rental.status = "PAST_DUE"
@@ -152,7 +177,7 @@ def test_inbound_call_to_overdue_number_is_rejected(client: TestClient, db: Sess
     assert resp.json()["url"] == ""
 
 
-def test_portal_numbers_flow(client: TestClient, auth_headers: dict, db: Session, telephony_setup, exotel, company):
+def test_portal_numbers_flow(client: TestClient, auth_headers: dict, db: Session, telephony_setup, company):
     cid = telephony_setup["client"].id
     headers = _client_headers(client, auth_headers, cid, f"numbers-{cid}@clinic.example.com")
 

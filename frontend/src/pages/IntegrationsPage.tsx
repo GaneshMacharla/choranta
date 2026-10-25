@@ -45,7 +45,7 @@ export const IntegrationsPage: React.FC = () => {
                 <h1 className="text-xl font-bold tracking-tight text-slate-100">Integrations &amp; Connectors</h1>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Enterprise CRM, calendar synchronization, and third-party communication channels.
+                Connectors available to AI employees. Only WhatsApp follow-ups are live for now.
               </p>
             </div>
           </div>

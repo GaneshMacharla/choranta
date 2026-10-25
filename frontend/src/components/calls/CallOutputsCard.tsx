@@ -1,5 +1,6 @@
 import React from 'react';
 import { ClipboardList } from 'lucide-react';
+import { QualificationBadge } from './QualificationBadge';
 
 export const formatOutputValue = (value: unknown): string => {
   if (value === null || value === undefined || value === '') return '—';
@@ -23,6 +24,7 @@ export const CallOutputsCard: React.FC<{ metadata?: Record<string, any> | null }
       </span>
       {status === 'pending' && <p className="text-slate-400">Reading the transcript…</p>}
       {status === 'failed' && <p className="text-amber-400">Couldn't extract details from this call.</p>}
+      <QualificationBadge qualification={metadata?.qualification} />
       {summary && <p className="text-slate-300">{summary}</p>}
       {Object.keys(outputs).length > 0 && (
         <dl className="grid grid-cols-[minmax(120px,auto)_1fr] gap-x-4 gap-y-1">

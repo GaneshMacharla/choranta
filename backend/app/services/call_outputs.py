@@ -40,6 +40,13 @@ Variables:
 {variables}
 """
 
+QUALIFICATION_PROMPT = """
+Also include:
+- "qualified": whether the caller meets this test, exactly one of "yes", "no", "unknown" (the call didn't
+  show either way). Test: {criteria}
+- "qualified_reason": one short sentence (max 20 words) on why, citing what the caller said.
+"""
+
 
 def output_definitions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The agent version's output variables (name, description, data_type, extraction_instructions)."""
@@ -107,8 +114,12 @@ def _interest(value: Any) -> str:
     return text if text in INTEREST_VALUES else "unclear"
 
 
-def extract_outputs(definitions: List[Dict[str, Any]], transcript: List[Tuple[str, str]], llm) -> Dict[str, Any]:
-    """Runs the extraction prompt. Returns {"outputs": {...}, "summary": str, "interest": str, "callback_time": str|None}."""
+def extract_outputs(definitions: List[Dict[str, Any]], transcript: List[Tuple[str, str]], llm,
+                    criteria: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Runs the extraction prompt. Returns {"outputs": {...}, "summary": str, "interest": str, "callback_time": str|None},
+    plus "ai_qualification" {"status", "reason"} when the client wrote a qualification test (same LLM call).
+    """
     variables = "\n".join(
         f"- {d['name']} ({d.get('data_type') or 'string'}): {d.get('description') or ''}"
         + (f" Instructions: {d['extraction_instructions']}" if d.get("extraction_instructions") else "")
@@ -116,7 +127,8 @@ def extract_outputs(definitions: List[Dict[str, Any]], transcript: List[Tuple[st
     ) or "(none)"
     conversation = "\n".join(f"{speaker}: {text}" for speaker, text in transcript)
     result = llm.generate(
-        system_instruction=EXTRACTION_PROMPT.format(variables=variables),
+        system_instruction=EXTRACTION_PROMPT.format(variables=variables)
+        + (QUALIFICATION_PROMPT.format(criteria=criteria) if criteria else ""),
         messages=[{"role": "user", "content": f"Transcript:\n{conversation}"}],
         available_tools=None,
         temperature=0.0,
@@ -126,8 +138,15 @@ def extract_outputs(definitions: List[Dict[str, Any]], transcript: List[Tuple[st
     outputs = {d["name"]: _coerce(raw.get(d["name"]), d.get("data_type")) for d in definitions}
     summary = str(data.get("summary") or "").strip()[:300]
     callback_time = str(data.get("callback_time") or "").strip()[:120] or None
-    return {"outputs": outputs, "summary": summary, "interest": _interest(data.get("interest")),
-            "callback_time": callback_time}
+    extracted = {"outputs": outputs, "summary": summary, "interest": _interest(data.get("interest")),
+                 "callback_time": callback_time}
+    if criteria:
+        verdict = str(data.get("qualified") or "").strip().lower()
+        extracted["ai_qualification"] = {
+            "status": {"yes": "qualified", "no": "not_qualified"}.get(verdict, "unknown"),
+            "reason": str(data.get("qualified_reason") or "").strip()[:200] or None,
+        }
+    return extracted
 
 
 def _set_metadata(db: Session, call: Call, **values: Any) -> None:
@@ -143,8 +162,17 @@ def _is_campaign_call(call: Call) -> bool:
     return call.direction == "OUTBOUND" and bool((call.metadata_ or {}).get("campaign_id"))
 
 
+def _needs_interest(db: Session, call: Call) -> bool:
+    """Whether the call's interest is needed even without output variables: hot leads, WhatsApp follow-ups."""
+    from app.services.lead_qualification import get_setup
+    from app.services.whatsapp_followups import wants_followup
+    # Inbound callers are enquiries: every answered one is checked for the client's hot leads
+    return (_is_campaign_call(call) or call.direction == "INBOUND" or wants_followup(db, call)
+            or get_setup(db, call.agent_id) is not None)
+
+
 def needs_extraction(db: Session, call: Call) -> bool:
-    if _is_campaign_call(call):
+    if _needs_interest(db, call):
         return True
     version = db.get(AgentVersion, call.agent_version_id)
     return bool(version and output_definitions(version.configuration_json or {}))
@@ -168,16 +196,26 @@ def run_extraction(db: Session, call_id: str, llm=None) -> Optional[Dict[str, An
         config = (version.configuration_json or {}) if version else {}
         definitions = output_definitions(config)
         transcript = call_transcript(db, call)
-        if (not definitions and not _is_campaign_call(call)) or not any(speaker == "Caller" for speaker, _ in transcript):
+        if (not definitions and not _needs_interest(db, call)) or not any(speaker == "Caller" for speaker, _ in transcript):
             # Nothing to extract, or the caller never spoke: every output is unknown
             _set_metadata(db, call, outputs={d["name"]: None for d in definitions}, outputs_status=SKIPPED)
             return call.metadata_
         if llm is None:
             provider = (settings.LLM_PROVIDER_OVERRIDE or "").strip().lower() or (config.get("providers") or {}).get("llm") or "gemini"
             llm = default_registry.get_llm(provider)
-        extracted = extract_outputs(definitions, transcript, llm)
+        from app.services import lead_qualification
+        setup = lead_qualification.get_setup(db, call.agent_id)
+        extracted = extract_outputs(definitions, transcript, llm,
+                                    criteria=(setup.ai_criteria or "").strip() or None if setup else None)
+        qualification = lead_qualification.qualify(setup, extracted["outputs"], extracted["interest"],
+                                                    ai=extracted.get("ai_qualification"), summary=extracted["summary"])
+        extra = {"ai_qualification": extracted["ai_qualification"]} if "ai_qualification" in extracted else {}
         _set_metadata(db, call, outputs=extracted["outputs"], summary=extracted["summary"],
-                      interest=extracted["interest"], callback_time=extracted["callback_time"], outputs_status=DONE)
+                      interest=extracted["interest"], callback_time=extracted["callback_time"],
+                      qualification=qualification, outputs_status=DONE, **extra)
+        lead_qualification.record_on_lead(db, call, qualification)
+        from app.services.whatsapp_followups import queue_for_call
+        queue_for_call(db, call)
         return call.metadata_
     except Exception as e:
         logger.warning(f"Output extraction failed for call {call_id}: {type(e).__name__}: {e}")

@@ -1,3 +1,4 @@
+from urllib.parse import urlparse
 """
 Client number buying: verify the business once (admin approves) -> pick a number -> pay setup fee + first
 month -> number is READY_TO_TEST -> assign an AI employee -> test call to the client's phone -> ACTIVE.
@@ -17,7 +18,7 @@ from app.models.phone_number import PhoneNumber
 from app.runtime.providers.registry import default_registry
 from app.services import billing
 from test_billing import company  # noqa: F401
-from test_e2e_onboarding_outbound import FakeExotel
+from test_vobiz_telephony import vobiz_carrier  # noqa: F401
 from test_phase3c_telephony import telephony_setup  # noqa: F401
 from test_portal import _client_headers
 
@@ -89,14 +90,8 @@ def test_verification_checks_and_review(client: TestClient, auth_headers: dict, 
 
 
 def test_buy_test_and_activate_number(client: TestClient, auth_headers: dict, portal, telephony_setup, db: Session,
-                                      company, kyc_dir, monkeypatch):
+                                      company, kyc_dir, vobiz_carrier):
     h, cid = portal["headers"], portal["client_id"]
-    for name, value in {"TELEPHONY_BASE_URL": "https://choranta.example.com", "EXOTEL_FLOW_ID": "1234",
-                        "EXOTEL_ACCOUNT_SID": "acct"}.items():
-        monkeypatch.setattr(settings, name, value, raising=False)
-    exotel = FakeExotel()
-    provider = default_registry.get_telephony("exotel")
-    monkeypatch.setattr(type(provider), "initiate_outbound_call", lambda self, **kwargs: exotel(self, **kwargs))
 
     # Setup fee set by the admin; the client has 1000 bought credits
     assert client.put("/api/number-pricing/Mobile", headers=auth_headers,
@@ -128,13 +123,15 @@ def test_buy_test_and_activate_number(client: TestClient, auth_headers: dict, po
     client.patch(f"/api/portal/numbers/{number['id']}", headers=h, json={"agent_id": telephony_setup["agent"].id})
     started = client.post(f"/api/portal/numbers/{number['id']}/test", headers=h, json={"phone": "+919876500000"})
     assert started.status_code == 200, started.text
-    assert exotel.requests[-1]["caller_id"] == pick and exotel.requests[-1]["to"] == "+919876500000"
+    # The number was bought on Vobiz, so its test call goes out through Vobiz with it as caller ID
+    assert vobiz_carrier[-1]["from"] == pick and vobiz_carrier[-1]["to"] == "+919876500000"
     call = db.get(Call, started.json()["test_call_id"])
     assert call.metadata_["number_test"] == number["id"] and call.metadata_["is_test"] is True
 
     # Carrier reports the test call connected -> number is Active
-    status = client.post("/api/telephony/exotel/status", data={
-        "CallSid": call.provider_call_id, "Status": "completed", "ConversationDuration": "12"})
+    hangup = urlparse(vobiz_carrier[-1]["hangup_url"])
+    status = client.post(f"{hangup.path}?{hangup.query}", data={
+        "CallUUID": call.provider_call_id or "uuid-test", "CallStatus": "completed", "Duration": "12"})
     assert status.status_code == 200, status.text
     detail = client.get(f"/api/portal/numbers/{number['id']}", headers=h).json()
     assert detail["status"] == "ACTIVE" and detail["test_result"] == "CONNECTED" and detail["activated_by"] == "test_call"

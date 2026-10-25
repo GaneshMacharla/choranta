@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { AlertTriangle, BookOpen, CheckCircle2, Circle, Rocket, UploadCloud, Volume2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Circle, Rocket, UploadCloud, Volume2 } from 'lucide-react';
 import { Card } from '../common/Card';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
@@ -8,6 +7,7 @@ import { StringListEditor } from './StringListEditor';
 import { CallLimitsEditor } from './CallLimitsEditor';
 import { CallScriptCard } from './CallScriptCard';
 import { AgentKnowledgePanel } from './AgentKnowledgePanel';
+import { AgentKnowledgeSources } from '../knowledge/AgentKnowledgeSources';
 import { AgentTestingWorkbench } from '../testing/AgentTestingWorkbench';
 import {
   AVAILABLE_LANGUAGES,
@@ -21,7 +21,7 @@ import { runtimeService } from '../../services/runtime';
 import { request } from '../../services/api';
 import { StandardCallScript, callScriptsService } from '../../services/callScripts';
 import { useAuth } from '../../context/AuthContext';
-import { Agent, AgentConfigurationData, AgentVersion, Client, KnowledgeSource } from '../../types';
+import { Agent, AgentConfigurationData, AgentVersion, Client } from '../../types';
 
 const FIELD =
   'block w-full rounded-md border border-[#153945] bg-[#06141a] p-2.5 text-xs text-slate-100 placeholder-slate-500 focus:border-[#00df8f] focus:outline-none';
@@ -39,8 +39,9 @@ interface AgentBuildViewProps {
   isPublishing: boolean;
   /** Only admins publish; others see that the draft is waiting for an admin */
   canPublish: boolean;
-  knowledgeList: KnowledgeSource[];
   onToggleKnowledge: (id: string) => void;
+  /** A client knowledge entry was deleted from the Build tab */
+  onKnowledgeDeleted: (id: string) => void;
   /** The employee's own notes/FAQs changed: refresh the attached knowledge list */
   onAgentKnowledgeChange: () => void;
   voiceLabel: string;
@@ -55,7 +56,7 @@ interface AgentBuildViewProps {
  * repeat; then Go live.
  */
 export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
-  view, agent, config, updateDraft, isDirty, versions, onPublish, isPublishing, canPublish, knowledgeList, onToggleKnowledge,
+  view, agent, config, updateDraft, isDirty, versions, onPublish, isPublishing, canPublish, onToggleKnowledge, onKnowledgeDeleted,
   onAgentKnowledgeChange, voiceLabel, onChangeVoice, onGoLive,
 }) => {
   const [client, setClient] = useState<Client | null>(null);
@@ -244,29 +245,13 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
         />
       </div>
 
-      <Card
-        title={<span className="flex items-center gap-2 text-sm font-semibold text-slate-100"><BookOpen className="h-4 w-4 text-[#00df8f]" /> 5. Knowledge</span>}
-        subtitle={`From ${client?.name || 'the client'}'s knowledge base. Ticked entries are what it answers from.`}
-        action={<Link to={`/clients/${agent.client_id}`} className="text-xs text-[#00df8f] hover:underline">Manage knowledge base</Link>}
-      >
-        {knowledgeList.length === 0 ? (
-          <p className="text-xs text-slate-500">This client has no knowledge yet; add it on the client's page.</p>
-        ) : (
-          <div className="space-y-1.5">
-            {knowledgeList.map((k) => {
-              const on = config.knowledge_sources.includes(k.id);
-              return (
-                <button key={k.id} type="button" onClick={() => onToggleKnowledge(k.id)}
-                  className="flex w-full items-center gap-2 rounded border border-[#102d38] px-3 py-2 text-left text-xs hover:border-slate-600">
-                  {on ? <CheckCircle2 className="h-4 w-4 text-[#00df8f]" /> : <Circle className="h-4 w-4 text-slate-600" />}
-                  <span className="text-slate-200">{k.name}</span>
-                  <span className="ml-auto text-[10px] text-slate-500">{(k.content || '').length.toLocaleString()} chars</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </Card>
+      <AgentKnowledgeSources
+        clientId={agent.client_id}
+        clientName={client?.name}
+        selected={config.knowledge_sources}
+        onToggle={onToggleKnowledge}
+        onDeleted={onKnowledgeDeleted}
+      />
 
       <AgentKnowledgePanel agentId={agent.id} onChange={onAgentKnowledgeChange} />
 

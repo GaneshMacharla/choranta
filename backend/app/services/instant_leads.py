@@ -61,15 +61,66 @@ def hash_key(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def create_api_key(db: Session, client_id: str, name: str, created_by: Optional[str]) -> Tuple[ApiKey, str]:
-    """Creates a key and returns it with the full secret, which is never retrievable again."""
+def create_api_key(db: Session, client_id: str, name: str, created_by: Optional[str],
+                   default: bool = False) -> Tuple[ApiKey, str]:
+    """
+    Creates a key and returns it with the full secret. Only a default key keeps an encrypted copy that can be
+    shown again; for any other key this is the only time the secret is seen.
+    """
     raw = KEY_PREFIX + secrets.token_urlsafe(32)
     key = ApiKey(client_id=client_id, name=name.strip() or "Website", prefix=raw[:len(KEY_PREFIX) + 6],
                  key_hash=hash_key(raw), created_by=created_by)
+    if default:
+        from app.core.secrets_box import encrypt
+        key.is_default, key.key_enc = True, encrypt(raw)
     db.add(key)
     db.commit()
     db.refresh(key)
     return key, raw
+
+
+DEFAULT_KEY_NAME = "Instant outbound (created for you)"
+
+
+def default_key(db: Session, client_id: str) -> Optional[ApiKey]:
+    return (db.query(ApiKey).filter(ApiKey.client_id == client_id, ApiKey.is_default.is_(True),
+                                    ApiKey.revoked_at.is_(None))
+            .order_by(ApiKey.created_at.desc()).first())
+
+
+def ensure_default_key(db: Session, client_id: str, created_by: Optional[str] = None) -> Optional[ApiKey]:
+    """
+    The client's automatic instant-outbound key, created on first need (at sign-up, or when the dashboard opens
+    for clients from before). None if it can't be stored (no encryption key on a production server).
+    """
+    key = default_key(db, client_id)
+    if key:
+        return key
+    try:
+        key, _ = create_api_key(db, client_id, DEFAULT_KEY_NAME, created_by, default=True)
+    except ValueError as exc:
+        db.rollback()
+        logger.error(f"Couldn't create the default API key for client {client_id}: {exc}")
+        return None
+    return key
+
+
+def reveal_key(key: ApiKey) -> str:
+    from app.core.secrets_box import decrypt
+    if not key.key_enc:
+        raise LeadError("This key can't be shown again. Create a new one.", 409)
+    try:
+        return decrypt(key.key_enc)
+    except ValueError:
+        raise LeadError("This key can't be shown on this server. Create a new one.", 409)
+
+
+def regenerate_default_key(db: Session, client_id: str, created_by: Optional[str]) -> Optional[ApiKey]:
+    """Replaces the default key: the old one stops working at once."""
+    old = default_key(db, client_id)
+    if old:
+        revoke_api_key(db, old)
+    return ensure_default_key(db, client_id, created_by)
 
 
 def revoke_api_key(db: Session, key: ApiKey) -> ApiKey:

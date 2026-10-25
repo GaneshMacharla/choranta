@@ -11,6 +11,8 @@ import { AgentsPage } from './pages/AgentsPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
 import { AgentCreateWizardPage } from './pages/AgentCreateWizardPage';
 import { TelephonyPage } from './pages/TelephonyPage';
+import { NumbersPage } from './pages/NumbersPage';
+import { NumberDetailPage } from './pages/NumberDetailPage';
 import { CallsPage } from './pages/CallsPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
@@ -31,6 +33,7 @@ import { PortalCallsPage } from './pages/portal/PortalCallsPage';
 import { PortalBillingPage } from './pages/portal/PortalBillingPage';
 import { PortalInventoryPage } from './pages/portal/PortalInventoryPage';
 import { PortalCoursesPage } from './pages/portal/PortalCoursesPage';
+import { PortalKnowledgePage } from './pages/portal/PortalKnowledgePage';
 import { PortalNumbersPage } from './pages/portal/PortalNumbersPage';
 import { PortalPlansPage } from './pages/portal/PortalPlansPage';
 import {
@@ -77,6 +80,7 @@ export function App() {
               <Route path="billing" element={<PortalBillingPage />} />
               <Route path="inventory" element={<PortalInventoryPage />} />
               <Route path="courses" element={<PortalCoursesPage />} />
+              <Route path="knowledge" element={<PortalKnowledgePage />} />
             </Route>
 
             {/* Protected Internal Routes */}
@@ -93,6 +97,8 @@ export function App() {
               {/* Testing now lives in each AI Employee's final "Tests" step */}
               <Route path="/test-lab" element={<TestLabRedirect />} />
               <Route path="/telephony" element={<TelephonyPage />} />
+              <Route path="/numbers" element={<NumbersPage />} />
+              <Route path="/numbers/:id" element={<NumberDetailPage />} />
               <Route path="/calls" element={<CallsPage />} />
               <Route path="/campaigns" element={<CampaignsPage />} />
               <Route path="/campaigns/:id" element={<CampaignDetailPage />} />

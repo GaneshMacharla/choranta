@@ -1,12 +1,15 @@
 export class ApiError extends Error {
   status: number;
   details?: any;
+  /** The whole error response (some endpoints add a `code` and the record of what was attempted) */
+  body?: any;
 
-  constructor(message: string, status: number, details?: any) {
+  constructor(message: string, status: number, details?: any, body?: any) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.details = details;
+    this.body = body;
   }
 }
 
@@ -29,7 +32,8 @@ export async function request<T>(endpoint: string, options: RequestInit = {}): P
   const token = localStorage.getItem('choranta_token');
   
   const headers = new Headers(options.headers || {});
-  headers.set('Content-Type', 'application/json');
+  // File uploads (FormData) set their own multipart boundary
+  if (!(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
@@ -61,7 +65,7 @@ export async function request<T>(endpoint: string, options: RequestInit = {}): P
       }
     }
     const message = data?.error || data?.detail || response.statusText || 'Request failed';
-    throw new ApiError(message, response.status, data?.details);
+    throw new ApiError(message, response.status, data?.details, markUtc(data));
   }
 
   return markUtc(data) as T;

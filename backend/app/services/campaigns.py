@@ -585,6 +585,8 @@ def _call_result(db: Session, call: Call, recipient: CampaignRecipient) -> Dict[
         result["interest"] = metadata["interest"]
     if metadata.get("callback_time"):
         result["callback_time"] = metadata["callback_time"]
+    if metadata.get("qualification"):
+        result["qualification"] = metadata["qualification"]
     if call.runtime_session_id:
         actions = []
         events = (
@@ -607,8 +609,13 @@ def _call_result(db: Session, call: Call, recipient: CampaignRecipient) -> Dict[
         }
         # What the agent recorded on the lead is more reliable than reading the transcript
         disposition_interest = LEAD_DISPOSITION_INTEREST.get((lead.call_disposition or "").upper())
-        if disposition_interest:
+        if disposition_interest and disposition_interest != result.get("interest"):
             result["interest"] = disposition_interest
+            if result.get("qualification"):
+                from app.services import lead_qualification
+                result["qualification"] = lead_qualification.qualify(
+                    lead_qualification.get_setup(db, call.agent_id), result.get("outputs") or {}, disposition_interest,
+                    ai=metadata.get("ai_qualification"), summary=result.get("summary"))
     return result
 
 

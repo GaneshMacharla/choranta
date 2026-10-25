@@ -31,6 +31,8 @@ class ClientService:
             status="ACTIVE"
         )
         saved = self.client_repo.create(client)
+        from app.services.instant_leads import ensure_default_key
+        ensure_default_key(self.db, saved.id)
         return self._to_response(saved)
 
     def get_client(self, client_id: str) -> ClientResponse:

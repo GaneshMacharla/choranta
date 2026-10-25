@@ -1,14 +1,16 @@
 """
 Phone numbers clients buy from Choranta.
 
-Clients verify their business once (services/verifications.py). Buying then provisions an ExoPhone on
-Choranta's Exotel account (services/exotel_numbers.py) and debits the one-time setup fee and the first
-month's rent from the client's wallet. The number starts READY_TO_TEST: once an AI employee is assigned,
+Clients verify their business once (services/verifications.py). Buying then buys the number on Choranta's
+Vobiz account (services/number_service.py), assigns it to the client (services/number_assignments.py) and debits
+the one-time setup fee and the first month's rent from the client's wallet. The number starts READY_TO_TEST: once an AI employee is assigned,
 a test call to the client's phone that connects (or the client skipping the test) makes it ACTIVE. A background cycle renews the rent from the wallet each
-month; if the balance can't cover it the number is PAST_DUE, and after NUMBER_GRACE_DAYS it is released
-back to Exotel. Numbers registered without a rental (before numbers were sold) are free.
+month; if the balance can't cover it the number is PAST_DUE, and after NUMBER_GRACE_DAYS it goes back to Choranta's
+pool (flagged for staff to resell or release; numbers bought on Exotel before Vobiz are released there).
+Numbers registered without a rental (before numbers were sold) are free.
 """
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -22,7 +24,7 @@ from app.models.agent_version import AgentVersion
 from app.models.billing import WalletTransaction
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import NumberPricing, NumberRental
-from app.services import exotel_numbers, notifications, verifications
+from app.services import exotel_numbers, notifications, number_assignments, number_service, verifications
 from app.services.billing import _money, get_wallet
 from app.services.subscriptions import add_month, utcnow
 
@@ -87,23 +89,35 @@ def _debit_rent(db: Session, rental: NumberRental, number: str, start: datetime,
 
 # ---------------------------------------------------------------- buying
 
+def _refusal(exc: number_service.NumberServiceError) -> ValidationException:
+    err = ValidationException(exc.message, details={"code": exc.code})
+    err.status_code = exc.status_code if exc.status_code < 500 else 502
+    return err
+
+
 def search(db: Session, number_type: str, region: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Numbers a client can rent, at Choranta's price for the type (never the carrier's cost)."""
     price = db.get(NumberPricing, number_type)
     if not price or not price.is_available:
         raise ValidationException(f"{number_type} numbers aren't available right now.")
+    try:
+        found = number_service.search_inventory(db, country="IN", number_type=number_type, region=region, per_page=100)
+    except number_service.NumberServiceError as exc:
+        raise _refusal(exc)
     taken = {n for (n,) in db.query(PhoneNumber.phone_number).all()}
     out = pricing_out(price)
     return [
-        {**item, "monthly_rent_inr": out["monthly_rent_inr"], "monthly_rent_with_gst_inr": out["monthly_rent_with_gst_inr"],
+        {"phone_number": item["e164"], "region": item["region"], "number_type": number_type,
+         "monthly_rent_inr": out["monthly_rent_inr"], "monthly_rent_with_gst_inr": out["monthly_rent_with_gst_inr"],
          "setup_fee_inr": out["setup_fee_inr"], "due_now_inr": out["due_now_inr"]}
-        for item in exotel_numbers.search_available("IN", number_type, region)
-        if item["phone_number"] not in taken
+        for item in found["items"]
+        if item["e164"] not in taken and not item["scenario"]  # mock failure scenarios are for staff testing
     ]
 
 
 def buy_number(db: Session, client_id: str, phone_number: str, number_type: str, user_id: Optional[str],
                require_verification: bool = True) -> PhoneNumber:
-    """Provisions the number on Exotel and charges the setup fee + first month's rent from the wallet."""
+    """Buys the number on Vobiz, gives it to the client and charges the setup fee + first month's rent."""
     if require_verification:
         verifications.require_approved(db, client_id)
     price = db.get(NumberPricing, number_type)
@@ -112,28 +126,31 @@ def buy_number(db: Session, client_id: str, phone_number: str, number_type: str,
     number = phone_number.strip().replace(" ", "").replace("-", "")
     if db.query(PhoneNumber.id).filter(PhoneNumber.phone_number == number).first():
         raise ValidationException("That number is already taken. Pick another one.")
-    # Checked without a lock: the Exotel purchase below can take seconds, and call charges must not wait on it
+    # Checked without a lock: the purchase below can take seconds, and call charges must not wait on it
     setup_fee = float(price.setup_fee_inr or 0)
     due_now = _money(price.monthly_rent_inr + setup_fee)
     balance = get_wallet(db, client_id).balance_inr
     if balance < due_now:
         raise InsufficientBalance(due_now, balance)
 
+    actor = number_service.Actor(f"CLIENT {client_id}" if require_verification else f"TEAM for {client_id}", user_id)
     try:
-        bought = exotel_numbers.purchase(number, f"Choranta {client_id}")
-    except exotel_numbers.ExotelNumberError as exc:
-        raise ValidationException(str(exc))
+        op = number_service.purchase(db, number, idempotency_key=f"rent-{uuid.uuid4().hex}", actor=actor, client_id=client_id)
+    except number_service.NumberServiceError as exc:
+        raise _refusal(exc)
+    if op.operation_status not in number_service.DONE_STATUSES:
+        err = ValidationException("We couldn't confirm that number with the carrier. You haven't been charged; "
+                                  "our team is checking it. Please pick another number for now.")
+        err.status_code = 502
+        raise err
+    try:
+        pn = number_assignments.assign(db, op.provider_number_id, client_id=client_id, actor=actor)
+    except number_service.NumberServiceError as exc:
+        raise _refusal(exc)
 
     try:
         start = utcnow()
         end = add_month(start)
-        pn = PhoneNumber(
-            id=generate_unique_id("phn", 10), client_id=client_id, provider="exotel",
-            provider_number_id=bought["sid"], phone_number=bought["phone_number"], country_code="IN",
-            status="READY_TO_TEST", metadata_={"number_type": number_type, "bought_from_choranta": True},
-        )
-        db.add(pn)
-        db.flush()
         rental = NumberRental(
             phone_number_id=pn.id, client_id=client_id, number_type=number_type, monthly_rent_inr=price.monthly_rent_inr,
             status="ACTIVE", current_period_start=start, current_period_end=end, created_by=user_id,
@@ -151,21 +168,37 @@ def buy_number(db: Session, client_id: str, phone_number: str, number_type: str,
         db.commit()
     except Exception:
         db.rollback()
-        logger.exception(f"Saving bought number {number} failed; releasing it on Exotel")
-        try:
-            exotel_numbers.release(bought["sid"])
-        except exotel_numbers.ExotelNumberError as exc:
-            logger.error(f"Could not release {number} ({bought['sid']}) after a failed save: {exc}")
+        # Releasing at the carrier costs a fee, so the number stays in Choranta's pool; the client paid nothing
+        logger.exception(f"Charging for {number} failed; returning it to the pool")
+        number_assignments.unassign(db, op.provider_number_id, actor=number_service.SYSTEM, reason="CHARGE_FAILED")
         raise
-    logger.info(f"Client {client_id} bought {pn.phone_number} ({number_type}) for Rs {price.monthly_rent_inr}/month")
+    logger.info(f"Client {client_id} rented {pn.phone_number} ({number_type}) for Rs {price.monthly_rent_inr}/month")
     return pn
 
 
 # ---------------------------------------------------------------- renewing & releasing
 
-def release(db: Session, rental: NumberRental, now: Optional[datetime] = None) -> bool:
-    """Returns the number to Exotel and retires it here. False if Exotel couldn't release it (retried later)."""
+def release(db: Session, rental: NumberRental, now: Optional[datetime] = None, reason: str = "LAPSED") -> bool:
+    """
+    Ends the client's rental. A Vobiz number returns to Choranta's pool (flagged for staff); a legacy Exotel number
+    is released on Exotel. False if that couldn't be done right now (retried next cycle).
+    """
+    from app.models.numbers import NumberAssignment
     pn = db.get(PhoneNumber, rental.phone_number_id)
+    assignment = (db.query(NumberAssignment)
+                  .filter(NumberAssignment.phone_number_id == rental.phone_number_id, NumberAssignment.status == "ACTIVE")
+                  .first())
+    if assignment:
+        try:
+            number_assignments.unassign(db, assignment.provider_number_id, actor=number_service.SYSTEM, reason=reason)
+        except number_service.NumberServiceError as exc:
+            logger.error(f"Returning {display_number(pn) if pn else rental.phone_number_id} to the pool failed: {exc.message}")
+            return False
+        db.refresh(rental)
+        rental.released_at = now or utcnow()
+        db.commit()
+        logger.info(f"Rental of {display_number(pn) if pn else rental.phone_number_id} for {rental.client_id} ended ({reason})")
+        return True
     try:
         if pn:
             exotel_numbers.release(pn.provider_number_id)

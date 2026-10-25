@@ -848,10 +848,10 @@ def delete_phone_number(
     record = repo.get_by_id(phone_number_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Phone number '{phone_number_id}' not found.")
-    # A number rented from Exotel must go back to Exotel, or Choranta keeps paying for it
+    # A rented number goes back to Choranta's pool (Vobiz) or to Exotel (legacy), so no one keeps paying for it
     rental = phone_numbers.rental_for(db, record.id)
     if rental and rental.status != "RELEASED" and not phone_numbers.release(db, rental):
-        raise HTTPException(status_code=502, detail="Exotel couldn't release this number. Try again before deleting it.")
+        raise HTTPException(status_code=502, detail="The number couldn't be returned right now. Try again before deleting it.")
     repo.delete(record)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

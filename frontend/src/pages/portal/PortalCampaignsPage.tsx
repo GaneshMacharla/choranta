@@ -1,5 +1,6 @@
 import React from 'react';
 import { CampaignDetail, CampaignsList } from '../../components/campaigns/CampaignViews';
+import { InstantOutboundStory } from '../../components/portal/InstantOutboundStory';
 
 export const PortalCampaignsPage: React.FC = () => (
   <div className="mx-auto max-w-6xl">
@@ -14,7 +15,8 @@ export const PortalCampaignDetailPage: React.FC = () => (
 );
 
 export const PortalInstantOutboundPage: React.FC = () => (
-  <div className="mx-auto max-w-6xl">
+  <div className="mx-auto max-w-6xl space-y-6">
+    <InstantOutboundStory />
     <CampaignsList scope="portal" basePath="/portal/instant-outbound" kind="TRIGGER" />
   </div>
 );

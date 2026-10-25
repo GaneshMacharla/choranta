@@ -1,5 +1,6 @@
 import { request } from './api';
 import { downloadAuthed } from './portal';
+import { Qualification } from './qualification';
 
 export type CampaignScope = 'admin' | 'portal';
 export type CampaignKind = 'BULK' | 'TRIGGER';
@@ -95,6 +96,7 @@ export interface CampaignRecipient {
     actions?: Array<{ tool: string; arguments: Record<string, unknown> }>;
     lead?: { qualification_status?: string | null; call_disposition?: string | null; next_action?: string | null };
     summary?: string;
+    qualification?: Qualification;
   };
   error?: string | null;
   updated_at: string;
@@ -151,6 +153,16 @@ export interface DoNotCallEntry {
   created_at: string;
 }
 
+export interface RecipientFile {
+  csv_text: string;
+  file_type: string;
+  /** The spreadsheet tab that was read, for multi-sheet files */
+  sheet: string | null;
+}
+
+/** File types the recipient upload accepts */
+export const RECIPIENT_FILE_ACCEPT = '.csv,.tsv,.txt,.xlsx,.xlsm,.xls';
+
 const json = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) });
 
 /** Campaign API for internal users (/campaigns) or client portal users (/portal/campaigns). */
@@ -179,6 +191,13 @@ export function campaignsApi(scope: CampaignScope) {
       return request<{ total: number; items: LeadOption[] }>(`${base}/options/leads?${query.toString()}`);
     },
     previewCsv: (csvText: string) => request<CsvPreview>(`${base}/preview-csv`, json({ csv_text: csvText })),
+    /** Excel or text file -> the CSV text previewCsv and importCsv take */
+    convertFile: (file: File) => {
+      const body = new FormData();
+      body.append('file', file);
+      return request<RecipientFile>(`${base}/recipient-file`, { method: 'POST', body });
+    },
+    convertSheet: (url: string) => request<RecipientFile>(`${base}/recipient-sheet`, json({ url })),
     create: (settings: CampaignSettings & { client_id?: string }) => request<Campaign>(base, json(settings)),
     update: (id: string, settings: Partial<CampaignSettings>) =>
       request<Campaign>(`${base}/${id}`, { method: 'PATCH', body: JSON.stringify(settings) }),

@@ -2,6 +2,9 @@
 Outbound insights for the client dashboard: how campaigns and instant website-lead calls went over
 a period, across all of a client's campaigns. Built from campaign recipients and their attempts;
 the interest of each answered call comes from post-call extraction (see call_outputs).
+
+Hot leads are the qualified callers (services/lead_qualification.py) not yet followed up: campaign recipients
+and inbound callers alike.
 """
 from datetime import datetime, timedelta, timezone
 from statistics import median
@@ -10,8 +13,10 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.models.call import Call
 from app.models.campaign import Campaign, CampaignAttempt, CampaignRecipient
 from app.services.campaigns import _zone, count_outputs
+from app.services.lead_qualification import is_qualified
 
 PERIODS = (7, 30, 90)
 HOT_INTERESTS = ("interested", "callback")
@@ -27,6 +32,42 @@ def _rate(part: int, whole: int) -> Optional[float]:
 
 def _interest(recipient: CampaignRecipient) -> Optional[str]:
     return (recipient.result or {}).get("interest") if recipient.status == "COMPLETED" else None
+
+
+def _naive(dt: Optional[datetime]) -> datetime:
+    if dt is None:
+        return datetime.min
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+
+def _reason(result: Dict[str, Any]) -> Optional[str]:
+    qualification = result.get("qualification") if isinstance(result.get("qualification"), dict) else {}
+    return qualification.get("reason")
+
+
+def _inbound_hot(db: Session, client_id: str, since: datetime) -> List[Dict[str, Any]]:
+    """Qualified inbound callers in the period, not yet followed up."""
+    from app.services.whatsapp_followups import _lead_for, lead_phone
+    calls = db.query(Call).filter(
+        Call.client_id == client_id, Call.direction == "INBOUND", Call.status == "COMPLETED", Call.created_at >= since,
+    ).order_by(Call.created_at.desc()).limit(2000).all()
+    out = []
+    for call in calls:
+        metadata = call.metadata_ or {}
+        if metadata.get("is_test") or metadata.get("followed_up_at") or not metadata.get("qualification"):
+            continue
+        if not is_qualified(metadata):
+            continue
+        phone = lead_phone(call) or call.caller_number
+        lead = _lead_for(db, call, phone) if phone else None
+        out.append({
+            "recipient_id": call.id, "kind": "inbound", "name": lead.name if lead else None, "phone": phone,
+            "campaign_id": None, "campaign_name": "Inbound call", "campaign_kind": None,
+            "interest": metadata.get("interest"), "summary": metadata.get("summary"),
+            "reason": _reason(metadata), "callback_time": metadata.get("callback_time"),
+            "call_id": call.id, "called_at": _naive(call.created_at),
+        })
+    return out
 
 
 def insights(db: Session, client_id: str, days: int = 30, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -50,6 +91,7 @@ def insights(db: Session, client_id: str, days: int = 30, now: Optional[datetime
         "called": len(recipients),
         "answered": len(answered),
         "interested": sum(1 for i in interests if i in HOT_INTERESTS),
+        "qualified": sum(1 for r in answered if is_qualified(r.result)),
         "callbacks": interests.count("callback"),
         "not_interested": interests.count("not_interested"),
         "do_not_call": interests.count("do_not_call"),
@@ -59,11 +101,11 @@ def insights(db: Session, client_id: str, days: int = 30, now: Optional[datetime
     }
 
     # ------------------------------------------------ hot leads
-    hot = [r for r in answered if _interest(r) in HOT_INTERESTS and not (r.result or {}).get("followed_up_at")]
-    hot.sort(key=lambda r: r.last_dialed_at, reverse=True)
-    out["hot_leads"] = [
+    hot_recipients = [r for r in answered if is_qualified(r.result) and not (r.result or {}).get("followed_up_at")]
+    hot = [
         {
             "recipient_id": r.id,
+            "kind": "campaign",
             "name": r.name,
             "phone": r.phone,
             "campaign_id": r.campaign_id,
@@ -71,12 +113,15 @@ def insights(db: Session, client_id: str, days: int = 30, now: Optional[datetime
             "campaign_kind": campaigns[r.campaign_id].kind,
             "interest": _interest(r),
             "summary": (r.result or {}).get("summary"),
+            "reason": _reason(r.result or {}),
             "callback_time": (r.result or {}).get("callback_time"),
             "call_id": r.last_call_id,
-            "called_at": r.last_dialed_at,
+            "called_at": _naive(r.last_dialed_at),
         }
-        for r in hot[:HOT_LEADS_LIMIT]
-    ]
+        for r in hot_recipients
+    ] + _inbound_hot(db, client_id, since)
+    hot.sort(key=lambda h: h["called_at"], reverse=True)
+    out["hot_leads"] = hot[:HOT_LEADS_LIMIT]
     out["hot_leads_total"] = len(hot)
 
     # ------------------------------------------------ instant website leads
@@ -162,13 +207,24 @@ def _instant(db: Session, trigger_ids: List[str], since: datetime) -> Dict[str, 
     }
 
 
-def mark_followed_up(db: Session, client_id: str, recipient_id: str, now: Optional[datetime] = None) -> bool:
-    """Takes a hot lead off the follow-up list. False when it isn't this client's recipient."""
-    recipient = db.get(CampaignRecipient, recipient_id)
-    if not recipient or recipient.client_id != client_id:
+def mark_followed_up(db: Session, client_id: str, lead_id: str, now: Optional[datetime] = None) -> bool:
+    """
+    Takes a hot lead off the follow-up list: a campaign recipient, or an inbound call (by call id).
+    False when it isn't this client's.
+    """
+    stamp = (now or datetime.now(timezone.utc)).isoformat()
+    recipient = db.get(CampaignRecipient, lead_id)
+    if recipient:
+        if recipient.client_id != client_id:
+            return False
+        recipient.result = {**(recipient.result or {}), "followed_up_at": stamp}
+        flag_modified(recipient, "result")
+        db.commit()
+        return True
+    call = db.get(Call, lead_id)
+    if not call or call.client_id != client_id or call.direction != "INBOUND":
         return False
-    recipient.result = {**(recipient.result or {}),
-                        "followed_up_at": (now or datetime.now(timezone.utc)).isoformat()}
-    flag_modified(recipient, "result")
+    call.metadata_ = {**(call.metadata_ or {}), "followed_up_at": stamp}
+    flag_modified(call, "metadata_")
     db.commit()
     return True

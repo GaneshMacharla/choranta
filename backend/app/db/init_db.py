@@ -68,6 +68,10 @@ def retire_plans(db: Session) -> None:
         logger.info(f"Pay-as-you-go: retired {plans} plan(s); {subs} subscription(s) end at period end")
 
 
+# Seeded connectors with no implementation yet: hidden from the catalog until built
+_RETIRED_INTEGRATIONS = ("int_google_calendar", "int_hubspot", "int_salesforce", "int_custom_webhook", "int_twilio_sms")
+
+
 def seed_catalogs(db: Session) -> None:
     """Seed default system tools, integrations, and sample knowledge sources if empty."""
     seed_number_pricing(db)
@@ -200,52 +204,66 @@ def seed_catalogs(db: Session) -> None:
             db.add(Tool(**tool_data))
 
     # 2. Integrations
+    # Only WhatsApp is live for now. The connectors below have no implementation yet; they stay commented
+    # out (and are hidden from existing databases, see _RETIRED_INTEGRATIONS) until each one is built.
     initial_integrations = [
         {
-            "id": "int_google_calendar",
-            "name": "Google Calendar",
-            "description": "Real-time calendar availability and event scheduling.",
-            "category": "CALENDAR",
-            "provider": "GOOGLE",
-            "connection_status": "CONFIGURED",
-        },
-        {
-            "id": "int_hubspot",
-            "name": "HubSpot CRM",
-            "description": "Customer contact tracking, deals, and automated lead capture.",
-            "category": "CRM",
-            "provider": "HUBSPOT",
-            "connection_status": "CONFIGURED",
-        },
-        {
-            "id": "int_salesforce",
-            "name": "Salesforce CRM",
-            "description": "Enterprise customer management and service cases.",
-            "category": "CRM",
-            "provider": "SALESFORCE",
-            "connection_status": "CONFIGURED",
-        },
-        {
-            "id": "int_custom_webhook",
-            "name": "Custom Webhook API",
-            "description": "Dispatch call events and actions to proprietary client endpoints.",
-            "category": "WEBHOOK",
-            "provider": "CUSTOM",
-            "connection_status": "CONFIGURED",
-        },
-        {
-            "id": "int_twilio_sms",
-            "name": "Twilio SMS",
-            "description": "Post-call confirmation and SMS summary dispatch.",
+            "id": "int_whatsapp",
+            "name": "WhatsApp Business",
+            "description": "Follow-up message to qualified leads after a call, from the client's own number (Meta Cloud API). Clients connect it in the portal.",
             "category": "MESSAGING",
-            "provider": "TWILIO",
+            "provider": "META",
             "connection_status": "CONFIGURED",
         },
+        # {
+        #     "id": "int_google_calendar",
+        #     "name": "Google Calendar",
+        #     "description": "Real-time calendar availability and event scheduling.",
+        #     "category": "CALENDAR",
+        #     "provider": "GOOGLE",
+        #     "connection_status": "CONFIGURED",
+        # },
+        # {
+        #     "id": "int_hubspot",
+        #     "name": "HubSpot CRM",
+        #     "description": "Customer contact tracking, deals, and automated lead capture.",
+        #     "category": "CRM",
+        #     "provider": "HUBSPOT",
+        #     "connection_status": "CONFIGURED",
+        # },
+        # {
+        #     "id": "int_salesforce",
+        #     "name": "Salesforce CRM",
+        #     "description": "Enterprise customer management and service cases.",
+        #     "category": "CRM",
+        #     "provider": "SALESFORCE",
+        #     "connection_status": "CONFIGURED",
+        # },
+        # {
+        #     "id": "int_custom_webhook",
+        #     "name": "Custom Webhook API",
+        #     "description": "Dispatch call events and actions to proprietary client endpoints.",
+        #     "category": "WEBHOOK",
+        #     "provider": "CUSTOM",
+        #     "connection_status": "CONFIGURED",
+        # },
+        # {
+        #     "id": "int_twilio_sms",
+        #     "name": "Twilio SMS",
+        #     "description": "Post-call confirmation and SMS summary dispatch.",
+        #     "category": "MESSAGING",
+        #     "provider": "TWILIO",
+        #     "connection_status": "CONFIGURED",
+        # },
+        # ]
     ]
 
     for int_data in initial_integrations:
         if not db.query(Integration).filter(Integration.id == int_data["id"]).first():
             db.add(Integration(**int_data))
+    # Hide the not-yet-built connectors seeded before; kept (not deleted) so agents' links survive
+    db.query(Integration).filter(Integration.id.in_(_RETIRED_INTEGRATIONS)).update(
+        {"connection_status": "DISABLED"}, synchronize_session=False)
 
     # 3. Knowledge Sources
     initial_knowledge = [
@@ -433,6 +451,8 @@ _ADDED_COLUMNS = [
     ("pricing_settings", "payg_max_concurrent_calls", "INTEGER"),
     ("clients", "max_concurrent_calls", "INTEGER"),
     ("knowledge_sources", "client_id", "VARCHAR(64) REFERENCES clients(id) ON DELETE CASCADE"),
+    ("api_keys", "is_default", "BOOLEAN"),
+    ("api_keys", "key_enc", "TEXT"),
 ]
 
 
@@ -501,6 +521,26 @@ def init_db() -> None:
         logger.info("Catalogs and real estate sample data seeded.")
     except Exception as e:
         logger.error(f"Error during db initialization: {e}")
+        db.rollback()
+    finally:
+        db.close()
+    _move_client_knowledge_to_mongo()
+
+
+def _move_client_knowledge_to_mongo() -> None:
+    """Clients' knowledge written before MongoDB is moved there once MONGODB_URI is set."""
+    from app.db import mongo
+    if not mongo.configured():
+        logger.warning("MONGODB_URI is not set: clients' knowledge bases (documents, notes, FAQs) are unavailable.")
+        return
+    db: Session = SessionLocal()
+    try:
+        from app.services.knowledge_store import migrate_sql_client_knowledge
+        moved = migrate_sql_client_knowledge(db)
+        if moved:
+            logger.info("Moved %d client knowledge entries to MongoDB.", moved)
+    except Exception as e:
+        logger.error(f"Couldn't move client knowledge to MongoDB (will retry next start): {e}")
         db.rollback()
     finally:
         db.close()

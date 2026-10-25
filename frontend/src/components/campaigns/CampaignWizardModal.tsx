@@ -15,6 +15,8 @@ import {
   CsvPreview,
   DAY_LABELS,
   LeadOption,
+  RECIPIENT_FILE_ACCEPT,
+  RecipientFile,
   SAMPLE_CSV,
   minutesToTime,
   timeToMinutes,
@@ -105,6 +107,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
   const [preview, setPreview] = useState<CsvPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [sheetUrl, setSheetUrl] = useState('');
   const [leadSearch, setLeadSearch] = useState('');
   const [leads, setLeads] = useState<LeadOption[]>([]);
   const [leadTotal, setLeadTotal] = useState(0);
@@ -220,24 +223,29 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, step, source, leadSearch, effectiveClientId]);
 
-  const handleFile = (file: File) => {
-    setCsvFileName(file.name);
+  // Every format (CSV, Excel, text, Google Sheets) becomes CSV text on the server first
+  const loadRecipients = async (label: string, convert: () => Promise<RecipientFile>) => {
+    setCsvFileName(label);
     setPreview(null);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const text = String(reader.result || '');
-      setCsvText(text);
-      setPreviewing(true);
-      setError(null);
-      try {
-        setPreview(await api.previewCsv(text));
-      } catch (e: any) {
-        setError(e.message || 'Could not read the CSV file.');
-      } finally {
-        setPreviewing(false);
-      }
-    };
-    reader.readAsText(file);
+    setCsvText('');
+    setPreviewing(true);
+    setError(null);
+    try {
+      const converted = await convert();
+      if (converted.sheet) setCsvFileName(`${label} (sheet: ${converted.sheet})`);
+      setCsvText(converted.csv_text);
+      setPreview(await api.previewCsv(converted.csv_text));
+    } catch (e: any) {
+      setError(e.message || 'Could not read the file.');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const handleFile = (file: File) => loadRecipients(file.name, () => api.convertFile(file));
+  const loadSheet = () => {
+    const url = sheetUrl.trim();
+    if (url) loadRecipients('Google Sheet', () => api.convertSheet(url));
   };
 
   const downloadSample = () => {
@@ -280,7 +288,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
         return null;
       case 'recipients':
         if (isTrigger) return null;
-        if (recipientCount === 0) return source === 'csv' ? 'Upload a CSV with at least one valid number.' : 'Select at least one lead.';
+        if (recipientCount === 0) return source === 'csv' ? 'Upload a file with at least one valid number.' : 'Select at least one lead.';
         return null;
       case 'schedule':
         for (const w of windows) {
@@ -532,7 +540,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
     <div className="space-y-4">
       <div className="flex w-fit rounded-full bg-[#0a2028] p-0.5">
         <button type="button" className={pill(source === 'csv')} onClick={() => setSource('csv')}>
-          Upload CSV
+          Upload file
         </button>
         <button type="button" className={pill(source === 'leads')} onClick={() => setSource('leads')}>
           Pick leads
@@ -551,7 +559,10 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
             }}
           >
             <FileSpreadsheet className="h-8 w-8 text-[#00df8f]" />
-            <div className="text-sm text-slate-200">{csvFileName || 'Drop a CSV file here'}</div>
+            <div className="text-sm text-slate-200">{csvFileName || 'Drop a file here'}</div>
+            <p className="max-w-md text-xs text-slate-400">
+              Excel (.xlsx, .xls), CSV or text (.txt, .tsv).
+            </p>
             <p className="max-w-md text-xs text-slate-400">
               One column must hold the phone number (<code>phone</code>, <code>mobile</code> or <code>number</code>). A{' '}
               <code>name</code> column and every other column are passed to the agent as variables, e.g.{' '}
@@ -568,7 +579,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
             <input
               ref={fileInput}
               type="file"
-              accept=".csv,text/csv"
+              accept={RECIPIENT_FILE_ACCEPT}
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
@@ -576,6 +587,22 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
                 e.target.value = '';
               }}
             />
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="flex-1">
+              <Input
+                label="Or use a Google Sheet"
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                value={sheetUrl}
+                onChange={(e) => setSheetUrl(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && loadSheet()}
+                helperText="Share it as 'Anyone with the link can view'."
+              />
+            </div>
+            <Button variant="secondary" size="sm" disabled={!sheetUrl.trim() || previewing} onClick={loadSheet} className="sm:mb-6">
+              Load sheet
+            </Button>
           </div>
 
           {previewing && <p className="text-xs text-slate-400">Checking the file...</p>}

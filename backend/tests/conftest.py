@@ -5,6 +5,10 @@ STARTUP_DATABASE_FILE = "./test_choranta_startup.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{STARTUP_DATABASE_FILE}"
 # Tests set payment modes themselves; a developer's .env must not switch them on
 os.environ["SIMULATED_PAYMENTS"] = "false"
+# Knowledge bases go to an in-memory MongoDB, never the Atlas cluster in the developer's .env
+os.environ["MONGODB_URI"] = "mongomock://test"
+# Phone numbers come from the simulated carrier: tests never reach Vobiz
+os.environ["PHONE_NUMBER_MOCK_MODE"] = "true"
 
 from datetime import timedelta
 import pytest
@@ -38,6 +42,14 @@ default_registry.enable_mock_providers()
 TEST_DATABASE_URL = "sqlite:///./test_choranta_run.db"
 test_engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 30})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+
+
+@pytest.fixture(autouse=True)
+def fresh_rate_limits():
+    """Rate limits on buying and releasing numbers count per test, not across the suite."""
+    from app.core import rate_limit
+    rate_limit.reset()
+    yield
 
 
 @pytest.fixture(autouse=True)

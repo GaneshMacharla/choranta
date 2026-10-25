@@ -26,6 +26,7 @@ import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { fmtDate } from '../../components/billing/PlanUsageBar';
 import { AgentRequest, portalAgentRequestsService as api, RequestOption } from '../../services/agentRequests';
+import { QualificationSettings } from '../../components/portal/QualificationSettings';
 
 const NAME_MAX = 40;
 const NAME_IDEAS = ['Priya', 'Arjun', 'Meera', 'Rahul', 'Anjali', 'Kiran'];
@@ -386,6 +387,8 @@ export const PortalEmployeesPage: React.FC = () => {
           </ul>
         </Card>
       )}
+
+      <QualificationSettings />
     </div>
   );
 };

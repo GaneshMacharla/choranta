@@ -18,6 +18,7 @@ import {
   Zap,
   Inbox,
   BadgeCheck,
+  Hash,
 } from 'lucide-react';
 import { verificationsApi } from '../../pages/VerificationsPage';
 import { agentRequestsService } from '../../services/agentRequests';
@@ -60,6 +61,7 @@ export const Sidebar: React.FC = () => {
     { name: 'Campaigns', path: '/campaigns', icon: Megaphone },
     { name: 'Instant Outbound', path: '/instant-outbound', icon: Zap },
     { name: 'Telephony', path: '/telephony', icon: Radio },
+    { name: 'Phone Numbers', path: '/numbers', icon: Hash },
     
     { name: 'Tools', path: '/tools', icon: Wrench },
     { name: 'Integrations', path: '/integrations', icon: Puzzle },

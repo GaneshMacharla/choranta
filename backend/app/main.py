@@ -12,7 +12,7 @@ from app.api.routes import (
     auth, clients, agents, dashboard,
     agent_configuration, catalogs, client_knowledge, runtime,
     websocket_audio, webrtc_audio, telephony, mock_environment, test_scenarios, pricing, inventory, billing, portal, plans,
-    campaigns, api_keys, public_leads, agent_requests, verifications, demo_leads, courses, call_scripts
+    campaigns, api_keys, public_leads, agent_requests, verifications, demo_leads, courses, call_scripts, whatsapp, qualification, numbers
 )
 
 logging.basicConfig(
@@ -81,6 +81,20 @@ async def _billing_sweep_loop() -> None:
         await asyncio.sleep(settings.BILLING_SWEEP_S)
 
 
+async def _whatsapp_loop() -> None:
+    """Sends queued WhatsApp follow-ups and checks follow-up messages waiting for WhatsApp's approval."""
+    from app.db.session import SessionLocal
+    from app.services.whatsapp_followups import run_whatsapp_job
+    while True:
+        try:
+            await asyncio.to_thread(run_whatsapp_job, SessionLocal)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"WhatsApp loop error: {type(e).__name__}: {e}")
+        await asyncio.sleep(settings.WHATSAPP_TICK_S)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup validation and seeding
@@ -92,6 +106,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_number_rental_loop()),
             asyncio.create_task(_campaign_loop()),
             asyncio.create_task(_billing_sweep_loop()),
+            asyncio.create_task(_whatsapp_loop()),
         ]
         if settings.ENVIRONMENT != "test" else []
     )
@@ -165,6 +180,8 @@ app.include_router(agents.router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_configuration.router, prefix=settings.API_V1_PREFIX)
 app.include_router(catalogs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(client_knowledge.router, prefix=settings.API_V1_PREFIX)
+app.include_router(numbers.router, prefix=settings.API_V1_PREFIX)
+app.include_router(client_knowledge.portal_router, prefix=settings.API_V1_PREFIX)
 app.include_router(call_scripts.router, prefix=settings.API_V1_PREFIX)
 app.include_router(dashboard.router, prefix=settings.API_V1_PREFIX)
 app.include_router(runtime.router, prefix=settings.API_V1_PREFIX)
@@ -187,6 +204,9 @@ app.include_router(agent_requests.admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(verifications.router, prefix=settings.API_V1_PREFIX)
 app.include_router(courses.portal_router, prefix=settings.API_V1_PREFIX)
 app.include_router(courses.admin_router, prefix=settings.API_V1_PREFIX)
+app.include_router(whatsapp.router, prefix=settings.API_V1_PREFIX)
+app.include_router(whatsapp.portal_router, prefix=settings.API_V1_PREFIX)
+app.include_router(qualification.portal_router, prefix=settings.API_V1_PREFIX)
 app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)

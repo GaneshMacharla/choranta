@@ -6,6 +6,7 @@ import { Input } from '../../components/common/Input';
 import { Modal } from '../../components/common/Modal';
 import { Badge } from '../../components/common/Badge';
 import { ApiKey, CreatedApiKey, IntegrationsInfo, portalApiKeys } from '../../services/apiKeys';
+import { WhatsAppSettings } from '../../components/portal/WhatsAppSettings';
 
 const copy = (text: string) => navigator.clipboard?.writeText(text);
 
@@ -161,6 +162,8 @@ UrlFetchApp.fetch('${url}', {method: 'post', contentType: 'application/json',
           </Link>
         </div>
       )}
+
+      <WhatsAppSettings />
 
       {/* API keys */}
       <section className="space-y-3 rounded-lg border border-[#143c49] bg-[#091b22] p-4">

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
 from app.db.session import Base
 from app.core.security import generate_unique_id
 
@@ -9,7 +9,10 @@ def _now():
 
 
 class ApiKey(Base):
-    """A client's key for Choranta's public API. Only a SHA-256 hash of the key is stored."""
+    """
+    A client's key for Choranta's public API, checked by its SHA-256 hash. The key every client gets at sign-up
+    (is_default) is also kept encrypted, so the portal dashboard can show it again; keys made by hand are not.
+    """
     __tablename__ = "api_keys"
 
     id = Column(String(64), primary_key=True, default=lambda: generate_unique_id("key"))
@@ -21,3 +24,5 @@ class ApiKey(Base):
     created_at = Column(DateTime, default=_now, nullable=False)
     last_used_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
+    is_default = Column(Boolean, nullable=True)  # the automatic instant-outbound key
+    key_enc = Column(Text, nullable=True)        # the full key, encrypted (default keys only)

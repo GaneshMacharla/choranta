@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
 import {
   Radio,
@@ -256,7 +257,8 @@ export const TelephonyPage: React.FC = () => {
             <h1 className="text-2xl font-semibold text-slate-100">Telephony & Numbers</h1>
           </div>
           <p className="text-sm text-slate-400 mt-1">
-            Manage provisioned Exotel phone numbers (ExoPhones), inbound webhooks, and AI employee routing.
+            Routing for each client's numbers: which AI employee answers, readiness and test calls. Buy, assign and release
+            numbers under <Link to="/numbers" className="text-[#00df8f] hover:underline">Phone Numbers</Link>.
           </p>
         </div>
         <div className="flex items-center gap-3">

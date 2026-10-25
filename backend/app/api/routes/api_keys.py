@@ -32,6 +32,7 @@ class ApiKeyResponse(BaseModel):
     created_at: datetime
     last_used_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
+    is_default: Optional[bool] = None
 
 
 class CreatedApiKeyResponse(ApiKeyResponse):
@@ -97,6 +98,51 @@ def portal_integrations(account=Depends(require_client_user), db: Session = Depe
         "trigger_campaigns": [{"id": c.id, "name": c.name, "status": c.status} for c in campaigns],
         "active_keys": sum(1 for k in _list(db, client_id) if not k.revoked_at),
     }
+
+
+def instant_setup(db: Session, client_id: str) -> Dict[str, Any]:
+    """The dashboard's "call website enquiries instantly" card: what is set up, and the address and key to use."""
+    from app.models.agent import Agent
+    from app.models.agent_version import AgentVersion
+    campaigns = (db.query(Campaign).filter(Campaign.client_id == client_id, Campaign.kind == "TRIGGER")
+                 .order_by(Campaign.created_at.desc()).all())
+    has_agent = db.query(AgentVersion.id).join(Agent, Agent.id == AgentVersion.agent_id).filter(
+        Agent.client_id == client_id, AgentVersion.status == "PUBLISHED").first() is not None
+    key = instant_leads.ensure_default_key(db, client_id)
+    return {
+        "leads_url": public_leads_url(),
+        "has_agent": has_agent,
+        "campaigns": [{"id": c.id, "name": c.name, "status": c.status} for c in campaigns],
+        "running": any(c.status == "RUNNING" for c in campaigns),
+        "key": {"id": key.id, "prefix": key.prefix, "created_at": key.created_at,
+                "last_used_at": key.last_used_at} if key else None,
+    }
+
+
+@portal_router.get("/instant-setup")
+def portal_instant_setup(account=Depends(require_client_user), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    return instant_setup(db, account[1])
+
+
+@portal_router.post("/instant-setup/key")
+def portal_reveal_key(account=Depends(require_client_user), db: Session = Depends(get_db)) -> Dict[str, str]:
+    """The full default key (a POST, so it isn't cached or kept in browser history)."""
+    key = instant_leads.ensure_default_key(db, account[1])
+    if not key:
+        raise HTTPException(status_code=503, detail="Your key can't be shown right now. Please contact Choranta support.")
+    try:
+        return {"key": instant_leads.reveal_key(key)}
+    except instant_leads.LeadError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@portal_router.post("/instant-setup/key/regenerate")
+def portal_regenerate_key(account=Depends(require_client_user), db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Makes a new default key; the old one stops working straight away."""
+    user, client_id = account
+    if not instant_leads.regenerate_default_key(db, client_id, user.id):
+        raise HTTPException(status_code=503, detail="A new key can't be made right now. Please contact Choranta support.")
+    return instant_setup(db, client_id)
 
 
 # ---------------------------------------------------------------- internal users

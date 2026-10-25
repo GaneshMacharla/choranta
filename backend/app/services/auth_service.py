@@ -81,6 +81,8 @@ class AuthService:
         self.db.flush()
         self.db.add(ClientUser(user_id=user.id, client_id=client.id))
         self.db.commit()
+        from app.services.instant_leads import ensure_default_key
+        ensure_default_key(self.db, client.id, created_by=user.id)
         return user
 
     def issue_token(self, user: User) -> TokenResponse:

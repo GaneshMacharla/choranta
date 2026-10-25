@@ -35,7 +35,6 @@ import {
   AgentStatus,
   AgentConfigurationData,
   ValidationResult,
-  KnowledgeSource,
   Tool,
   CartesiaVoice,
   VersionComparison,
@@ -149,7 +148,6 @@ export const AgentDetailPage: React.FC = () => {
   const [isDirty, setIsDirty] = useState(false);
 
   // Catalogs state
-  const [knowledgeList, setKnowledgeList] = useState<KnowledgeSource[]>([]);
   const [toolsList, setToolsList] = useState<Tool[]>([]);
 
   // Navigation tab (?tab=test/tests/voice opens Test, ?tab=variables/tools/versions/prompt those; anything else Configure)
@@ -264,8 +262,6 @@ export const AgentDetailPage: React.FC = () => {
       setAgent(agentData);
       setVersions(versionsData);
       setConfig(normalizeConfig(configData.configuration));
-      // Only this client's knowledge base can be given to the employee
-      setKnowledgeList(await catalogsService.listClientKnowledge(agentData.client_id).catch(() => []));
       setToolsList(toolsData);
       setVoicesList(voicesData);
 
@@ -673,7 +669,7 @@ export const AgentDetailPage: React.FC = () => {
           onPublish={handlePublishAndTest}
           isPublishing={isPublishing}
           canPublish={isAdmin}
-          knowledgeList={knowledgeList}
+          onKnowledgeDeleted={(kid) => updateDraft((prev) => ({ ...prev, knowledge_sources: prev.knowledge_sources.filter((k) => k !== kid) }))}
           onToggleKnowledge={handleToggleKnowledge}
           onAgentKnowledgeChange={() =>
             catalogsService

@@ -57,12 +57,15 @@ export interface PortalSummary {
 export type CallInterest = 'interested' | 'callback' | 'not_interested' | 'do_not_call' | 'unclear';
 
 export interface HotLead {
+  /** Campaign recipient id, or the call id for an inbound caller */
   recipient_id: string;
+  kind: 'campaign' | 'inbound';
+  reason: string | null;
   name: string | null;
   phone: string;
-  campaign_id: string;
+  campaign_id: string | null;
   campaign_name: string;
-  campaign_kind: 'BULK' | 'TRIGGER';
+  campaign_kind: 'BULK' | 'TRIGGER' | null;
   interest: CallInterest;
   summary: string | null;
   callback_time: string | null;
@@ -77,6 +80,7 @@ export interface OutboundInsights {
     called: number;
     answered: number;
     interested: number;
+    qualified: number;
     callbacks: number;
     not_interested: number;
     do_not_call: number;

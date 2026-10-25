@@ -32,6 +32,8 @@ import { CampaignWizardModal } from './CampaignWizardModal';
 import { MockCallOutcomes } from './MockCallOutcomes';
 import { CollectedAnswers } from './CollectedAnswers';
 import { formatOutputValue } from '../calls/CallOutputsCard';
+import { WhatsAppThread } from '../calls/WhatsAppThread';
+import { QualificationBadge } from '../calls/QualificationBadge';
 import {
   Campaign,
   CampaignKind,
@@ -402,6 +404,7 @@ const RecipientResult: React.FC<{ recipient: CampaignRecipient; callHref: string
     <div className="space-y-4 text-xs">
       <div>
         <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">Call summary</div>
+        <QualificationBadge qualification={r.result?.qualification} />
         <p className="text-slate-200">{r.result?.summary || (r.status === 'PENDING' || r.status === 'DIALING' ? 'The call has not finished yet.' : 'No summary for this call.')}</p>
       </div>
       {outputs.length > 0 && (
@@ -438,6 +441,8 @@ const RecipientResult: React.FC<{ recipient: CampaignRecipient; callHref: string
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3">{variables.map(([k, v]) => field(humanize(k), v))}</div>
         </div>
       )}
+      {/* callHref is only set in the client portal, where the WhatsApp thread can be read */}
+      {callHref && r.last_call_id && <WhatsAppThread callId={r.last_call_id} />}
       {callHref && r.last_call_id && (
         <Link to={callHref} className="inline-block text-[#00df8f] hover:underline">
           View call transcript &amp; recording →
