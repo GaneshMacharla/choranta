@@ -12,13 +12,13 @@ import {
   Radio,
   Cpu,
   DollarSign,
-  Layers,
   Terminal,
   LogOut,
   Zap,
   Inbox,
   BadgeCheck,
   Hash,
+  Network,
 } from 'lucide-react';
 import { verificationsApi } from '../../pages/VerificationsPage';
 import { agentRequestsService } from '../../services/agentRequests';
@@ -30,6 +30,7 @@ interface NavItem {
   path: string;
   icon: React.ComponentType<{ className?: string }>;
   count?: number;
+  soon?: boolean;
 }
 
 export const Sidebar: React.FC = () => {
@@ -60,14 +61,14 @@ export const Sidebar: React.FC = () => {
     { name: 'Calls', path: '/calls', icon: PhoneCall },
     { name: 'Campaigns', path: '/campaigns', icon: Megaphone },
     { name: 'Instant Outbound', path: '/instant-outbound', icon: Zap },
+    { name: 'IVR', path: '/ivr', icon: Network, soon: true },
     { name: 'Telephony', path: '/telephony', icon: Radio },
     { name: 'Phone Numbers', path: '/numbers', icon: Hash },
     
     { name: 'Tools', path: '/tools', icon: Wrench },
     { name: 'Integrations', path: '/integrations', icon: Puzzle },
     { name: 'AI Providers', path: '/providers', icon: Cpu },
-    { name: 'Number Pricing', path: '/plans', icon: Layers },
-    { name: 'Usage & Costs', path: '/usage', icon: DollarSign },
+    { name: 'Finance', path: '/usage', icon: DollarSign },
     { name: 'Errors / Logs', path: '/logs', icon: Terminal },
     
     { name: 'Settings', path: '/settings', icon: Settings },
@@ -118,6 +119,9 @@ export const Sidebar: React.FC = () => {
                 <Icon className="h-4 w-4" />
                 <span>{item.name}</span>
               </div>
+              {item.soon && (
+                <span className="rounded-full border border-amber-400/40 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300">Soon</span>
+              )}
               {!!item.count && (
                 <span className="rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-[#1a1200]">{item.count}</span>
               )}

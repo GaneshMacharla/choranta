@@ -103,6 +103,13 @@ class Page:
 
 
 @dataclass
+class Subaccount:
+    auth_id: str
+    auth_token: str
+    kyc_mode: Optional[str] = None
+
+
+@dataclass
 class Trunk:
     id: str
     name: str
@@ -150,6 +157,11 @@ class NumberProvider:
 
     def list_trunks(self) -> List[Trunk]:
         return []
+
+    def create_subaccount(self, *, name: str, email: Optional[str], phone: Optional[str], description: str,
+                          kyc_mode: str) -> Subaccount:
+        """A new sub-account; its token is in the result only (the carrier never shows it again)."""
+        raise NotImplementedError
 
     def assign_subaccount(self, e164: str, sub_auth_id: str) -> None:
         raise NotImplementedError

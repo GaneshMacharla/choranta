@@ -139,7 +139,8 @@ class Settings(BaseSettings):
     BILLING_ENFORCED: bool = True             # block new billable calls when the wallet balance is <= 0
     SUBSCRIPTION_GRACE_DAYS: int = 3          # calls keep working this long after a plan period ends unpaid
     MIN_WALLET_TOPUP_INR: float = 500.0       # smallest online wallet top-up (GST included when registered)
-    NUMBER_GRACE_DAYS: int = 3                # unpaid number rent: released back to Exotel after this
+    NUMBER_GRACE_DAYS: int = 3                # unpaid number rent: the number is taken back after this
+    NUMBER_RENT_REMINDER_DAYS: int = 4        # warn daily this many days before rent the wallet can't cover
     NUMBER_RENTAL_CHECK_S: int = 900          # how often number rent is renewed / released
     CAMPAIGN_TICK_S: int = 5                  # how often the campaign dispatcher checks for calls to place
     CAMPAIGN_MAX_DIALS_PER_MIN: int = 60      # pacing across all campaigns (Exotel default: 60 calls/minute)
@@ -217,6 +218,13 @@ class Settings(BaseSettings):
     PHONE_NUMBER_MOCK_MODE: bool = False           # simulated carrier with sample numbers; never calls Vobiz; refused in production
     VOBIZ_APPLICATION_ID: Optional[str] = None     # Vobiz XML application (answer URL) bought numbers are attached to for inbound calls
     NUMBER_PURCHASE_CURRENCY: str = "INR"
+    # Each client gets its own Vobiz sub-account (created on their first number) holding their numbers and placing
+    # their calls, so clients don't share the main account's concurrent-call limit. personal_use = the sub-account
+    # runs on Choranta's KYC (clients do no carrier setup); customer_use = each client completes its own KYC.
+    VOBIZ_SUBACCOUNTS_ENABLED: bool = True
+    VOBIZ_SUBACCOUNT_KYC_MODE: str = "personal_use"
+    VOBIZ_SUBACCOUNT_MAX_CONCURRENT: int = 3       # Vobiz's default per sub-account; raise when Vobiz raises it
+    VOBIZ_SUBACCOUNT_CPS: float = 1.0              # new calls per second per sub-account
     NUMBER_PURCHASES_PER_HOUR: int = 10            # per staff user; the same limits cover the client portal
     NUMBER_RELEASES_PER_HOUR: int = 10
     NUMBER_SYNCS_PER_HOUR: int = 6

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import ValidationException
+from app.models.numbers import CarrierSubaccount
 from app.models.agent_version import AgentVersion
 from app.models.billing import ClientBillingProfile, ClientWallet, Invoice, WalletTransaction
 from app.models.call import Call
@@ -129,8 +130,17 @@ def client_concurrency_limit(db: Session, client_id: str) -> Optional[int]:
     """
     Most calls a client may have live at once: their usable plan's limit, else as many full-length calls
     as their credits cover (at least one; call budgets decide whether that one may start), up to the
-    platform cap. None = unlimited.
+    platform cap. None = unlimited. Never more than their Vobiz sub-account's lines, once they have one.
     """
+    limit = _wallet_or_plan_limit(db, client_id)
+    if (settings.VOBIZ_SUBACCOUNTS_ENABLED and settings.VOBIZ_SUBACCOUNT_MAX_CONCURRENT > 0
+            and db.query(CarrierSubaccount.id).filter(CarrierSubaccount.client_id == client_id).first()):
+        cap = settings.VOBIZ_SUBACCOUNT_MAX_CONCURRENT
+        return min(limit, cap) if limit else cap
+    return limit
+
+
+def _wallet_or_plan_limit(db: Session, client_id: str) -> Optional[int]:
     sub = subscriptions.get_subscription(db, client_id)
     plan = db.get(Plan, sub.plan_id) if sub else None
     if sub and plan and subscriptions.is_usable(sub):

@@ -13,9 +13,8 @@ export const ClientKnowledgeCard: React.FC<{ clientId: string }> = ({ clientId }
           <BookOpen className="h-4 w-4 text-[#00df8f]" /> Knowledge base
         </h2>
         <p className="text-xs text-slate-400">
-          What the client has given their AI employees from their portal (Knowledge). Download documents to check them, ask the
-          client about any gaps, and delete anything wrong. New knowledge is ticked for all their AI employees; untick it per
-          employee in its Build tab.
+          Documents the client uploaded in their portal (Knowledge). AI employees never read them: download and read them,
+          then write what each employee needs to know into its own knowledge in its Build tab.
         </p>
       </div>
       <KnowledgeBase api={api} mode="team" />

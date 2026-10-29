@@ -8,6 +8,7 @@ from app.models import (
     AgentConfiguration, KnowledgeSource, Tool, Integration,
     Property, Lead
 )
+from app.models.tool import SWITCHED_OFF_TOOLS
 from app.services.auth_service import AuthService
 
 logger = logging.getLogger("choranta.init_db")
@@ -79,129 +80,132 @@ def seed_catalogs(db: Session) -> None:
     if settings.PAYG_ONLY:
         retire_plans(db)
     # 1. Tools
+    # Switched off for now (see SWITCHED_OFF_TOOLS); kept commented until they're turned back on
     initial_tools = [
-        {
-            "id": "check_availability",
-            "name": "Check Availability",
-            "description": "Check appointment or schedule availability for a provider or service.",
-            "input_schema": {"type": "object", "properties": {"date": {"type": "string"}, "service": {"type": "string"}}, "required": ["date"]},
-            "output_schema": {"type": "object", "properties": {"available_slots": {"type": "array", "items": {"type": "string"}}}},
-            "executor_type": "CALENDAR",
-            "timeout": 15,
-        },
-        {
-            "id": "book_appointment",
-            "name": "Book Appointment",
-            "description": "Book a confirmed appointment slot for a customer or patient.",
-            "input_schema": {"type": "object", "properties": {"slot": {"type": "string"}, "customer_name": {"type": "string"}, "contact_phone": {"type": "string"}}, "required": ["slot", "customer_name"]},
-            "output_schema": {"type": "object", "properties": {"confirmation_id": {"type": "string"}, "status": {"type": "string"}}},
-            "executor_type": "SYSTEM",
-            "timeout": 20,
-        },
-        {
-            "id": "cancel_appointment",
-            "name": "Cancel Appointment",
-            "description": "Cancel an existing scheduled appointment with confirmation ID.",
-            "input_schema": {"type": "object", "properties": {"confirmation_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["confirmation_id"]},
-            "output_schema": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}},
-            "executor_type": "SYSTEM",
-            "timeout": 15,
-        },
-        {
-            "id": "reschedule_appointment",
-            "name": "Reschedule Appointment",
-            "description": "Move an existing booking to an alternative available time slot.",
-            "input_schema": {"type": "object", "properties": {"confirmation_id": {"type": "string"}, "new_slot": {"type": "string"}}, "required": ["confirmation_id", "new_slot"]},
-            "output_schema": {"type": "object", "properties": {"updated_confirmation_id": {"type": "string"}, "status": {"type": "string"}}},
-            "executor_type": "SYSTEM",
-            "timeout": 20,
-        },
-        {
-            "id": "create_lead",
-            "name": "Create CRM Lead",
-            "description": "Record caller inquiry, qualifications, and contact details into CRM.",
-            "input_schema": {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}, "notes": {"type": "string"}}, "required": ["name", "phone"]},
-            "output_schema": {"type": "object", "properties": {"lead_id": {"type": "string"}, "status": {"type": "string"}}},
-            "executor_type": "CRM",
-            "timeout": 15,
-        },
-        {
-            "id": "update_customer",
-            "name": "Update Customer Record",
-            "description": "Update address, preferences, or contact details for existing profile.",
-            "input_schema": {"type": "object", "properties": {"customer_id": {"type": "string"}, "updates": {"type": "object"}}, "required": ["customer_id"]},
-            "output_schema": {"type": "object", "properties": {"success": {"type": "boolean"}}},
-            "executor_type": "CRM",
-            "timeout": 15,
-        },
-        {
-            "id": "transfer_call",
-            "name": "Transfer Call",
-            "description": "Escalate live session to an operational human department or supervisor.",
-            "input_schema": {"type": "object", "properties": {"department": {"type": "string"}, "priority": {"type": "string"}, "reason": {"type": "string"}}, "required": ["department"]},
-            "output_schema": {"type": "object", "properties": {"transfer_status": {"type": "string"}, "queue_id": {"type": "string"}}},
-            "executor_type": "TELEPHONY",
-            "timeout": 10,
-        },
-        {
-            "id": "get_lead_details",
-            "name": "Get Lead Details",
-            "description": "Retrieve the lead's current record and known enquiry details from CRM.",
-            "input_schema": {"type": "object", "properties": {"lead_id": {"type": "string"}}, "required": ["lead_id"]},
-            "output_schema": {"type": "object", "properties": {"found": {"type": "boolean"}, "name": {"type": "string"}, "enquiry_location": {"type": "string"}, "enquiry_budget": {"type": "string"}, "enquiry_bhk": {"type": "string"}}},
-            "executor_type": "CRM",
-            "timeout": 15,
-        },
-        {
-            "id": "search_properties",
-            "name": "Search Properties",
-            "description": "Find matching property inventory records using structured filters: location, budget, BHK, status.",
-            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}, "budget_min": {"type": "number"}, "budget_max": {"type": "number"}, "bhk": {"type": "integer"}, "status": {"type": "string"}}},
-            "output_schema": {"type": "object", "properties": {"count": {"type": "integer"}, "properties": {"type": "array"}}},
-            "executor_type": "SYSTEM",
-            "timeout": 15,
-        },
-        {
-            "id": "check_site_visit_slots",
-            "name": "Check Site Visit Slots",
-            "description": "Retrieve available calendar time slots for scheduling property site visits.",
-            "input_schema": {"type": "object", "properties": {"property_id": {"type": "string"}, "preferred_date": {"type": "string"}}, "required": ["property_id"]},
-            "output_schema": {"type": "object", "properties": {"property_id": {"type": "string"}, "available_slots": {"type": "array"}}},
-            "executor_type": "CALENDAR",
-            "timeout": 15,
-        },
-        {
-            "id": "update_lead_record",
-            "name": "Update Lead Record",
-            "description": "Save collected buyer preferences, qualification status, and call outcome in CRM.",
-            "input_schema": {"type": "object", "properties": {"lead_id": {"type": "string"}, "buyer_budget": {"type": "string"}, "buyer_location": {"type": "string"}, "buyer_bhk": {"type": "string"}, "purchase_timeline": {"type": "string"}, "lead_qualification_status": {"type": "string"}, "call_disposition": {"type": "string"}, "next_action": {"type": "string"}}, "required": ["lead_id"]},
-            "output_schema": {"type": "object", "properties": {"success": {"type": "boolean"}, "status": {"type": "string"}, "lead_id": {"type": "string"}}},
-            "executor_type": "CRM",
-            "timeout": 15,
-        },
-        {
-            "id": "book_site_visit",
-            "name": "Book Site Visit",
-            "description": "Confirm an in-person site visit booking with meeting point and executive assignment.",
-            "input_schema": {"type": "object", "properties": {"property_id": {"type": "string"}, "slot": {"type": "string"}, "lead_id": {"type": "string"}}, "required": ["property_id", "slot"]},
-            "output_schema": {"type": "object", "properties": {"booking_id": {"type": "string"}, "status": {"type": "string"}}},
-            "executor_type": "CALENDAR",
-            "timeout": 15,
-        },
-        {
-            "id": "schedule_callback",
-            "name": "Schedule Sales Callback",
-            "description": "Schedule an executive callback for leads requesting specialized advisory.",
-            "input_schema": {"type": "object", "properties": {"lead_id": {"type": "string"}, "preferred_time": {"type": "string"}}, "required": ["lead_id"]},
-            "output_schema": {"type": "object", "properties": {"callback_id": {"type": "string"}, "status": {"type": "string"}}},
-            "executor_type": "CRM",
-            "timeout": 15,
-        },
+    #     {
+    #         "id": "check_availability",
+    #         "name": "Check Availability",
+    #         "description": "Check appointment or schedule availability for a provider or service.",
+    #         "input_schema": {"type": "object", "properties": {"date": {"type": "string"}, "service": {"type": "string"}}, "required": ["date"]},
+    #         "output_schema": {"type": "object", "properties": {"available_slots": {"type": "array", "items": {"type": "string"}}}},
+    #         "executor_type": "CALENDAR",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "book_appointment",
+    #         "name": "Book Appointment",
+    #         "description": "Book a confirmed appointment slot for a customer or patient.",
+    #         "input_schema": {"type": "object", "properties": {"slot": {"type": "string"}, "customer_name": {"type": "string"}, "contact_phone": {"type": "string"}}, "required": ["slot", "customer_name"]},
+    #         "output_schema": {"type": "object", "properties": {"confirmation_id": {"type": "string"}, "status": {"type": "string"}}},
+    #         "executor_type": "SYSTEM",
+    #         "timeout": 20,
+    #     },
+    #     {
+    #         "id": "cancel_appointment",
+    #         "name": "Cancel Appointment",
+    #         "description": "Cancel an existing scheduled appointment with confirmation ID.",
+    #         "input_schema": {"type": "object", "properties": {"confirmation_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["confirmation_id"]},
+    #         "output_schema": {"type": "object", "properties": {"success": {"type": "boolean"}, "message": {"type": "string"}}},
+    #         "executor_type": "SYSTEM",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "reschedule_appointment",
+    #         "name": "Reschedule Appointment",
+    #         "description": "Move an existing booking to an alternative available time slot.",
+    #         "input_schema": {"type": "object", "properties": {"confirmation_id": {"type": "string"}, "new_slot": {"type": "string"}}, "required": ["confirmation_id", "new_slot"]},
+    #         "output_schema": {"type": "object", "properties": {"updated_confirmation_id": {"type": "string"}, "status": {"type": "string"}}},
+    #         "executor_type": "SYSTEM",
+    #         "timeout": 20,
+    #     },
+    #     {
+    #         "id": "create_lead",
+    #         "name": "Create CRM Lead",
+    #         "description": "Record caller inquiry, qualifications, and contact details into CRM.",
+    #         "input_schema": {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}, "notes": {"type": "string"}}, "required": ["name", "phone"]},
+    #         "output_schema": {"type": "object", "properties": {"lead_id": {"type": "string"}, "status": {"type": "string"}}},
+    #         "executor_type": "CRM",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "update_customer",
+    #         "name": "Update Customer Record",
+    #         "description": "Update address, preferences, or contact details for existing profile.",
+    #         "input_schema": {"type": "object", "properties": {"customer_id": {"type": "string"}, "updates": {"type": "object"}}, "required": ["customer_id"]},
+    #         "output_schema": {"type": "object", "properties": {"success": {"type": "boolean"}}},
+    #         "executor_type": "CRM",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "transfer_call",
+    #         "name": "Transfer Call",
+    #         "description": "Escalate live session to an operational human department or supervisor.",
+    #         "input_schema": {"type": "object", "properties": {"department": {"type": "string"}, "priority": {"type": "string"}, "reason": {"type": "string"}}, "required": ["department"]},
+    #         "output_schema": {"type": "object", "properties": {"transfer_status": {"type": "string"}, "queue_id": {"type": "string"}}},
+    #         "executor_type": "TELEPHONY",
+    #         "timeout": 10,
+    #     },
+    #     {
+    #         "id": "get_lead_details",
+    #         "name": "Get Lead Details",
+    #         "description": "Retrieve the lead's current record and known enquiry details from CRM.",
+    #         "input_schema": {"type": "object", "properties": {"lead_id": {"type": "string"}}, "required": ["lead_id"]},
+    #         "output_schema": {"type": "object", "properties": {"found": {"type": "boolean"}, "name": {"type": "string"}, "enquiry_location": {"type": "string"}, "enquiry_budget": {"type": "string"}, "enquiry_bhk": {"type": "string"}}},
+    #         "executor_type": "CRM",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "search_properties",
+    #         "name": "Search Properties",
+    #         "description": "Find matching property inventory records using structured filters: location, budget, BHK, status.",
+    #         "input_schema": {"type": "object", "properties": {"location": {"type": "string"}, "budget_min": {"type": "number"}, "budget_max": {"type": "number"}, "bhk": {"type": "integer"}, "status": {"type": "string"}}},
+    #         "output_schema": {"type": "object", "properties": {"count": {"type": "integer"}, "properties": {"type": "array"}}},
+    #         "executor_type": "SYSTEM",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "check_site_visit_slots",
+    #         "name": "Check Site Visit Slots",
+    #         "description": "Retrieve available calendar time slots for scheduling property site visits.",
+    #         "input_schema": {"type": "object", "properties": {"property_id": {"type": "string"}, "preferred_date": {"type": "string"}}, "required": ["property_id"]},
+    #         "output_schema": {"type": "object", "properties": {"property_id": {"type": "string"}, "available_slots": {"type": "array"}}},
+    #         "executor_type": "CALENDAR",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "update_lead_record",
+    #         "name": "Update Lead Record",
+    #         "description": "Save collected buyer preferences, qualification status, and call outcome in CRM.",
+    #         "input_schema": {"type": "object", "properties": {"lead_id": {"type": "string"}, "buyer_budget": {"type": "string"}, "buyer_location": {"type": "string"}, "buyer_bhk": {"type": "string"}, "purchase_timeline": {"type": "string"}, "lead_qualification_status": {"type": "string"}, "call_disposition": {"type": "string"}, "next_action": {"type": "string"}}, "required": ["lead_id"]},
+    #         "output_schema": {"type": "object", "properties": {"success": {"type": "boolean"}, "status": {"type": "string"}, "lead_id": {"type": "string"}}},
+    #         "executor_type": "CRM",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "book_site_visit",
+    #         "name": "Book Site Visit",
+    #         "description": "Confirm an in-person site visit booking with meeting point and executive assignment.",
+    #         "input_schema": {"type": "object", "properties": {"property_id": {"type": "string"}, "slot": {"type": "string"}, "lead_id": {"type": "string"}}, "required": ["property_id", "slot"]},
+    #         "output_schema": {"type": "object", "properties": {"booking_id": {"type": "string"}, "status": {"type": "string"}}},
+    #         "executor_type": "CALENDAR",
+    #         "timeout": 15,
+    #     },
+    #     {
+    #         "id": "schedule_callback",
+    #         "name": "Schedule Sales Callback",
+    #         "description": "Schedule an executive callback for leads requesting specialized advisory.",
+    #         "input_schema": {"type": "object", "properties": {"lead_id": {"type": "string"}, "preferred_time": {"type": "string"}}, "required": ["lead_id"]},
+    #         "output_schema": {"type": "object", "properties": {"callback_id": {"type": "string"}, "status": {"type": "string"}}},
+    #         "executor_type": "CRM",
+    #         "timeout": 15,
+    #     },
     ]
 
     for tool_data in initial_tools:
         if not db.query(Tool).filter(Tool.id == tool_data["id"]).first():
             db.add(Tool(**tool_data))
+    # Mark the switched-off tools seeded before; kept (not deleted) so agents' links survive
+    db.query(Tool).filter(Tool.id.in_(SWITCHED_OFF_TOOLS)).update({"enabled": False}, synchronize_session=False)
 
     # 2. Integrations
     # Only WhatsApp is live for now. The connectors below have no implementation yet; they stay commented
@@ -453,6 +457,8 @@ _ADDED_COLUMNS = [
     ("knowledge_sources", "client_id", "VARCHAR(64) REFERENCES clients(id) ON DELETE CASCADE"),
     ("api_keys", "is_default", "BOOLEAN"),
     ("api_keys", "key_enc", "TEXT"),
+    ("provider_numbers", "subaccount_auth_id", "VARCHAR(128)"),
+    ("number_rentals", "reminders_sent", "JSON"),
 ]
 
 

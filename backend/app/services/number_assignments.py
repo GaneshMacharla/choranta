@@ -6,7 +6,8 @@ by, so the client sees it under Phone numbers. Unassigning retires that record (
 number to the pool; it is not released at the carrier.
 
 Carrier side: a trunk, when given, is assigned at Vobiz, and the number is (re)attached to Choranta's application so
-inbound calls reach our answer URL. Vobiz has no "detach from application" call, so an unassigned number still
+inbound calls reach our answer URL, then moved into the client's own Vobiz sub-account (services/carrier_subaccounts.py),
+and back out when unassigned. Vobiz has no "detach from application" call, so an unassigned number still
 reaches Choranta, where calls to it are refused as an unconfigured number.
 """
 import logging
@@ -23,7 +24,7 @@ from app.models.numbers import NumberAssignment, NumberOperation, ProviderNumber
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import NumberRental
 from app.runtime.providers.numbers import NumberNotFound, NumberProviderError
-from app.services import number_service as svc
+from app.services import carrier_subaccounts, number_service as svc
 
 logger = logging.getLogger("choranta.services.number_assignments")
 
@@ -85,6 +86,16 @@ def assign(db: Session, number_id: str, *, client_id: str, actor: svc.Actor, age
             except NumberProviderError as exc:
                 raise _failed(db, op, exc)
         svc.attach_application(db, provider, pn, actor)
+        if carrier_subaccounts.enabled() and pn.provider == "vobiz":
+            try:
+                carrier_subaccounts.move_in(db, provider, pn, client, actor)
+            except svc.NumberServiceError as exc:
+                op = db.get(NumberOperation, op.id)
+                op.operation_status, op.error_code, op.error_message = "FAILED", exc.code, exc.message
+                db.commit()
+                raise svc.NumberServiceError(exc.status_code, exc.code, exc.message, op)
+            except NumberProviderError as exc:
+                raise _failed(db, op, exc)
 
     try:
         routing = clash or PhoneNumber(id=generate_unique_id("phn", 10), client_id=client_id, provider=pn.provider,
@@ -134,14 +145,21 @@ def unassign(db: Session, number_id: str, *, actor: svc.Actor, reason: str = "UN
     if not current:
         raise svc.NumberServiceError(409, "not_assigned", f"{pn.e164} isn't assigned to anyone.")
     op = _op(db, pn, "UNASSIGN", actor, current.client_id, {"reason": reason})
-    if pn.trunk_id and pn.is_mock == svc.mock_mode():
+    if (pn.trunk_id or pn.subaccount_auth_id) and pn.is_mock == svc.mock_mode():
         with svc.carrier(db) as provider:
+            if pn.trunk_id:
+                try:
+                    provider.unassign_trunk(pn.e164)
+                except NumberNotFound:
+                    pass
+                except NumberProviderError as exc:
+                    raise _failed(db, op, exc)
             try:
-                provider.unassign_trunk(pn.e164)
-            except NumberNotFound:
-                pass
+                # During Vobiz's cool-off the number stays in the sub-account (flagged) but still leaves the client
+                carrier_subaccounts.move_out(db, provider, pn, actor)
             except NumberProviderError as exc:
-                raise _failed(db, op, exc)
+                pn.attention = f"Couldn't move it out of the client's Vobiz sub-account: {exc.message}"
+                db.commit()
 
     routing = db.get(PhoneNumber, current.phone_number_id) if current.phone_number_id else None
     if routing:

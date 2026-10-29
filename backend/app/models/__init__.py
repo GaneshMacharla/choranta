@@ -26,7 +26,7 @@ from app.models.course import Course, CourseBatch, CourseChange
 from app.models.call_script import StandardCallScript
 from app.models.whatsapp import WhatsAppAccount, WhatsAppFollowup, WhatsAppMessage
 from app.models.qualification import LeadQualificationSetup
-from app.models.numbers import ProviderNumber, NumberAssignment, NumberOperation, MockCarrierNumber
+from app.models.numbers import ProviderNumber, NumberAssignment, NumberOperation, MockCarrierNumber, CarrierSubaccount
 
 __all__ = [
     "ProviderNumber",

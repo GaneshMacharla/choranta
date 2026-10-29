@@ -8,6 +8,7 @@ import {
   Building2,
   Check,
   CheckCircle,
+  FileText,
   Home,
   Hospital,
   Lock,
@@ -18,6 +19,7 @@ import {
   Stethoscope,
   GraduationCap,
   Store,
+  Upload,
   UtensilsCrossed,
 } from 'lucide-react';
 import { Card } from '../../components/common/Card';
@@ -26,7 +28,8 @@ import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
 import { fmtDate } from '../../components/billing/PlanUsageBar';
 import { AgentRequest, portalAgentRequestsService as api, RequestOption } from '../../services/agentRequests';
-import { QualificationSettings } from '../../components/portal/QualificationSettings';
+import { portalKnowledge } from '../../services/knowledge';
+// import { QualificationSettings } from '../../components/portal/QualificationSettings';
 
 const NAME_MAX = 40;
 const NAME_IDEAS = ['Priya', 'Arjun', 'Meera', 'Rahul', 'Anjali', 'Kiran'];
@@ -104,6 +107,10 @@ export const PortalEmployeesPage: React.FC = () => {
   const [companyName, setCompanyName] = useState('');
   const [businessType, setBusinessType] = useState('');
   const [name, setName] = useState('');
+  // First AI employee only: files about the business our team builds it from
+  const [needsDocuments, setNeedsDocuments] = useState(false);
+  const [uploaded, setUploaded] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -115,6 +122,7 @@ export const PortalEmployeesPage: React.FC = () => {
         setCanRequest(list.can_request);
         setBusinessTypes(options.business_types);
         setLanguageOptions(options.languages);
+        setNeedsDocuments(options.needs_documents);
         setCompanyName((current) => current || options.company_name);
         setBusinessType((current) => current || (options.business_type !== 'OTHER' ? options.business_type : ''));
         // Nothing requested yet (or just bought a plan): open the form straight away
@@ -138,7 +146,23 @@ export const PortalEmployeesPage: React.FC = () => {
       ? 'Choose the languages your customers speak.'
       : trimmed.length < 2
       ? 'Give your AI employee a name.'
+      : needsDocuments && uploaded.length === 0
+      ? 'Upload at least one file about your business.'
       : null;
+
+  const upload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const added = await portalKnowledge.upload(Array.from(files));
+      setUploaded((current) => [...current, ...added.map((e) => e.name)]);
+    } catch (err: any) {
+      setError(err.message || 'Could not upload the files. Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const submit = async () => {
     setSaving(true);
@@ -206,7 +230,7 @@ export const PortalEmployeesPage: React.FC = () => {
           </div>
         </Card>
       ) : creating ? (
-        <Card title="Create your AI employee" subtitle="Just four quick answers. Our team sets up everything else.">
+        <Card title="Create your AI employee" subtitle={needsDocuments ? 'Four quick answers and your business files. Our team sets up everything else.' : 'Just four quick answers. Our team sets up everything else.'}>
           <div className="space-y-6">
             <label className="block space-y-2">
               <span className="flex items-center gap-2 text-sm font-medium text-slate-200">
@@ -315,6 +339,48 @@ export const PortalEmployeesPage: React.FC = () => {
               )}
             </div>
 
+            {needsDocuments && (
+              <div className="space-y-2">
+                <span className="flex items-center gap-2 text-sm font-medium text-slate-200">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#00df8f] text-[11px] font-bold text-[#04110c]">5</span>
+                  Upload files about your business
+                </span>
+                <p className="text-xs text-slate-500">
+                  Your brochure, price or fee list, services, timings, FAQs: anything your AI employee should know. PDF, Word, Excel,
+                  text or images. Our team builds your AI employee from these. You can add more later under{' '}
+                  <Link to="/portal/knowledge" className="text-[#00df8f] hover:underline">Knowledge</Link>.
+                </p>
+                <label
+                  className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-5 text-sm transition-colors ${
+                    uploading ? 'border-[#1e4e5e] text-slate-500' : 'border-[#2a6577] text-slate-300 hover:border-[#00df8f] hover:text-[#00df8f]'
+                  }`}
+                >
+                  <Upload className="h-4 w-4" />
+                  {uploading ? 'Uploading…' : uploaded.length ? 'Add more files' : 'Choose files'}
+                  <input
+                    type="file"
+                    multiple
+                    className="hidden"
+                    disabled={uploading}
+                    onChange={(e) => {
+                      upload(e.target.files);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+                {uploaded.length > 0 && (
+                  <ul className="space-y-1">
+                    {uploaded.map((f, i) => (
+                      <li key={`${f}-${i}`} className="flex items-center gap-2 text-xs text-slate-300">
+                        <FileText className="h-3.5 w-3.5 text-[#00df8f]" /> {f}
+                        <Check className="h-3.5 w-3.5 text-[#00df8f]" />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
             <div className="rounded-lg border border-[#143c49] p-3 text-xs text-slate-400">
               <span className="font-medium text-slate-300">What happens next: </span>
               our team sets up its voice and what it says and does. You'll see it marked <span className="text-slate-200">Ready</span> here
@@ -388,7 +454,8 @@ export const PortalEmployeesPage: React.FC = () => {
         </Card>
       )}
 
-      <QualificationSettings />
+      {/* Hidden from clients for now: leads use the default (interested or asked for a callback) */}
+      {/* <QualificationSettings /> */}
     </div>
   );
 };

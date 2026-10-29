@@ -134,7 +134,8 @@ def number_out(db: Session, pn: ProviderNumber, detail: bool = False) -> Dict[st
         "number_type_derived": pn.number_type_derived, "capabilities": pn.capabilities or {},
         "provider_status": pn.provider_status, "internal_status": pn.internal_status,
         "monthly_cost": pn.monthly_cost, "setup_cost": pn.setup_cost, "currency": pn.currency,
-        "application_id": pn.application_id, "trunk_id": pn.trunk_id, "is_mock": pn.is_mock, "attention": pn.attention,
+        "application_id": pn.application_id, "trunk_id": pn.trunk_id,
+        "subaccount_auth_id": pn.subaccount_auth_id, "is_mock": pn.is_mock, "attention": pn.attention,
         "purchased_at": pn.purchased_at, "last_synced_at": pn.last_synced_at, "released_at": pn.released_at,
         "created_at": pn.created_at, "assignment": assignment_out(db, current) if current else None,
         "next_billing_date": (pn.raw or {}).get("next_billing_date"),
@@ -447,6 +448,16 @@ def release(db: Session, number_id: str, *, confirm_e164: str, idempotency_key: 
     if pn.is_mock != mock_mode() and pn.provider != "exotel":
         raise NumberServiceError(409, "wrong_mode", "This number belongs to the other mode (mock vs real); switch modes to release it.")
 
+    if pn.subaccount_auth_id:
+        from app.services import carrier_subaccounts
+        with carrier(db) as provider:
+            try:
+                moved = carrier_subaccounts.move_out(db, provider, pn, actor)
+            except NumberProviderError as exc:
+                raise _fail(exc)
+        if not moved:
+            raise NumberServiceError(409, "subaccount_cool_off", pn.attention)
+
     previous = pn.internal_status
     op = NumberOperation(provider_number_id=pn.id, provider=pn.provider, e164=pn.e164, operation_type="RELEASE",
                          idempotency_key=key, actor=actor.label, actor_user_id=actor.user_id, is_mock=pn.is_mock)
@@ -481,4 +492,5 @@ def mark_released(pn: ProviderNumber) -> None:
     pn.provider_status = "released"
     pn.released_at = utcnow()
     pn.trunk_id = None
+    pn.subaccount_auth_id = None
     pn.attention = None

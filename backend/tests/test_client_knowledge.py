@@ -55,11 +55,8 @@ def test_client_adds_knowledge_and_the_team_reviews_it(client: TestClient, auth_
     ])
     assert upload.status_code == 201, upload.text
     docs = {d["name"]: d for d in upload.json()}
-    assert "Snowflake batch" in docs["batches.txt"]["content"]
-    assert "Ameerpet metro" in docs["brochure.docx"]["content"]
-    # Any file is kept; one with no readable text is flagged for the team to read themselves
-    assert docs["fee-chart.png"]["content"] == ""
-    assert docs["fee-chart.png"]["metadata"]["text_status"] == "NO_TEXT"
+    # Any file is kept as it is; nothing is read from it (the team reads it themselves)
+    assert all(d["content"] == "" and "text_status" not in d["metadata"] for d in docs.values())
 
     # The team sees it all, downloads documents and deletes what's wrong
     assert [k["name"] for k in client.get(admin, headers=auth_headers).json()] == ["Fees 2026", "batches.txt", "brochure.docx", "fee-chart.png"]
@@ -167,6 +164,22 @@ def test_new_knowledge_is_ticked_for_the_clients_ai_employees_and_used_on_calls(
     block, _ = build_knowledge(db, agent["id"], SimpleNamespace(knowledge=SimpleNamespace(sources=[])))
     assert "18,500 rupees" not in block
     assert knowledge_store.get_entry(entry["id"]) is not None  # still in the client's knowledge base
+
+
+def test_documents_are_for_the_team_and_never_given_to_ai_employees(client: TestClient, auth_headers: dict, db: Session):
+    c = _client(db, "Docs Academy")
+    agent = client.post("/api/agents", headers=auth_headers,
+                        json={"client_id": c.id, "name": "Kiran", "role": "Receptionist"}).json()
+    doc = client.post("/api/portal/knowledge/upload", headers=_portal(client, auth_headers, c),
+                      files=[("files", ("fees.txt", io.BytesIO(b"Java course fee is 18,500 rupees."), "text/plain"))]).json()[0]
+    assert knowledge_store.get_entry(doc["id"]).agent_ids == []  # not ticked for the client's AI employees
+    assert client.post(f"/api/agents/{agent['id']}/knowledge/{doc['id']}", headers=auth_headers).status_code >= 400
+
+    # A document ticked before this rule is still not given to the AI employee
+    knowledge_store.attach(agent["id"], doc["id"])
+    assert doc["id"] not in [k["id"] for k in client.get(f"/api/agents/{agent['id']}/knowledge", headers=auth_headers).json()]
+    block, _ = build_knowledge(db, agent["id"], SimpleNamespace(knowledge=SimpleNamespace(sources=[doc["id"]])))
+    assert "18,500" not in block
 
 
 def test_older_sql_client_knowledge_moves_to_mongo_with_its_ticks(client: TestClient, auth_headers: dict, db: Session):

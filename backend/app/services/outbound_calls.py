@@ -20,8 +20,9 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.runtime.events.emitter import EventEmitter
 from app.runtime.events.types import RuntimeEventType
 from app.runtime.providers.registry import default_registry
+from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
 from app.runtime.readiness.checker import RuntimeReadinessChecker
-from app.services import phone_numbers
+from app.services import carrier_subaccounts, phone_numbers
 from app.services.billing import (
     PLATFORM_BUSY_REASON, agent_max_call_seconds, call_budget, check_call_allowed, platform_headroom,
 )
@@ -203,6 +204,12 @@ def place_outbound_call(
         status_callback_url = with_webhook_token(f"{base_url}/api/telephony/vobiz/hangup", "vobiz", call_id=saved_call.id)
 
     telephony_provider = default_registry.get_telephony(provider_name)
+    if provider_name == "vobiz":
+        # A client's number sits in their own Vobiz sub-account, so the call goes out on that account's lines
+        sub_creds = carrier_subaccounts.caller_credentials(db, caller_number) if carrier_subaccounts.enabled() else None
+        if sub_creds:
+            telephony_provider = VobizTelephonyProvider(auth_id=sub_creds[0], auth_token=sub_creds[1])
+            carrier_subaccounts.wait_for_dial_slot(sub_creds[0])
     try:
         call_result = telephony_provider.initiate_outbound_call(
             customer_number=destination_number,

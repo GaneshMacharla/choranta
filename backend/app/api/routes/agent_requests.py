@@ -69,6 +69,7 @@ def portal_request_options(account: ClientAccount = Depends(require_client_user)
         "languages": [{"id": k, "label": v} for k, v in svc.LANGUAGES.items()],
         "company_name": client.name if client else "",
         "business_type": client.business_type if client else "OTHER",
+        "needs_documents": svc.needs_documents(db, client_id),
     }
 
 

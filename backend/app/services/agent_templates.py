@@ -5,6 +5,7 @@ Contains production-grade blueprints such as the Sarvam-inspired Real Estate Lea
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from app.schemas.agent_spec import AgentConfigurationData
+from app.models.tool import live_tool_ids
 from app.services.agent_templates_business import BUSINESS_TEMPLATES, CALL_SCRIPTS
 
 
@@ -381,6 +382,9 @@ AVAILABLE_AGENT_TEMPLATES = [
 for _tpl in AVAILABLE_AGENT_TEMPLATES:
     _tpl["default_config"]["instructions"].update(CALL_SCRIPTS.get(_tpl["id"], {}))
     _tpl["default_config"]["instructions"]["script_source"] = _tpl["id"] if _tpl["id"] in CALL_SCRIPTS else ""
+    # Switched-off tools aren't offered by any template
+    _tpl["default_config"]["tools"] = live_tool_ids(_tpl["default_config"].get("tools"))
+    _tpl["preview"]["enabled_tools"] = live_tool_ids(_tpl["preview"].get("enabled_tools"))
 
 
 def _complete(tpl: Dict[str, Any]) -> Dict[str, Any]:

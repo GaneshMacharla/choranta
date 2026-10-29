@@ -176,23 +176,16 @@ def test_knowledge_tools_and_integrations_attachment(client, auth_headers):
     agent_knw_after = client.get(f"/api/agents/{agent_id}/knowledge", headers=auth_headers).json()
     assert not any(k["id"] == test_knw_id for k in agent_knw_after)
 
-    # 2. Tools catalog
+    # 2. Tools catalog: every tool is switched off for now, so none is listed or can be enabled
     tools_list = client.get("/api/tools", headers=auth_headers).json()
-    assert len(tools_list) > 0
+    assert tools_list == []
     test_tool_id = "check_availability"
 
-    # Enable tool
     att_tool = client.post(f"/api/agents/{agent_id}/tools/{test_tool_id}", headers=auth_headers)
-    assert att_tool.status_code == 200
+    assert att_tool.status_code == 404
 
     agent_tools = client.get(f"/api/agents/{agent_id}/tools", headers=auth_headers).json()
-    assert any(t["id"] == test_tool_id for t in agent_tools)
-
-    # Disable tool
-    det_tool = client.delete(f"/api/agents/{agent_id}/tools/{test_tool_id}", headers=auth_headers)
-    assert det_tool.status_code == 200
-    agent_tools_after = client.get(f"/api/agents/{agent_id}/tools", headers=auth_headers).json()
-    assert not any(t["id"] == test_tool_id for t in agent_tools_after)
+    assert not any(t["id"] == test_tool_id for t in agent_tools)
 
     # 3. Integrations catalog
     int_list = client.get("/api/integrations", headers=auth_headers).json()

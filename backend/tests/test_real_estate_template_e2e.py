@@ -87,9 +87,8 @@ async def test_real_estate_template_creation_and_e2e_flow():
         assert "buyer_location" in output_names
         assert "lead_qualification_status" in output_names
 
-        # Tools attached: 2 minimal tools
-        assert "search_properties" in config["tools"]
-        assert "update_lead_record" in config["tools"]
+        # Every tool is switched off for now (SWITCHED_OFF_TOOLS)
+        assert config["tools"] == []
 
         agent_db = db.query(Agent).filter(Agent.id == agent.id).first()
         spec = AgentSpecBuilder.build_from_draft(

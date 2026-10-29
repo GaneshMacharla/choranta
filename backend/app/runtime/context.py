@@ -1,4 +1,6 @@
+import re
 from typing import Any, Dict, List, Optional
+from app.models.tool import live_tool_ids
 from app.schemas.agent_spec import CanonicalAgentSpec
 from app.runtime.conversation import ConversationState
 from app.runtime.usage.tracker import UsageTracker
@@ -36,6 +38,9 @@ class RuntimeContext:
         agent_spec = apply_provider_overrides(agent_spec)
         self.agent_spec = agent_spec
         self.metadata = metadata or {}
+        # Greetings say who is calling: "Hi, this is {{agent_name}} from {{company_name}}"
+        self.metadata.setdefault("agent_name", (agent_spec.identity.name if agent_spec.identity else None) or agent_spec.agent.name)
+        self._fill_sample_campaign_values(agent_spec, self.metadata)
 
         # The other person's number is known on a phone call (dialled, or caller ID): never ask for it
         self.contact_phone = self._contact_phone(self.metadata)
@@ -54,7 +59,7 @@ class RuntimeContext:
         self.knowledge_index = None
 
         # Active tools enabled for this session
-        self.active_tools: List[str] = list(agent_spec.tools.enabled)
+        self.active_tools: List[str] = live_tool_ids(agent_spec.tools.enabled)
 
         # Provider configurations
         self.provider_references: Dict[str, Any] = {
@@ -71,6 +76,28 @@ class RuntimeContext:
             stt_provider=agent_spec.providers.stt,
             tts_provider=agent_spec.providers.tts,
         )
+
+    @staticmethod
+    def _fill_sample_campaign_values(spec: CanonicalAgentSpec, metadata: Dict[str, Any]) -> None:
+        """
+        A test call has no campaign behind it, so campaign details (the course, the batch date...) would be blank and
+        the agent would talk about "a new batch". Test calls use each detail's example instead, e.g. "Snowflake and DBT".
+        """
+        if not (metadata.get("is_test") or metadata.get("origin") == "internal_test_lab"):
+            return
+        filled = []
+        for iv in getattr(spec.variables, "inputs", []) or []:
+            if (iv.source or "").lower() != "campaign details" or str(metadata.get(iv.name) or "").strip():
+                continue
+            hint = (iv.extraction_instructions or "").strip()
+            if not hint.lower().startswith("e.g"):
+                continue  # only a written example ("e.g. Snowflake and DBT") is safe to use as a value
+            example = re.sub(r"^e\.g\.?\s*", "", hint, flags=re.I).strip()
+            if example:
+                metadata[iv.name] = example
+                filled.append(iv.name)
+        if filled:
+            metadata["sample_campaign_values"] = filled
 
     def _resolve_greeting(self, spec: CanonicalAgentSpec, metadata: Dict[str, Any]) -> str:
         """
@@ -101,7 +128,7 @@ class RuntimeContext:
         greeting = self.fill_placeholders(greeting)
         # Open the call in the agent's primary language even when the greeting was written in English
         return localize_greeting(greeting, spec.languages.primary if spec.languages else "en",
-                                 keep=[metadata["company_name"], metadata["user_name"]])
+                                 keep=[metadata["company_name"], metadata["user_name"], metadata.get("agent_name") or ""])
 
     def _resolve_farewell(self, spec: CanonicalAgentSpec) -> str:
         farewell = (spec.conversation.farewell or "").strip()
@@ -290,7 +317,7 @@ class RuntimeContext:
         else:
             step2 = "2. Reason - find out why they called, in their own words, before offering anything."
 
-        tools = set(spec.tools.enabled or [])
+        tools = set(live_tool_ids(spec.tools.enabled))
         handoff = [name for tool, name in (("transfer_call", "transfer the call"), ("schedule_callback", "book a callback with the team"))
                    if tool in tools]
         human = (

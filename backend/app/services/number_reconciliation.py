@@ -121,7 +121,8 @@ def sync(db: Session, actor: svc.Actor) -> Dict[str, Any]:
                     .filter(ProviderNumber.provider == provider.name, ProviderNumber.is_mock.is_(provider.is_mock),
                             ProviderNumber.internal_status.notin_(("RELEASED",))).all())
             for pn in ours:
-                if pn.e164 not in seen:
+                # Numbers in a client's sub-account may not be listed on the main account
+                if pn.e164 not in seen and not pn.subaccount_auth_id:
                     pn.provider_status = "MISSING"
                     if pn.internal_status != "RELEASING":
                         pn.internal_status = "NEEDS_RECONCILIATION"

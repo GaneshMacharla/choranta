@@ -1,6 +1,6 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from app.models.tool import Tool
+from app.models.tool import SWITCHED_OFF_TOOLS, Tool
 from app.models.agent import Agent
 
 
@@ -9,14 +9,16 @@ class ToolRepository:
         self.db = db
 
     def list_all(self) -> List[Tool]:
-        return self.db.query(Tool).order_by(Tool.name.asc()).all()
+        return self.db.query(Tool).filter(Tool.id.notin_(SWITCHED_OFF_TOOLS)).order_by(Tool.name.asc()).all()
 
     def get_by_id(self, tool_id: str) -> Optional[Tool]:
+        if tool_id in SWITCHED_OFF_TOOLS:
+            return None
         return self.db.query(Tool).filter(Tool.id == tool_id).first()
 
     def get_for_agent(self, agent_id: str) -> List[Tool]:
         agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
-        return agent.tools if agent else []
+        return [t for t in agent.tools if t.id not in SWITCHED_OFF_TOOLS] if agent else []
 
     def attach_to_agent(self, agent_id: str, tool_id: str) -> bool:
         agent = self.db.query(Agent).filter(Agent.id == agent_id).first()

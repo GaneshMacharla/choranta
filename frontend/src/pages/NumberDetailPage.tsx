@@ -90,6 +90,7 @@ export const NumberDetailPage: React.FC = () => {
             <Row label="Capabilities">{Object.entries(number.capabilities).filter(([, on]) => on).map(([c]) => c).join(', ') || 'Not reported'}</Row>
             <Row label="Inbound application">{number.application_id || 'Not attached'}</Row>
             <Row label="SIP trunk">{number.trunk_id || 'None'}</Row>
+            <Row label="Vobiz sub-account">{number.subaccount_auth_id || 'Main account'}</Row>
             {number.aadhaar_verification_required && <Row label="Compliance"><span className="text-amber-300">Aadhaar verification required by Vobiz</span></Row>}
           </dl>
         </Card>

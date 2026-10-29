@@ -1,3 +1,5 @@
+import pytest
+
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 from app.models.test_scenario import TestRun as DbTestRun, TestRunEvent as DbTestRunEvent, TestScenario as DbTestScenario
@@ -36,6 +38,7 @@ def test_scenario_crud_duplicate_and_archival(client, operator_headers, db):
     assert db.query(DbTestScenario).filter(DbTestScenario.id == scenario_id).one().status == "ARCHIVED"
 
 
+@pytest.mark.skip(reason="Tools are switched off for now (SWITCHED_OFF_TOOLS); re-enable with them")
 def test_scenario_run_uses_runtime_tools_and_persists_trace(client, operator_headers, db):
     agent, version = _seed_and_ids(client, operator_headers, db)
     scenario = client.post(
@@ -66,6 +69,7 @@ def test_scenario_run_uses_runtime_tools_and_persists_trace(client, operator_hea
     assert len(detail.json()["events"]) > 0
 
 
+@pytest.mark.skip(reason="Tools are switched off for now (SWITCHED_OFF_TOOLS); re-enable with them")
 def test_scenario_failed_assertion_is_not_reported_as_pass(client, operator_headers, db):
     agent, version = _seed_and_ids(client, operator_headers, db)
     scenario = client.post(

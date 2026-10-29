@@ -23,10 +23,13 @@ if db_url.startswith("sqlite"):
     )
 else:
     logger.info("Configuring production PostgreSQL / Supabase connection pool.")
+    # Supabase's session pooler allows 15 clients in total; stay under it (with room for scripts/tests)
+    # so a burst queues for a free connection instead of failing with EMAXCONNSESSION
     engine = create_engine(
         db_url,
-        pool_size=10,
-        max_overflow=20,
+        pool_size=5,
+        max_overflow=5,
+        pool_timeout=30,
         pool_pre_ping=True,
         pool_recycle=300,
         echo=False

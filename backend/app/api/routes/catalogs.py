@@ -15,6 +15,7 @@ from app.repositories.knowledge_repository import KnowledgeRepository
 from app.repositories.tool_repository import ToolRepository
 from app.repositories.integration_repository import IntegrationRepository
 from app.repositories.agent_repository import AgentRepository
+from app.services import knowledge_store
 from app.services.voice_service import VoiceService
 
 router = APIRouter(tags=["Catalogs & Attachments"])
@@ -106,6 +107,9 @@ def attach_knowledge_to_agent(
     # An AI employee only uses its own client's knowledge
     if getattr(source, "client_id", None) and source.client_id != agent.client_id:
         raise HTTPException(status_code=400, detail="That knowledge belongs to another client.")
+    if getattr(source, "type", None) == knowledge_store.DOCUMENT:
+        raise HTTPException(status_code=400, detail="Client documents are for the team to read, not for AI employees. "
+                                                    "Write what it needs to know into its own knowledge.")
     repo.attach_to_agent(agent_id, knowledge_id)
     return {"message": "Knowledge source attached successfully."}
 

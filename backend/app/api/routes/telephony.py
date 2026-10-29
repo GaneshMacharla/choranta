@@ -216,6 +216,8 @@ def _finish_call_setup(
 
         metadata = {
             "origin": "telephony_outbound",
+            # A Test Lab call: an inbound AI employee then answers as if the tester had called it
+            "is_test": bool((call_record.metadata_ or {}).get("is_test")),
             "call_id": call_record.id,
             "provider": call_record.provider or "exotel",
             "caller": call_record.caller_number,

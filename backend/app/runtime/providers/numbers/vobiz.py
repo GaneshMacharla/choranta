@@ -10,6 +10,7 @@ All under {VOBIZ_API_BASE}/Account/{auth_id}, headers X-Auth-ID / X-Auth-Token:
                                                             not in the OpenAPI file; no detach endpoint exists)
   POST   /numbers/{+e164}/assign {trunk_group_id}           SIP trunk; DELETE unassigns
   GET    /trunks
+  POST   /accounts/{auth_id}/sub-accounts/ {name, email, phone, description, kyc_mode}   token returned only here
   POST   /account/{auth_id}/numbers/{+e164}/assign-subaccount {sub_account_id}; DELETE moves it back (15-day cool-off)
   GET    /balance/{currency}
 Errors are {api_id, error, message}. Every URL is built here from settings; nothing from a request picks the host.
@@ -23,7 +24,7 @@ import httpx
 from app.core.config import settings
 from app.runtime.providers.numbers.base import (
     InsufficientBalance, InventoryNumber, NotConfigured, NumberNotFound, NumberProvider, NumberUnavailable,
-    OwnedNumber, Page, ProviderAuthError, ProviderUnavailable, ProviderUncertain, ProviderValidationError, Trunk,
+    OwnedNumber, Page, ProviderAuthError, ProviderUnavailable, ProviderUncertain, ProviderValidationError, Subaccount, Trunk,
 )
 
 logger = logging.getLogger("choranta.runtime.numbers.vobiz")
@@ -175,6 +176,22 @@ class VobizNumberProvider(NumberProvider):
     def list_trunks(self) -> List[Trunk]:
         body = self._request("GET", f"{self._account()}/trunks", mutating=False)
         return [Trunk(id=t["trunk_id"], name=t.get("name") or t["trunk_id"]) for t in (body.get("objects") or []) if t.get("trunk_id")]
+
+    def create_subaccount(self, *, name, email, phone, description, kyc_mode) -> Subaccount:
+        self._account()
+        body = {"name": name[:100], "description": description, "kyc_mode": kyc_mode, "enabled": True}
+        if email:
+            body["email"] = email
+        if phone:
+            body["phone"] = phone
+        result = self._request("POST", f"{self._base}/accounts/{quote(self._auth_id, safe='')}/sub-accounts/",
+                               mutating=True, json=body)
+        creds = result.get("auth_credentials") or result.get("sub_account") or {}
+        if not (creds.get("auth_id") and creds.get("auth_token")):
+            raise ProviderUncertain("Vobiz accepted the sub-account but didn't return its credentials.")
+        logger.info("Created Vobiz sub-account %s (%s)", creds["auth_id"], kyc_mode)
+        return Subaccount(auth_id=creds["auth_id"], auth_token=creds["auth_token"],
+                          kyc_mode=(result.get("sub_account") or {}).get("kyc_mode") or kyc_mode)
 
     def _subaccount_url(self, e164: str) -> str:
         self._account()

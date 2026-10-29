@@ -125,15 +125,14 @@ def _register_additions(r: APIRouter, scope_dep) -> None:
                      _agent_ids(db, scope.client.id), scope.actor)
 
     @r.post("/upload", response_model=List[KnowledgeSourceResponse], status_code=201)
-    async def upload_knowledge(files: List[UploadFile] = File(...), scope: Scope = Depends(scope_dep),
-                               db: Session = Depends(get_db)):
-        """Any number of documents of any type. Text is read from PDF, Word, Excel and text files."""
+    async def upload_knowledge(files: List[UploadFile] = File(...), scope: Scope = Depends(scope_dep)):
+        """Any number of documents of any type, stored as they are for Choranta's team to read."""
         limit = 1024 * 1024 * settings.KNOWLEDGE_MAX_FILE_MB
         read = []
         for f in files:
             data = await f.read(limit + 1)  # one byte over the limit is enough to refuse it
             read.append((f.filename or "Document", f.content_type or "", data))
-        return _call(store.upload_documents, scope.client.id, read, _agent_ids(db, scope.client.id), scope.actor)
+        return _call(store.upload_documents, scope.client.id, read, scope.actor)
 
     @r.put("/{knowledge_id}", response_model=KnowledgeSourceResponse)
     def update_knowledge(knowledge_id: str, req: ClientKnowledgeRequest, scope: Scope = Depends(scope_dep)):

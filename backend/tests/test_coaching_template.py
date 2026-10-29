@@ -46,7 +46,7 @@ def test_coaching_template_creates_valid_agent(db):
         assert "counsellor" in config["identity"]["persona"].lower()
         assert config["languages"]["supported"] == ["en-IN", "hi", "te"]
         assert config["knowledge_sources"] == ["knw_coaching_course_catalog"]
-        assert set(config["tools"]) == {"check_availability", "book_appointment", "create_lead", "schedule_callback"}
+        assert config["tools"] == []  # every tool is switched off for now (SWITCHED_OFF_TOOLS)
 
         company_var = next(v for v in config["variables"]["inputs"] if v["name"] == "company_name")
         assert company_var["default_value"] == client.name
@@ -130,8 +130,16 @@ def test_batch_announcement_greeting_and_prompt_use_campaign_details(db):
                 "batch_start_date": "Monday, 19 October", "demo_class": "Saturday, 25 October at 11 am"}
     ctx = RuntimeContext(session_id="sess_batch", client_id=client.id, agent_id=agent.id,
                          agent_version_id="ver_draft", agent_spec=spec, metadata=metadata)
-    assert ctx.resolved_greeting == ("Hi, this is Naresh IT. We're starting a new Snowflake and DBT batch from "
-                                     "Monday, 19 October. Do you have a minute?")
+    # Says who is calling (the AI employee, from the business), then why, then asks if it's a good time
+    assert ctx.resolved_greeting == ("Hi, this is Batch Caller from Naresh IT. I'm calling about our new Snowflake and DBT "
+                                     "batch starting Monday, 19 October. Is this a good time to talk?")
+    assert "sample_campaign_values" not in ctx.metadata  # a real call never gets made-up details
+
+    # A Test Lab call has no campaign: it uses each detail's example instead of announcing "a new batch"
+    test_call = RuntimeContext(session_id="sess_test", client_id=client.id, agent_id=agent.id, agent_version_id="ver_draft",
+                               agent_spec=spec, metadata={"company_name": client.name, "is_test": True})
+    assert "Snowflake and DBT batch starting Monday, 19 October" in test_call.resolved_greeting
+    assert {"course_name", "batch_start_date", "demo_class"} <= set(test_call.metadata["sample_campaign_values"])
     prompt = ctx.instruction_for_turn()
     assert "demo_class: 'Saturday, 25 October at 11 am' (known" in prompt
     assert "batch_timings: (not known" in prompt
@@ -152,7 +160,7 @@ def test_system_prompt_endpoint_shows_what_the_llm_receives(client, auth_headers
     assert body["system_prompt"].startswith(body["fixed_instructions"])
     assert "Naresh IT" in body["system_prompt"] and "Call Flow" in body["system_prompt"]
     assert "2. Good time?" in body["system_prompt"]  # outbound call flow
-    assert {"create_lead", "schedule_callback"} <= {t["name"] for t in body["tools"]}
+    assert {t["name"] for t in body["tools"]} == {"end_call"}  # every other tool is switched off for now
 
     # Unsaved edits are previewed without saving them
     config = AgentConfigurationService(db).get_configuration(agent.id).configuration.model_dump(mode="json")

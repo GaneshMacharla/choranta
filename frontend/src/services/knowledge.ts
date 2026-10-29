@@ -19,8 +19,6 @@ export interface KnowledgeOverview {
   fields: DetailField[];
   /** Required fields nobody has filled in or marked as covered by a document */
   gaps: string[];
-  /** Documents no text could be read from (images, scans): someone has to open them */
-  unreadable_documents: string[];
   details_id: string | null;
   entries: KnowledgeSource[];
   storage: { used_bytes: number; quota_bytes: number; max_file_bytes: number };

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from app.db.session import Base
 from app.core.security import generate_unique_id
 
@@ -103,6 +103,7 @@ class NumberRental(Base):
     current_period_end = Column(DateTime, nullable=False, index=True)
     cancel_at_period_end = Column(Boolean, nullable=False, default=False)
     released_at = Column(DateTime, nullable=True)
+    reminders_sent = Column(JSON, default=list)       # rent reminders already sent, e.g. "2026-11-28:before-3"
     created_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=_now, nullable=False)
     updated_at = Column(DateTime, default=_now, onupdate=_now, nullable=False)

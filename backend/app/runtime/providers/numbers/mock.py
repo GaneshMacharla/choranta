@@ -7,6 +7,7 @@ even when Choranta's own save afterwards fails, so recovery paths can be exercis
 
 Buying one of the SCENARIO_NUMBERS reproduces a failure (shown in the inventory so staff know what they're picking).
 """
+import secrets
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.models.numbers import MockCarrierNumber
 from app.runtime.providers.numbers.base import (
     InsufficientBalance, InventoryNumber, NumberNotFound, NumberProvider, NumberUnavailable, OwnedNumber, Page,
-    ProviderAuthError, ProviderUncertain, ProviderValidationError, Trunk,
+    ProviderAuthError, ProviderUncertain, ProviderValidationError, Subaccount, Trunk,
 )
 
 MOCK_BALANCE = 5000.0
@@ -171,6 +172,10 @@ class MockNumberProvider(NumberProvider):
 
     def list_trunks(self) -> List[Trunk]:
         return list(TRUNKS)
+
+    def create_subaccount(self, *, name, email, phone, description, kyc_mode) -> Subaccount:
+        return Subaccount(auth_id=f"SA_MOCK{secrets.token_hex(5).upper()}", auth_token=secrets.token_urlsafe(24),
+                          kyc_mode=kyc_mode)
 
     def assign_subaccount(self, e164: str, sub_auth_id: str) -> None:
         self._owned_row(e164)

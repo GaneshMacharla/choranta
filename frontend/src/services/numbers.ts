@@ -84,6 +84,7 @@ export interface OwnedNumber {
   currency: string | null;
   application_id: string | null;
   trunk_id: string | null;
+  subaccount_auth_id: string | null;
   is_mock: boolean;
   attention: string | null;
   purchased_at: string | null;

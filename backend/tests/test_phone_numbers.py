@@ -223,3 +223,48 @@ def test_admin_number_pricing(client: TestClient, auth_headers: dict, operator_h
     assert updated.json()["monthly_rent_inr"] == 799 and updated.json()["is_available"] is False
     listed = client.get("/api/number-pricing", headers=auth_headers).json()
     assert any(p["number_type"] == "Mobile" and p["monthly_rent_inr"] == 799 for p in listed)
+
+
+def _rent_notes(db: Session, client_id: str):
+    from app.models.notification import ClientNotification
+    return [n.title for n in db.query(ClientNotification).filter(
+        ClientNotification.client_id == client_id, ClientNotification.kind == "NUMBER_RENT"
+    ).order_by(ClientNotification.created_at, ClientNotification.id).all()]
+
+
+def test_rent_reminders_before_due_then_removal(db: Session, telephony_setup, company):
+    cid = telephony_setup["client"].id
+    _fund(db, cid, 1180)
+    pn = phone_numbers.buy_number(db, cid, _number(db), "Landline", None)
+    rental = phone_numbers.rental_for(db, pn.id)
+    phone_numbers.run_rental_cycle(db, now=rental.current_period_end + timedelta(minutes=1))  # renews; Rs 2 left
+    end = rental.current_period_end
+    number = phone_numbers.display_number(pn)
+
+    # Nothing early, then one reminder a day for the last 4 days (repeat runs don't repeat it)
+    phone_numbers.run_rental_cycle(db, now=end - timedelta(days=6))
+    assert _rent_notes(db, cid) == []
+    for days in (4, 3, 2, 1):
+        for hours in (1, 5):
+            phone_numbers.run_rental_cycle(db, now=end - timedelta(days=days) + timedelta(hours=hours))
+    assert _rent_notes(db, cid) == [f"Rent for {number} is due in 4 days", f"Rent for {number} is due in 3 days",
+                                    f"Rent for {number} is due in 2 days", f"Rent for {number} is due tomorrow"]
+
+    # Due day: couldn't charge; the day before removal: last warning; then it's removed
+    phone_numbers.run_rental_cycle(db, now=end + timedelta(hours=1))
+    phone_numbers.run_rental_cycle(db, now=end + timedelta(hours=3))
+    phone_numbers.run_rental_cycle(db, now=end + timedelta(days=settings.NUMBER_GRACE_DAYS - 1, hours=1))
+    phone_numbers.run_rental_cycle(db, now=end + timedelta(days=settings.NUMBER_GRACE_DAYS, hours=1))
+    assert rental.status == "RELEASED"
+    assert _rent_notes(db, cid)[4:] == [f"Rent for {number} couldn't be charged", f"Last day to keep {number}",
+                                        f"{number} has been removed"]
+
+
+def test_no_rent_reminders_when_the_wallet_covers_it(db: Session, telephony_setup, company):
+    cid = telephony_setup["client"].id
+    _fund(db, cid, 5000)
+    pn = phone_numbers.buy_number(db, cid, _number(db), "Landline", None)
+    end = phone_numbers.rental_for(db, pn.id).current_period_end
+    for days in (4, 3, 2, 1):
+        phone_numbers.run_rental_cycle(db, now=end - timedelta(days=days) + timedelta(hours=1))
+    assert _rent_notes(db, cid) == []

@@ -10,6 +10,7 @@ pool (flagged for staff to resell or release; numbers bought on Exotel before Vo
 Numbers registered without a rental (before numbers were sold) are free.
 """
 import logging
+import math
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -219,6 +220,34 @@ def release(db: Session, rental: NumberRental, now: Optional[datetime] = None, r
     return True
 
 
+def _remind_once(db: Session, rental: NumberRental, key: str, title: str, body: str) -> None:
+    """Sends a rent notification unless this one (for this rent date) was already sent."""
+    key = f"{rental.current_period_end.date().isoformat()}:{key}"
+    if key in (rental.reminders_sent or []):
+        return
+    rental.reminders_sent = [*(rental.reminders_sent or []), key]
+    notifications.notify(db, rental.client_id, "NUMBER_RENT", title, body, link="/portal/numbers", level="warning")
+    db.commit()
+
+
+def remind_upcoming_rent(db: Session, rental: NumberRental, now: datetime) -> None:
+    """Daily warnings in the days before a rent the wallet can't cover; nothing when it can."""
+    if rental.status != "ACTIVE" or rental.cancel_at_period_end or now >= rental.current_period_end:
+        return
+    days_left = math.ceil((rental.current_period_end - now) / timedelta(days=1))
+    if not 1 <= days_left <= settings.NUMBER_RENT_REMINDER_DAYS:
+        return
+    balance = get_wallet(db, rental.client_id).balance_inr
+    if balance >= rental.monthly_rent_inr:
+        return
+    pn = db.get(PhoneNumber, rental.phone_number_id)
+    number = display_number(pn) if pn else "your number"
+    when = "tomorrow" if days_left == 1 else f"in {days_left} days"
+    _remind_once(db, rental, f"before-{days_left}", f"Rent for {number} is due {when}",
+                 f"Rent of Rs {rental.monthly_rent_inr:g} is due on {rental.current_period_end:%d %b}, and your wallet "
+                 f"has Rs {balance:g}. Top up so you don't lose the number.")
+
+
 def _past_grace(rental: NumberRental, now: datetime) -> bool:
     return now >= rental.current_period_end + timedelta(days=settings.NUMBER_GRACE_DAYS)
 
@@ -240,19 +269,48 @@ def renew_or_lapse(db: Session, rental: NumberRental, now: Optional[datetime] = 
             rental.status = "ACTIVE"
             db.commit()
             continue
+        pn = db.get(PhoneNumber, rental.phone_number_id)
+        number = display_number(pn) if pn else "your number"
+        removal = rental.current_period_end + timedelta(days=settings.NUMBER_GRACE_DAYS)
         if rental.status != "PAST_DUE":
             rental.status = "PAST_DUE"
             db.commit()
             logger.warning(f"Number rent unpaid for {rental.phone_number_id} ({rental.client_id}); past due")
         if _past_grace(rental, now):
-            release(db, rental, now)
+            if release(db, rental, now):
+                notifications.notify(db, rental.client_id, "NUMBER_RENT", f"{number} has been removed",
+                                     "Its rent wasn't paid, so it's no longer yours. You can buy a new number any time.",
+                                     link="/portal/numbers", level="warning")
+                db.commit()
+            break
+        if now >= removal - timedelta(days=1):
+            _remind_once(db, rental, "final", f"Last day to keep {number}",
+                         f"Rent of Rs {rental.monthly_rent_inr:g} is still unpaid. Top up today or the number is "
+                         f"removed on {removal:%d %b}.")
+        else:
+            _remind_once(db, rental, "due", f"Rent for {number} couldn't be charged",
+                         f"Your wallet didn't cover the Rs {rental.monthly_rent_inr:g} rent. Calls on this number are "
+                         f"paused; top up by {removal:%d %b} or the number will be removed.")
         break
     return rental.status
 
 
 def run_rental_cycle(db: Session, now: Optional[datetime] = None) -> int:
-    """Renews, marks past due or releases every rental whose period has ended. Safe to run repeatedly."""
+    """Warns about upcoming rent the wallet can't cover, then renews, marks past due or releases every rental whose
+    period has ended. Safe to run repeatedly."""
     now = now or utcnow()
+    upcoming = (
+        db.query(NumberRental)
+        .filter(NumberRental.status == "ACTIVE", NumberRental.current_period_end > now,
+                NumberRental.current_period_end <= now + timedelta(days=settings.NUMBER_RENT_REMINDER_DAYS))
+        .all()
+    )
+    for rental in upcoming:
+        try:
+            remind_upcoming_rent(db, rental, now)
+        except Exception:
+            db.rollback()
+            logger.exception(f"Rent reminder failed for {rental.id}")
     due = (
         db.query(NumberRental)
         .filter(NumberRental.status.in_(("ACTIVE", "PAST_DUE")), NumberRental.current_period_end <= now)

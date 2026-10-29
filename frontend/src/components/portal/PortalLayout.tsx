@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Navigate, Outlet } from 'react-router-dom';
-import { LayoutDashboard, PhoneCall, Megaphone, KeyRound, Phone, Wallet, Building, LogOut, Layers, Zap, Bot, GraduationCap, BookOpen } from 'lucide-react';
+import { LayoutDashboard, PhoneCall, Megaphone, KeyRound, Phone, Wallet, Building, LogOut, Layers, Zap, Bot, GraduationCap, BookOpen, Network } from 'lucide-react';
 import { portalAgentRequestsService } from '../../services/agentRequests';
 import { plansService } from '../../services/plans';
 import { NotificationBell } from './NotificationBell';
@@ -15,6 +15,7 @@ const NAV = [
   { to: '/portal/calls', label: 'Calls', icon: PhoneCall, end: false },
   { to: '/portal/campaigns', label: 'Campaigns', icon: Megaphone, end: false },
   { to: '/portal/instant-outbound', label: 'Instant Outbound', icon: Zap, end: false },
+  { to: '/portal/ivr', label: 'IVR', icon: Network, end: false, soon: true },
   { to: '/portal/integrations', label: 'API & integrations', icon: KeyRound, end: false },
   { to: '/portal/numbers', label: 'Phone numbers', icon: Phone, end: false },
   { to: '/portal/billing', label: 'Billing', icon: Wallet, end: false },
@@ -75,7 +76,7 @@ export const PortalLayout: React.FC = () => {
             // coaching and training centres
             .filter((item) => item.to !== '/portal/inventory' || account?.business_type === 'REAL_ESTATE')
             .filter((item) => item.to !== '/portal/courses' || account?.business_type === 'COACHING')
-            .map(({ to, label, icon: Icon, end }) => (
+            .map(({ to, label, icon: Icon, end, soon }) => (
             <NavLink
               key={to}
               to={to}
@@ -87,6 +88,9 @@ export const PortalLayout: React.FC = () => {
               }
             >
               <Icon className="h-4 w-4" /> {label}
+              {soon && (
+                <span className="ml-auto rounded-full border border-amber-400/40 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-amber-300">Soon</span>
+              )}
             </NavLink>
           ))}
         </nav>

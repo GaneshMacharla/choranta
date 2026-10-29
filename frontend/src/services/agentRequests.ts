@@ -62,7 +62,7 @@ export const portalAgentRequestsService = {
   preview: (voiceId: string) => fetchAuthedBlob(`/portal/voices/${encodeURIComponent(voiceId)}/preview`),
   list: () => request<{ can_request: boolean; requests: AgentRequest[] }>('/portal/agent-requests'),
   options: () =>
-    request<{ business_types: RequestOption[]; languages: RequestOption[]; company_name: string; business_type: string }>(
+    request<{ business_types: RequestOption[]; languages: RequestOption[]; company_name: string; business_type: string; needs_documents: boolean }>(
       '/portal/agent-requests/options'
     ),
   create: (body: { company_name: string; business_type: string; name: string; languages: string[] }) =>

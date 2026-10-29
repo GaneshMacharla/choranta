@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Bot, Check, CheckCheck, ChevronLeft, ChevronRight, Flame, Globe, KeyRound, MessageCircle, Pause, PhoneCall, Play, User } from 'lucide-react';
 
 /*
@@ -162,13 +162,19 @@ const prefersReducedMotion = () =>
 export const InstantOutboundStory: React.FC = () => {
   const [scene, setScene] = useState(0);
   const [playing, setPlaying] = useState(() => !prefersReducedMotion());
-  const [hovering, setHovering] = useState(false);
+  // Time left on a paused scene, so playing again carries on where it stopped (the progress bar freezes with it)
+  const left = useRef({ scene: 0, ms: SCENE_MS });
 
   useEffect(() => {
-    if (!playing || hovering) return;
-    const timer = setTimeout(() => setScene((s) => (s + 1) % SCENES.length), SCENE_MS);
-    return () => clearTimeout(timer);
-  }, [scene, playing, hovering]);
+    if (!playing) return;
+    const ms = left.current.scene === scene ? left.current.ms : SCENE_MS;
+    const started = Date.now();
+    const timer = setTimeout(() => setScene((s) => (s + 1) % SCENES.length), ms);
+    return () => {
+      clearTimeout(timer);
+      left.current = { scene, ms: Math.max(0, ms - (Date.now() - started)) };
+    };
+  }, [scene, playing]);
 
   const go = (next: number) => setScene((next + SCENES.length) % SCENES.length);
   const { Visual, title, text, clock } = SCENES[scene];
@@ -176,8 +182,6 @@ export const InstantOutboundStory: React.FC = () => {
   return (
     <section
       className="overflow-hidden rounded-xl border border-[#143c49] bg-gradient-to-br from-[#091b22] via-[#071820] to-[#05231b]"
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => setHovering(false)}
       aria-roledescription="carousel"
       aria-label="How instant outbound works"
     >
@@ -218,8 +222,8 @@ export const InstantOutboundStory: React.FC = () => {
             >
               <span
                 key={`${scene}-${i}`}
-                className={`block h-full rounded-full bg-[#00df8f] ${i < scene ? 'w-full' : i === scene && playing && !hovering ? 'story-progress' : 'w-0'}`}
-                style={i === scene && playing && !hovering ? { animationDuration: `${SCENE_MS}ms` } : undefined}
+                className={`block h-full rounded-full bg-[#00df8f] ${i < scene ? 'w-full' : i === scene ? 'story-progress' : 'w-0'}`}
+                style={i === scene ? { animationDuration: `${SCENE_MS}ms`, animationPlayState: playing ? 'running' : 'paused' } : undefined}
               />
             </button>
           ))}

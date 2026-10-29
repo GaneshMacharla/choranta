@@ -31,7 +31,7 @@ const page = (items: InventoryNumber[]): InventoryPage => ({ items, page: 1, per
 const owned = (overrides: Partial<OwnedNumber> = {}): OwnedNumber => ({
   id: 'pnm_1', provider: 'vobiz', provider_number_id: 'mock-1', e164: '+914071100000', country: 'IN', region: 'Telangana',
   number_type: 'Landline', number_type_derived: true, capabilities: { voice: true }, provider_status: 'active',
-  internal_status: 'AVAILABLE', monthly_cost: 300, setup_cost: 100, currency: 'INR', application_id: 'mock_app', trunk_id: null,
+  internal_status: 'AVAILABLE', monthly_cost: 300, setup_cost: 100, currency: 'INR', application_id: 'mock_app', trunk_id: null, subaccount_auth_id: null,
   is_mock: true, attention: null, purchased_at: '2026-10-24T10:00:00Z', last_synced_at: null, released_at: null,
   created_at: '2026-10-24T10:00:00Z', next_billing_date: null, aadhaar_verification_required: false, assignment: null, ...overrides,
 });

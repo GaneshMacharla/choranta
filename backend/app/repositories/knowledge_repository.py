@@ -33,6 +33,8 @@ class KnowledgeRepository:
         if not agent or not source:
             return False
         if isinstance(source, knowledge_store.StoredKnowledge):
+            if source.type == knowledge_store.DOCUMENT:
+                return False  # documents are for the team to read, not for AI employees
             knowledge_store.attach(agent_id, knowledge_id)
         elif source not in agent.knowledge_sources:
             agent.knowledge_sources.append(source)

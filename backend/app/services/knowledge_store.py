@@ -4,15 +4,14 @@ Each client's knowledge base, stored in MongoDB (app/db/mongo.py).
 Clients fill it in the portal, Choranta's team on the client's page; both go through here:
 - Business details: the fields every business of its type should give (address, owner, hours...), one sheet per
   client. A field can be typed in, or marked as covered by an uploaded document. Empty ones are the gaps.
-- Documents: any file, any number. The original is kept for download; text is read from PDF, Word, Excel and
-  plain-text files so AI employees can answer from it.
+- Documents: any file, any number, kept as uploaded. They're for Choranta's team to read while building the
+  client's AI employees, never read by an AI employee itself: the team writes what an employee needs to know into
+  its own knowledge (Build tab).
 - Notes and FAQs typed in directly.
 
-AI employees read the entries ticked for them (agent_ids), the same way SQL knowledge sources are attached.
+AI employees read the notes and details ticked for them (agent_ids), the same way SQL knowledge sources are attached.
 """
 import hashlib
-import io
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -26,9 +25,6 @@ MAX_FILES_PER_UPLOAD = 20
 NOTE_TYPES = ("NOTES", "FAQ")
 DOCUMENT = "DOCUMENT"
 DETAILS = "DETAILS"
-
-# Text is read from these; any other file is still stored (and downloadable) but has no text for calls
-PLAIN_TEXT_EXTENSIONS = (".txt", ".md", ".csv", ".json", ".tsv")
 
 
 class KnowledgeError(Exception):
@@ -158,6 +154,11 @@ def _actor(role: str, name: str) -> Dict[str, str]:
     return {"role": role, "name": name}
 
 
+def has_documents(client_id: str) -> bool:
+    """Whether the client has uploaded at least one file."""
+    return _entries().count_documents({"client_id": client_id, "type": DOCUMENT}, limit=1) > 0
+
+
 def list_entries(client_id: str) -> List[StoredKnowledge]:
     return [StoredKnowledge.from_doc(d) for d in _entries().find({"client_id": client_id}).sort("created_at", 1)]
 
@@ -187,13 +188,16 @@ def entries_by_ids(ids: Iterable[str]) -> List[StoredKnowledge]:
     ids = [i for i in ids if i]
     if not ids or not mongo.configured():
         return []
-    return [StoredKnowledge.from_doc(d) for d in _entries().find({"_id": {"$in": ids}}).sort("created_at", 1)]
+    return [StoredKnowledge.from_doc(d) for d in
+            _entries().find({"_id": {"$in": ids}, "type": {"$ne": DOCUMENT}}).sort("created_at", 1)]
 
 
 def entries_for_agent(agent_id: str) -> List[StoredKnowledge]:
     if not agent_id or not mongo.configured():
         return []
-    return [StoredKnowledge.from_doc(d) for d in _entries().find({"agent_ids": agent_id}).sort("created_at", 1)]
+    # Documents are for the team only: one ticked before that rule is still never given to an AI employee
+    return [StoredKnowledge.from_doc(d) for d in
+            _entries().find({"agent_ids": agent_id, "type": {"$ne": DOCUMENT}}).sort("created_at", 1)]
 
 
 def attach(agent_id: str, entry_id: str) -> None:
@@ -249,66 +253,12 @@ def delete_entry(client_id: str, entry_id: str) -> None:
 # Documents
 # ------------------------------------------------------------------
 
-def _tidy(text: str) -> str:
-    # PDFs often pad with spaces and leave runs of blank lines
-    text = re.sub(r"[ \t]+", " ", text or "")
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
-
-
-def extract_text(filename: str, data: bytes) -> str:
-    """Readable text from PDF, Word, Excel and plain-text files; "" for anything else (images, scans...)."""
-    name = (filename or "").lower()
-    try:
-        if name.endswith(".pdf"):
-            from pypdf import PdfReader
-            return "\n".join((page.extract_text() or "") for page in PdfReader(io.BytesIO(data)).pages)
-        if name.endswith(".docx"):
-            import docx
-            document = docx.Document(io.BytesIO(data))
-            parts = [p.text for p in document.paragraphs]
-            for table in document.tables:
-                parts += [" | ".join(cell.text.strip() for cell in row.cells) for row in table.rows]
-            return "\n".join(parts)
-        if name.endswith((".xlsx", ".xlsm")):
-            from openpyxl import load_workbook
-            book = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-            lines = []
-            for sheet in book.worksheets:
-                lines.append(f"[{sheet.title}]")
-                for row in sheet.iter_rows(values_only=True):
-                    cells = [str(c) for c in row if c is not None and str(c).strip()]
-                    if cells:
-                        lines.append(" | ".join(cells))
-            return "\n".join(lines)
-        if name.endswith(".xls"):
-            import xlrd
-            book = xlrd.open_workbook(file_contents=data)
-            lines = []
-            for sheet in book.sheets():
-                lines.append(f"[{sheet.name}]")
-                for r in range(sheet.nrows):
-                    cells = [str(c) for c in sheet.row_values(r) if str(c).strip()]
-                    if cells:
-                        lines.append(" | ".join(cells))
-            return "\n".join(lines)
-        if name.endswith(PLAIN_TEXT_EXTENSIONS):
-            for encoding in ("utf-8", "utf-16", "latin-1"):
-                try:
-                    return data.decode(encoding)
-                except UnicodeDecodeError:
-                    continue
-    except Exception:
-        return ""  # a damaged file is still stored; the team reads it themselves
-    return ""
-
-
 def _used_bytes(client_id: str) -> int:
     return sum(d.get("size_bytes", 0) for d in _files().find({"client_id": client_id}, {"size_bytes": 1}))
 
 
-def upload_documents(client_id: str, files: List[Tuple[str, str, bytes]], agent_ids: List[str],
-                     added_by: Dict[str, str]) -> List[StoredKnowledge]:
-    """Stores each (filename, mime type, bytes) as a document entry plus its original file."""
+def upload_documents(client_id: str, files: List[Tuple[str, str, bytes]], added_by: Dict[str, str]) -> List[StoredKnowledge]:
+    """Stores each (filename, mime type, bytes) as a document entry plus its original file. Nothing is read from it."""
     if not files:
         raise KnowledgeError("Choose at least one file.")
     if len(files) > MAX_FILES_PER_UPLOAD:
@@ -327,15 +277,13 @@ def upload_documents(client_id: str, files: List[Tuple[str, str, bytes]], agent_
     stored = []
     for name, mime, data in files:
         name = (name or "Document").replace("\\", "/").split("/")[-1][:255] or "Document"
-        text = _tidy(extract_text(name, data))
-        status = "NO_TEXT" if not text else ("TRUNCATED" if len(text) > MAX_CONTENT_CHARS else "READ")
         file_id = generate_unique_id("kfl", 12)
         entry_id = generate_unique_id("knw", 12)
         _files().insert_one({"_id": file_id, "entry_id": entry_id, "client_id": client_id, "data": data,
                              "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(), "created_at": _now()})
         now = _now()
-        doc = {"_id": entry_id, "client_id": client_id, "type": DOCUMENT, "title": name, "content": text[:MAX_CONTENT_CHARS],
-               "agent_ids": list(agent_ids), "added_by": added_by, "text_status": status,
+        doc = {"_id": entry_id, "client_id": client_id, "type": DOCUMENT, "title": name, "content": "",
+               "agent_ids": [], "added_by": added_by,
                "file": {"id": file_id, "name": name, "mime_type": mime or "application/octet-stream", "size_bytes": len(data)},
                "created_at": now, "updated_at": now}
         try:
@@ -400,11 +348,9 @@ def overview(client_id: str, business_type: Optional[str]) -> Dict[str, Any]:
         if state == "MISSING" and f["required"]:
             gaps.append(f["label"])
     entries = [e for e in list_entries(client_id) if e.type != DETAILS]
-    unread = [e.name for e in entries if e.type == DOCUMENT and e.meta.get("text_status") == "NO_TEXT"]
     return {
         "fields": sheet,
         "gaps": gaps,
-        "unreadable_documents": unread,
         "details_id": details["_id"] if details else None,
         "entries": entries,
         "storage": {"used_bytes": _used_bytes(client_id), "quota_bytes": settings.KNOWLEDGE_CLIENT_QUOTA_MB * 1024 * 1024,

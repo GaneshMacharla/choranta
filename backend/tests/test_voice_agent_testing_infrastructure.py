@@ -72,6 +72,7 @@ def test_01_scenario_validation_and_crud(client, operator_headers, db):
 
 
 # 2. SUCCESSFUL MULTI-TURN CONVERSATIONS
+@pytest.mark.skip(reason="Tools are switched off for now (SWITCHED_OFF_TOOLS); re-enable with them")
 def test_02_successful_multiturn_conversation(client, operator_headers, db):
     agent, version = _setup_agent(client, operator_headers, db)
 
@@ -105,6 +106,7 @@ def test_02_successful_multiturn_conversation(client, operator_headers, db):
 
 
 # 3. CORRECT TOOL EXECUTION & PERSISTED STATE
+@pytest.mark.skip(reason="Tools are switched off for now (SWITCHED_OFF_TOOLS); re-enable with them")
 def test_03_correct_tool_execution_and_persisted_state(client, operator_headers, db):
     agent, version = _setup_agent(client, operator_headers, db)
 
@@ -169,6 +171,7 @@ def test_04_incorrect_tool_arguments_assertion(client, operator_headers, db):
 
 
 # 5. TOOL EXECUTION FAILURE
+@pytest.mark.skip(reason="Tools are switched off for now (SWITCHED_OFF_TOOLS); re-enable with them")
 def test_05_tool_execution_failure(client, operator_headers, db):
     agent, version = _setup_agent(client, operator_headers, db)
 
@@ -199,6 +202,7 @@ def test_05_tool_execution_failure(client, operator_headers, db):
 
 
 # 6. PROVIDER TIMEOUT AND RECOVERY
+@pytest.mark.skip(reason="Tools are switched off for now (SWITCHED_OFF_TOOLS); re-enable with them")
 def test_06_provider_timeout_and_recovery(client, operator_headers, db):
     agent, version = _setup_agent(client, operator_headers, db)
 
@@ -328,6 +332,7 @@ def test_10_persistence_of_results_and_traces(client, operator_headers, db):
 
 
 # 11. CONCURRENT TEST ISOLATION
+@pytest.mark.skip(reason="Tools are switched off for now (SWITCHED_OFF_TOOLS); re-enable with them")
 def test_11_concurrent_test_isolation(client, operator_headers, db):
     agent, version = _setup_agent(client, operator_headers, db)
 
@@ -387,6 +392,7 @@ def test_12_tenant_access_control(client, operator_headers, db):
 
 
 # 13. TEMPLATES API & METRICS SUMMARY
+@pytest.mark.skip(reason="Tools are switched off for now (SWITCHED_OFF_TOOLS); re-enable with them")
 def test_13_templates_api_and_metrics_summary(client, operator_headers, db):
     agent, version = _setup_agent(client, operator_headers, db)
 

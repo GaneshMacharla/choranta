@@ -18,13 +18,13 @@ import { ToolsPage } from './pages/ToolsPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
 import { ProvidersPage } from './pages/ProvidersPage';
 import { UsagePage } from './pages/UsagePage';
-import { PlansPage } from './pages/PlansPage';
 import { CampaignsPage, CampaignDetailPage, InstantOutboundPage, InstantOutboundDetailPage } from './pages/CampaignsPage';
 import { AgentRequestsPage } from './pages/AgentRequestsPage';
 import { VerificationsPage } from './pages/VerificationsPage';
 import { PortalVerificationPage } from './pages/portal/PortalVerificationPage';
 import { PortalEmployeesPage } from './pages/portal/PortalEmployeesPage';
 import { LogsPage } from './pages/LogsPage';
+import { IvrPage } from './pages/IvrPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { PortalLayout } from './components/portal/PortalLayout';
@@ -74,6 +74,7 @@ export function App() {
               <Route path="campaigns/:id" element={<PortalCampaignDetailPage />} />
               <Route path="instant-outbound" element={<PortalInstantOutboundPage />} />
               <Route path="instant-outbound/:id" element={<PortalInstantOutboundDetailPage />} />
+              <Route path="ivr" element={<IvrPage />} />
               <Route path="integrations" element={<PortalIntegrationsPage />} />
               <Route path="plans" element={<PortalPlansPage />} />
               <Route path="numbers" element={<PortalNumbersPage />} />
@@ -104,6 +105,7 @@ export function App() {
               <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
               <Route path="/instant-outbound" element={<InstantOutboundPage />} />
               <Route path="/instant-outbound/:id" element={<InstantOutboundDetailPage />} />
+              <Route path="/ivr" element={<IvrPage />} />
 
               {/* Internal Operation Modules */}
               <Route path="/tools" element={<ToolsPage />} />
@@ -113,7 +115,6 @@ export function App() {
               <Route path="/providers" element={<ProvidersPage />} />
               <Route path="/ai-providers" element={<Navigate to="/providers" replace />} />
               <Route path="/usage" element={<UsagePage />} />
-              <Route path="/plans" element={<PlansPage />} />
               <Route path="/logs" element={<LogsPage />} />
               <Route path="/errors" element={<Navigate to="/logs" replace />} />
 

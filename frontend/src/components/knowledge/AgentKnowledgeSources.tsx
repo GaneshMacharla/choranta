@@ -4,7 +4,7 @@ import { BookOpen, CheckCircle2, Circle, ClipboardList, HelpCircle, StickyNote }
 import { Card } from '../common/Card';
 import { KnowledgeSource } from '../../types';
 import { KnowledgeOverview, clientKnowledge } from '../../services/knowledge';
-import { DocumentCard, GapsSummary } from './KnowledgeBase';
+import { DocumentCard } from './KnowledgeBase';
 
 const Tick: React.FC<{ on: boolean; onClick: () => void; label: string }> = ({ on, onClick, label }) => (
   <button type="button" title={on ? `Stop using ${label}` : `Use ${label}`} aria-label={label} onClick={onClick} className="shrink-0">
@@ -13,8 +13,8 @@ const Tick: React.FC<{ on: boolean; onClick: () => void; label: string }> = ({ o
 );
 
 /**
- * Build tab "5. Knowledge": the client's knowledge base as the team reviews it for one AI employee. Gaps on top,
- * documents as cards (download, delete), and a tick on each entry for whether this employee answers from it.
+ * Build tab "5. Knowledge": the client's documents for the team to download and read while writing this employee's
+ * own knowledge (no AI employee reads them), plus older notes and details with a tick for whether it answers from them.
  */
 export const AgentKnowledgeSources: React.FC<{
   clientId: string;
@@ -36,7 +36,7 @@ export const AgentKnowledgeSources: React.FC<{
   }, [api]);
 
   const remove = async (entry: KnowledgeSource) => {
-    if (!window.confirm(`Delete "${entry.name}" from ${clientName || "the client"}'s knowledge base? All their AI employees stop using it. This can't be undone.`)) return;
+    if (!window.confirm(`Delete "${entry.name}" from ${clientName || "the client"}'s knowledge base? This can't be undone.`)) return;
     setDeleting(entry.id);
     setError(null);
     try {
@@ -58,13 +58,12 @@ export const AgentKnowledgeSources: React.FC<{
   const entries = data?.entries || [];
   const documents = entries.filter((e) => e.type === 'DOCUMENT' || e.type === 'PDF' || e.type === 'TEXT');
   const notes = entries.filter((e) => e.type === 'NOTES' || e.type === 'FAQ');
-  const required = data?.fields.filter((f) => f.required).length || 0;
   const filledDetails = (data?.fields || []).filter((f) => f.value);
 
   return (
     <Card
       title={<span className="flex items-center gap-2 text-sm font-semibold text-slate-100"><BookOpen className="h-4 w-4 text-[#00df8f]" /> 5. Knowledge</span>}
-      subtitle={`From ${clientName || 'the client'}'s knowledge base. Ticked entries are what it answers from.`}
+      subtitle={`Documents ${clientName || 'the client'} uploaded, for you to read. This employee never reads them: write what it needs to know in its own knowledge below.`}
       action={<Link to={`/clients/${clientId}`} className="text-xs text-[#00df8f] hover:underline">Review knowledge base</Link>}
     >
       <div className="space-y-3 text-xs">
@@ -73,9 +72,13 @@ export const AgentKnowledgeSources: React.FC<{
           !error && <p className="text-slate-500">Loading knowledge base...</p>
         ) : (
           <>
-            <GapsSummary data={data} covered={required - data.gaps.length} total={required} mode="team" />
+            {documents.length === 0 && (
+              <p className="rounded border border-amber-500/30 bg-amber-500/5 p-2.5 text-amber-200">
+                {clientName || 'The client'} hasn't uploaded any documents yet. They upload them under Knowledge in their portal.
+              </p>
+            )}
 
-            {data.details_id && (
+            {data.details_id && filledDetails.length > 0 && (
               <div className="rounded-lg border border-[#143c49] bg-[#071419] p-3">
                 <div className="flex items-center gap-2">
                   <Tick on={selected.includes(data.details_id)} onClick={() => onToggle(data.details_id!)} label="Business details" />
@@ -99,8 +102,7 @@ export const AgentKnowledgeSources: React.FC<{
             {documents.length > 0 && (
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 {documents.map((d) => (
-                  <DocumentCard key={d.id} entry={d} busy={deleting === d.id} onDownload={download} onDelete={remove}
-                    extra={<Tick on={selected.includes(d.id)} onClick={() => onToggle(d.id)} label={d.name} />} />
+                  <DocumentCard key={d.id} entry={d} busy={deleting === d.id} onDownload={download} onDelete={remove} />
                 ))}
               </div>
             )}
@@ -118,9 +120,6 @@ export const AgentKnowledgeSources: React.FC<{
               </div>
             )}
 
-            {!data.details_id && entries.length === 0 && (
-              <p className="text-slate-500">The client hasn't added any knowledge yet. They add it under Knowledge in their portal; it shows up here for you to review.</p>
-            )}
           </>
         )}
       </div>

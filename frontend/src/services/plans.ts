@@ -74,12 +74,6 @@ export const NUMBER_TYPE_LABELS: Record<NumberType, string> = { Landline: 'Landl
 
 export const plansService = {
   list: (includeArchived = false) => request<Plan[]>(`/plans${includeArchived ? '?include_archived=true' : ''}`),
-  numberPricing: () => request<NumberPrice[]>('/number-pricing'),
-  updateNumberPricing: (numberType: NumberType, monthly_rent_inr: number, is_available: boolean, setup_fee_inr = 0) =>
-    request<NumberPrice>(`/number-pricing/${numberType}`, {
-      method: 'PUT',
-      body: JSON.stringify({ monthly_rent_inr, is_available, setup_fee_inr }),
-    }),
 };
 
 /** 1 credit = ₹1 (excl. GST): plan credits each month, bought credits in the wallet. */

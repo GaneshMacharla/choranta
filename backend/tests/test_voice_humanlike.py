@@ -229,7 +229,8 @@ def test_outbound_calls_check_the_time_and_handoff_matches_the_agents_tools():
                                                           "course_enquired": "Snowflake"})
     prompt = outbound.conversation.system_instruction
     assert "2. Good time?" in prompt and "2. Reason" not in prompt
-    assert "book a callback with the team instead of guessing" in prompt
+    # schedule_callback is switched off for now, so the agent doesn't offer to book one
+    assert "book a callback with the team" not in prompt and "say a team member will call them back" in prompt
 
     spec.tools.enabled = []
     inbound = RuntimeContext("s", "a", "c", "v", spec, {"origin": "telephony_inbound", "caller": "+919848012345"})

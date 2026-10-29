@@ -9,6 +9,8 @@ Phone numbers Choranta owns at a carrier, kept apart from who uses them.
   PhoneNumber row (models/phone_number.py), which inbound calls are looked up by.
 - NumberOperation: every purchase, assignment, release and sync, with its idempotency key and outcome. Doubles as
   the audit log.
+- CarrierSubaccount: each client's Vobiz sub-account, which their numbers sit in and their calls are placed from,
+  so every client gets its own concurrent-call limit instead of sharing the main account's.
 - MockCarrierNumber: the simulated carrier's own state in PHONE_NUMBER_MOCK_MODE (never used with real Vobiz).
 """
 from datetime import datetime, timezone
@@ -44,6 +46,9 @@ class ProviderNumber(Base):
     currency = Column(String(8), nullable=True)
     application_id = Column(String(128), nullable=True)
     trunk_id = Column(String(128), nullable=True)
+    # The sub-account the number sits in at the carrier (None = Choranta's main account). It can outlive the
+    # client's assignment: Vobiz keeps a used number in the sub-account for a 15-day cool-off.
+    subaccount_auth_id = Column(String(128), nullable=True, index=True)
     is_mock = Column(Boolean, nullable=False, default=False)
     attention = Column(Text, nullable=True)                              # something staff need to fix
     raw = Column(JSON, default=dict)
@@ -98,6 +103,22 @@ class NumberOperation(Base):
     result = Column(JSON, default=dict)
     created_at = Column(DateTime, default=_now, nullable=False, index=True)
     updated_at = Column(DateTime, default=_now, onupdate=_now, nullable=False)
+
+
+class CarrierSubaccount(Base):
+    """A client's sub-account at the carrier. Its token is returned only once, at creation, so it's kept encrypted."""
+    __tablename__ = "carrier_subaccounts"
+    __table_args__ = (UniqueConstraint("client_id", "provider", "is_mock", name="uq_carrier_subaccounts_client"),)
+
+    id = Column(String(64), primary_key=True, default=lambda: generate_unique_id("csa"))
+    client_id = Column(String(64), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider = Column(String(32), nullable=False, default="vobiz")
+    auth_id = Column(String(128), nullable=False, unique=True)
+    auth_token_enc = Column(Text, nullable=False)
+    kyc_mode = Column(String(32), nullable=False)        # personal_use (Choranta's KYC) or customer_use
+    is_mock = Column(Boolean, nullable=False, default=False)
+    created_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=_now, nullable=False)
 
 
 class MockCarrierNumber(Base):

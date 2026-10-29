@@ -85,10 +85,14 @@ def test_onboarding_to_bulk_and_instant_outbound(client: TestClient, auth_header
     notes = _ok(client.get("/api/portal/notifications", headers=portal))["items"]
     assert any(n["kind"] == "PLAN_ACTIVE" and n["link"] == "/portal/employees" for n in notes)
 
-    # ---- 3. Client requests an AI employee (company, business type, languages, name)
-    request = _ok(client.post("/api/portal/agent-requests", headers=portal, json={
-        "company_name": "Smile Dental Care", "business_type": "CLINIC", "languages": ["te", "en-IN"], "name": "Meera",
-    }), 201)
+    # ---- 3. Client uploads files about the business, then requests an AI employee (company, type, languages, name)
+    ask = {"company_name": "Smile Dental Care", "business_type": "CLINIC", "languages": ["te", "en-IN"], "name": "Meera"}
+    assert _ok(client.get("/api/portal/agent-requests/options", headers=portal))["needs_documents"] is True
+    assert client.post("/api/portal/agent-requests", headers=portal, json=ask).status_code == 422
+    _ok(client.post("/api/portal/knowledge/upload", headers=portal,
+                    files=[("files", ("services.txt", b"Root canal Rs 4500. Open 9am-8pm, Mon-Sat.", "text/plain"))]), 201)
+    assert _ok(client.get("/api/portal/agent-requests/options", headers=portal))["needs_documents"] is False
+    request = _ok(client.post("/api/portal/agent-requests", headers=portal, json=ask), 201)
     assert _ok(client.get("/api/portal/me", headers=portal))["has_ai_employee"] is True
     assert _ok(client.get("/api/portal/me", headers=portal))["client_name"] == "Smile Dental Care"
 

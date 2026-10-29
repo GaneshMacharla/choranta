@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AlertTriangle, Inbox, Loader2, Pause, Play, RefreshCw, Wand2, XCircle } from 'lucide-react';
+import { AlertTriangle, FileText, Inbox, Loader2, Pause, Play, RefreshCw, Wand2, XCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
@@ -8,6 +8,7 @@ import { Modal } from '../components/common/Modal';
 import { LoadingState } from '../components/common/LoadingState';
 import { ErrorState } from '../components/common/ErrorState';
 import { useVoicePreview } from '../components/voice/useVoicePreview';
+import { ClientKnowledgeCard } from '../components/knowledge/ClientKnowledgeCard';
 import {
   AgentRequest,
   agentRequestsService as api,
@@ -32,6 +33,7 @@ export const AgentRequestsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<AgentRequest | null>(null);
+  const [filesOf, setFilesOf] = useState<AgentRequest | null>(null);
   const [note, setNote] = useState('');
   const preview = useVoicePreview(api.preview);
 
@@ -190,16 +192,21 @@ export const AgentRequestsPage: React.FC = () => {
                       )}
                     </td>
                     <td className="px-4 py-3">
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        <Button size="sm" variant="secondary" leftIcon={<FileText className="h-3.5 w-3.5" />} onClick={() => setFilesOf(r)}>
+                          Business files
+                        </Button>
                       {open && isAdmin && (
-                        <div className="flex flex-wrap justify-end gap-1.5">
+                        <>
                           <Button size="sm" variant="primary" isLoading={busy === r.id} leftIcon={<Wand2 className="h-3.5 w-3.5" />} onClick={() => build(r)}>
                             {r.status === 'IN_PROGRESS' ? 'Continue' : 'Build agent'}
                           </Button>
                           <Button size="sm" variant="ghost" leftIcon={<XCircle className="h-3.5 w-3.5" />} onClick={() => setRejecting(r)}>
                             Decline
                           </Button>
-                        </div>
+                        </>
                       )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -208,6 +215,16 @@ export const AgentRequestsPage: React.FC = () => {
           </table>
         </div>
       )}
+
+      <Modal
+        isOpen={filesOf !== null}
+        onClose={() => setFilesOf(null)}
+        title={`${filesOf?.client_name ?? ''}: business files`}
+        description="What the client uploaded about their business. Build the AI employee from it."
+        maxWidth="4xl"
+      >
+        {filesOf && <ClientKnowledgeCard clientId={filesOf.client_id} />}
+      </Modal>
 
       <Modal
         isOpen={rejecting !== null}

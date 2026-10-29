@@ -19,7 +19,8 @@ from app.models.agent import Agent
 from app.models.agent_request import AgentRequest
 from app.models.billing import Invoice
 from app.models.client import Client
-from app.services import notifications, sarvam_voices, subscriptions
+from app.db import mongo
+from app.services import knowledge_store, notifications, sarvam_voices, subscriptions
 
 # Jobs a client can tick in plain words; the admin wizard maps them to a role and call direction
 TASKS: Dict[str, str] = {
@@ -60,6 +61,16 @@ def has_paid(db: Session, client_id: str) -> bool:
     return db.query(Invoice.id).filter(Invoice.client_id == client_id).first() is not None
 
 
+def needs_documents(db: Session, client_id: str) -> bool:
+    """
+    Before their first AI employee, a client uploads files about their business (brochure, price list, FAQ...):
+    Choranta's team builds the employee from them. Not checked when the knowledge store isn't set up.
+    """
+    if db.query(Agent.id).filter(Agent.client_id == client_id).first():
+        return False
+    return mongo.configured() and not knowledge_store.has_documents(client_id)
+
+
 def _name_taken(db: Session, client_id: str, name: str, exclude_request: Optional[str] = None) -> bool:
     key = name.strip().lower()
     if db.query(Agent.id).filter(Agent.client_id == client_id, func.lower(Agent.name) == key).first():
@@ -87,6 +98,9 @@ def create_request(db: Session, client_id: str, name: str, company_name: str, bu
                    languages: Optional[List[str]] = None) -> AgentRequest:
     if not has_paid(db, client_id):
         raise ChorantaException("Complete a payment (choose a plan or buy credits) before creating an AI employee.", status_code=402)
+    if needs_documents(db, client_id):
+        raise ValidationException("Upload at least one file about your business (brochure, price list, FAQ...) "
+                                  "so our team can set up your AI employee.")
     name = " ".join((name or "").split())
     company_name = " ".join((company_name or "").split())
     business_type = (business_type or "").strip().upper()
