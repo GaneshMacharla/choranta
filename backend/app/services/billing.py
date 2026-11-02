@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import ValidationException
-from app.models.numbers import CarrierSubaccount
 from app.models.agent_version import AgentVersion
 from app.models.billing import ClientBillingProfile, ClientWallet, Invoice, WalletTransaction
 from app.models.call import Call
@@ -80,9 +79,24 @@ def platform_live_call_count(db: Session) -> int:
     )
 
 
+def vobiz_live_call_count(db: Session) -> int:
+    since = subscriptions.utcnow() - LIVE_CALL_WINDOW
+    return (
+        db.query(func.count(Call.id))
+        .filter(Call.provider == "vobiz", Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= since)
+        .scalar() or 0
+    )
+
+
 def platform_headroom(db: Session) -> int:
-    """Calls that may still start across all clients before the speech providers' limits are reached."""
-    return max(0, settings.MAX_CONCURRENT_CALLS_PLATFORM - platform_live_call_count(db))
+    """
+    Calls that may still start across all clients: within the speech providers' limits and the Vobiz account's
+    concurrent calls (one pool for every client, sub-accounts and inbound calls included).
+    """
+    free = settings.MAX_CONCURRENT_CALLS_PLATFORM - platform_live_call_count(db)
+    if settings.VOBIZ_MAX_CONCURRENT_CALLS > 0:
+        free = min(free, settings.VOBIZ_MAX_CONCURRENT_CALLS - vobiz_live_call_count(db))
+    return max(0, free)
 
 
 PLATFORM_BUSY_REASON = "All lines are busy right now. Please try again in a few minutes."
@@ -130,14 +144,9 @@ def client_concurrency_limit(db: Session, client_id: str) -> Optional[int]:
     """
     Most calls a client may have live at once: their usable plan's limit, else as many full-length calls
     as their credits cover (at least one; call budgets decide whether that one may start), up to the
-    platform cap. None = unlimited. Never more than their Vobiz sub-account's lines, once they have one.
+    platform cap. None = unlimited.
     """
-    limit = _wallet_or_plan_limit(db, client_id)
-    if (settings.VOBIZ_SUBACCOUNTS_ENABLED and settings.VOBIZ_SUBACCOUNT_MAX_CONCURRENT > 0
-            and db.query(CarrierSubaccount.id).filter(CarrierSubaccount.client_id == client_id).first()):
-        cap = settings.VOBIZ_SUBACCOUNT_MAX_CONCURRENT
-        return min(limit, cap) if limit else cap
-    return limit
+    return _wallet_or_plan_limit(db, client_id)
 
 
 def _wallet_or_plan_limit(db: Session, client_id: str) -> Optional[int]:

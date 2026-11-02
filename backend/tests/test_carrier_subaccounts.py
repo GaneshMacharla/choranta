@@ -2,6 +2,7 @@
 import json
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,11 @@ from app.runtime.providers.numbers.vobiz import VobizNumberProvider
 from app.services import billing, carrier_subaccounts
 from test_number_service import API, _owned
 from test_phase3c_telephony import telephony_setup  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def subaccounts_on(monkeypatch):
+    monkeypatch.setattr(settings, "VOBIZ_SUBACCOUNTS_ENABLED", True)
 
 
 def _assign(client: TestClient, headers: dict, number_id: str, client_id: str):
@@ -77,14 +83,13 @@ def test_cool_off_keeps_a_number_from_another_client(client: TestClient, auth_he
     assert _assign(client, operator_headers, number["id"], cid).status_code == 200
 
 
-def test_clients_with_a_subaccount_are_capped_at_its_lines(client: TestClient, auth_headers: dict,
-                                                           operator_headers: dict, db: Session, telephony_setup,
-                                                           monkeypatch):
+def test_a_subaccount_adds_no_lines_of_its_own(client: TestClient, auth_headers: dict, operator_headers: dict,
+                                               db: Session, telephony_setup, monkeypatch):
+    # Sub-accounts share the main account's pool, so the client's limit doesn't change with one
     cid = telephony_setup["client"].id
     monkeypatch.setattr(billing, "_wallet_or_plan_limit", lambda db, client_id: 10)
-    assert billing.client_concurrency_limit(db, cid) == 10  # no sub-account yet
     _assign(client, operator_headers, _owned(client, auth_headers)["id"], cid)
-    assert billing.client_concurrency_limit(db, cid) == settings.VOBIZ_SUBACCOUNT_MAX_CONCURRENT
+    assert billing.client_concurrency_limit(db, cid) == 10
 
 
 def test_real_numbers_call_from_their_subaccount(db: Session, telephony_setup):
@@ -99,15 +104,19 @@ def test_real_numbers_call_from_their_subaccount(db: Session, telephony_setup):
     assert carrier_subaccounts.caller_credentials(db, "+918069990002") is None  # still on the main account
 
 
-def test_dials_on_one_subaccount_are_spaced(monkeypatch):
+def test_dials_are_spaced_across_the_whole_account(monkeypatch):
+    # Every client's calls share the account's CPS, sub-account or not
     waits = []
-    monkeypatch.setattr(settings, "VOBIZ_SUBACCOUNT_CPS", 1.0)
+    monkeypatch.setattr(settings, "VOBIZ_CPS", 1.0)
     monkeypatch.setattr(carrier_subaccounts.time, "sleep", waits.append)
-    carrier_subaccounts._next_slot.clear()
-    carrier_subaccounts.wait_for_dial_slot("SA_A")
-    carrier_subaccounts.wait_for_dial_slot("SA_A")
-    carrier_subaccounts.wait_for_dial_slot("SA_B")  # another client isn't held up
-    assert len(waits) == 1 and 0.9 < waits[0] <= 1.0
+    monkeypatch.setattr(carrier_subaccounts, "_next_slot", 0.0)
+    for _ in range(3):
+        carrier_subaccounts.wait_for_dial_slot()
+    assert len(waits) == 2 and 0.9 < waits[0] <= 1.0 and 1.9 < waits[1] <= 2.0
+
+
+def test_subaccounts_are_off_by_default():
+    assert type(settings).model_fields["VOBIZ_SUBACCOUNTS_ENABLED"].default is False
 
 
 def test_vobiz_adapter_creates_a_subaccount():

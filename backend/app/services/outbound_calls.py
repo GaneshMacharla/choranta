@@ -205,11 +205,11 @@ def place_outbound_call(
 
     telephony_provider = default_registry.get_telephony(provider_name)
     if provider_name == "vobiz":
-        # A client's number sits in their own Vobiz sub-account, so the call goes out on that account's lines
+        # A number in a client's Vobiz sub-account has to call with that sub-account's credentials
         sub_creds = carrier_subaccounts.caller_credentials(db, caller_number) if carrier_subaccounts.enabled() else None
         if sub_creds:
             telephony_provider = VobizTelephonyProvider(auth_id=sub_creds[0], auth_token=sub_creds[1])
-            carrier_subaccounts.wait_for_dial_slot(sub_creds[0])
+        carrier_subaccounts.wait_for_dial_slot()
     try:
         call_result = telephony_provider.initiate_outbound_call(
             customer_number=destination_number,

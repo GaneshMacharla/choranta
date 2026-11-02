@@ -23,11 +23,11 @@ def payg(monkeypatch):
     monkeypatch.setattr(settings, "BILLING_ENFORCED", True, raising=False)
 
 
-def _live_calls(db: Session, setup, count: int) -> None:
+def _live_calls(db: Session, setup, count: int, provider: str = "exotel") -> None:
     for _ in range(count):
         db.add(Call(id=generate_unique_id("call_"), client_id=setup["client"].id, agent_id=setup["agent"].id,
                     agent_version_id=setup["version"].id, caller_number="+914045209348",
-                    destination_number="+918008538015", direction="OUTBOUND", status="ACTIVE", provider="exotel",
+                    destination_number="+918008538015", direction="OUTBOUND", status="ACTIVE", provider=provider,
                     provider_call_id=generate_unique_id("exo_")))
     db.commit()
 
@@ -92,6 +92,24 @@ def test_platform_cap_blocks_calls_across_all_clients(db: Session, telephony_set
     # Live calls of any client count, test calls included
     _live_calls(db, telephony_setup, 1)
     db.query(Call).filter(Call.client_id == cid).first().client_id = "cli_other"
+    db.commit()
+    assert billing.platform_headroom(db) == 0
+    allowed, reason, code = billing.check_call_allowed(db, cid)
+    assert not allowed and code == "CONCURRENCY" and reason == billing.PLATFORM_BUSY_REASON
+
+
+def test_vobiz_account_lines_are_shared_by_all_clients(db: Session, telephony_setup, company, payg, monkeypatch):
+    monkeypatch.setattr(settings, "MAX_CONCURRENT_CALLS_PLATFORM", 10, raising=False)
+    monkeypatch.setattr(settings, "VOBIZ_MAX_CONCURRENT_CALLS", 3)
+    cid = telephony_setup["client"].id
+    billing.record_payment(db, cid, 10000, None, None)
+    _live_calls(db, telephony_setup, 4)  # Exotel calls don't use Vobiz lines
+    _live_calls(db, telephony_setup, 2, provider="vobiz")
+    assert billing.platform_headroom(db) == 1
+
+    # Another client's Vobiz call takes the last line, inbound or outbound
+    _live_calls(db, telephony_setup, 1, provider="vobiz")
+    db.query(Call).filter(Call.client_id == cid, Call.provider == "vobiz").first().client_id = "cli_other"
     db.commit()
     assert billing.platform_headroom(db) == 0
     allowed, reason, code = billing.check_call_allowed(db, cid)

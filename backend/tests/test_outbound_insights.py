@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.call import Call
 from app.models.campaign import CampaignRecipient
 from app.models.client import Client
@@ -14,6 +16,12 @@ from test_phase3c_telephony import telephony_setup  # noqa: F401
 from test_portal import _client_headers
 
 LATER = IN_WINDOW + timedelta(days=2)
+
+
+@pytest.fixture(autouse=True)
+def enough_vobiz_lines(monkeypatch):
+    # _bulk_run dials four at once; the default Vobiz account has three lines
+    monkeypatch.setattr(settings, "VOBIZ_MAX_CONCURRENT_CALLS", 10)
 
 
 def _answer(db: Session, recipient: CampaignRecipient, interest=None, summary=None, duration=60.0, outputs=None):

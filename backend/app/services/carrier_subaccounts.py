@@ -1,10 +1,11 @@
 """
 Each client's Vobiz sub-account: created on their first number, holding their numbers and placing their calls.
 
-Vobiz limits concurrent calls (3) and calls per second (1) per account, so with everyone on Choranta's main account
-all clients would share those lines; a sub-account per client gives each their own. Clients never see it: with
-kyc_mode personal_use the sub-account runs on Choranta's KYC and is billed to Choranta's main account (Vobiz charges
-the parent for sub-account purchases), and Choranta charges the client's wallet as before.
+Off by default (VOBIZ_SUBACCOUNTS_ENABLED). Vobiz confirmed on 2026-11-02 that sub-accounts get no lines of their
+own: they share the main account's concurrent calls and CPS. They also can't use the main account's applications
+or SIP trunks, so a number moved into one loses the inbound application attached to it. Kept for if Vobiz changes
+that. Clients never see it: with kyc_mode personal_use the sub-account runs on Choranta's KYC and is billed to
+Choranta's main account, and Choranta charges the client's wallet as before.
 
 Moving a number out of a sub-account is refused for 15 days after its last call (Vobiz's cool-off). Until then the
 number stays where it is (ProviderNumber.subaccount_auth_id) and can't go to another client.
@@ -12,7 +13,7 @@ number stays where it is (ProviderNumber.subaccount_auth_id) and can't go to ano
 import logging
 import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -163,17 +164,21 @@ def caller_credentials(db: Session, e164: str) -> Optional[Tuple[str, str]]:
 # ---------------------------------------------------------------- pacing
 
 _pace_lock = threading.Lock()
-_next_slot: Dict[str, float] = {}
+_next_slot = 0.0
 
 
-def wait_for_dial_slot(auth_id: str) -> None:
-    """Spaces new calls on one account to VOBIZ_SUBACCOUNT_CPS per second (Vobiz rejects faster dialing)."""
-    cps = float(settings.VOBIZ_SUBACCOUNT_CPS or 0)
+def wait_for_dial_slot() -> None:
+    """
+    Spaces new Vobiz calls to VOBIZ_CPS per second (Vobiz rejects faster dialing). One queue for the whole
+    account: sub-accounts share the main account's CPS. Per process, so run one worker that dials.
+    """
+    global _next_slot
+    cps = float(settings.VOBIZ_CPS or 0)
     if cps <= 0:
         return
     with _pace_lock:
         now = time.monotonic()
-        slot = max(now, _next_slot.get(auth_id, 0.0))
-        _next_slot[auth_id] = slot + 1.0 / cps
+        slot = max(now, _next_slot)
+        _next_slot = slot + 1.0 / cps
     if slot > now:
         time.sleep(slot - now)
