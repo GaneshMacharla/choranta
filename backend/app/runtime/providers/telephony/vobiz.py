@@ -6,7 +6,7 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 from app.core.config import settings
-from app.runtime.providers.telephony.base import TelephonyProvider, InboundCallPayload
+from app.runtime.providers.telephony.base import CarrierLimitError, TelephonyProvider, InboundCallPayload
 from app.runtime.providers.telephony.exotel import normalize_exotel_number
 
 logger = logging.getLogger("choranta.runtime.telephony.vobiz")
@@ -185,11 +185,14 @@ class VobizTelephonyProvider(TelephonyProvider):
         caller_id: str,
         flow_url: str,
         status_callback_url: Optional[str] = None,
-        custom_field: Optional[str] = None
+        custom_field: Optional[str] = None,
+        max_duration_s: Optional[int] = None,
+        ring_timeout_s: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Dials customer_number from caller_id; Vobiz fetches flow_url (our Answer URL) once they pick up.
         POST {VOBIZ_API_BASE}/Account/{VOBIZ_AUTH_ID}/Call/
+        Raises CarrierLimitError when Vobiz answers 429 (the account's concurrent-call or CPS limit).
         """
         import httpx
 
@@ -208,6 +211,10 @@ class VobizTelephonyProvider(TelephonyProvider):
         if status_callback_url:
             body["hangup_url"] = status_callback_url
             body["hangup_method"] = "POST"
+        if max_duration_s:
+            body["time_limit"] = int(max_duration_s)  # Vobiz's default is 4 hours
+        if ring_timeout_s:
+            body["hangup_on_ring"] = int(ring_timeout_s)
 
         logger.info(f"Initiating Vobiz outbound call: To={body['to']}, From={body['from']}")
         try:
@@ -220,6 +227,9 @@ class VobizTelephonyProvider(TelephonyProvider):
         except httpx.RequestError as exc:
             logger.error(f"Network error contacting Vobiz: {exc}")
             raise RuntimeError(f"Failed to connect to Vobiz API: {exc}") from exc
+        if resp.status_code == 429:
+            logger.warning(f"Vobiz refused the call at the account's limit: {resp.text}")
+            raise CarrierLimitError(f"Vobiz is at the account's call limit: {resp.text}")
         if resp.status_code not in (200, 201, 202):
             logger.error(f"Vobiz outbound call failed ({resp.status_code}): {resp.text}")
             try:

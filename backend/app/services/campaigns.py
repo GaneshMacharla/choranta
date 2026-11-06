@@ -12,6 +12,7 @@ import hmac
 import io
 import json
 import logging
+import math
 import re
 import secrets
 import time
@@ -34,7 +35,7 @@ from app.models.client import Client
 from app.models.lead import Lead
 from app.models.phone_number import PhoneNumber
 from app.models.runtime_event import RuntimeEvent
-from app.services import billing, phone_numbers, subscriptions
+from app.services import billing, call_capacity, missed_call_callbacks, phone_numbers, subscriptions
 from app.services.outbound_calls import OutboundCallError, place_outbound_call
 
 logger = logging.getLogger("choranta.services.campaigns")
@@ -763,25 +764,31 @@ def dials_in_last_minute(db: Session, now: datetime) -> int:
 
 
 def _dial_campaign(db: Session, campaign: Campaign, now: datetime, budget: int,
-                   dial: Callable[..., Call]) -> int:
-    """Places calls for one running campaign; returns how many were placed."""
+                   dial: Callable[..., Call], client_share: Optional[int] = None) -> int:
+    """
+    Places calls for one running campaign; returns how many were placed. `client_share` is the most lines the
+    campaign's client may hold while other clients' campaigns are waiting too.
+    """
     live = _recipient_count(db, campaign.id, ("DIALING",))
-    free = min(campaign.max_concurrent - live, budget, billing.platform_headroom(db))
+    headroom = billing.outbound_headroom(db)
+    free = min(campaign.max_concurrent - live, budget, headroom)
     if free > 0 and campaign.kind == "BULK":
         free = min(free, _bulk_headroom(db, campaign))
-    if free <= 0:
-        return 0
-    candidates = (
+    if free > 0 and client_share is not None:
+        free = min(free, client_share - billing.live_call_count(db, campaign.client_id))
+    due = (
         db.query(CampaignRecipient)
         .filter(
             CampaignRecipient.campaign_id == campaign.id,
             (CampaignRecipient.status == "PENDING")
             | ((CampaignRecipient.status == "RETRY_WAIT") & (CampaignRecipient.next_attempt_at <= now)),
         )
-        .order_by(CampaignRecipient.attempts, CampaignRecipient.position)
-        .limit(free * 3)
-        .all()
     )
+    if free <= 0:
+        if headroom <= 0 and due.first() is not None:
+            call_capacity.count("campaign_wait_seconds", settings.CAMPAIGN_TICK_S)
+        return 0
+    candidates = due.order_by(CampaignRecipient.attempts, CampaignRecipient.position).limit(free * 3).all()
     placed = 0
     for recipient in candidates:
         if placed >= free:
@@ -872,24 +879,33 @@ def run_campaign_tick(db: Session, now: Optional[datetime] = None,
     now = now or utcnow()
     placed = 0
     budget = max(0, settings.CAMPAIGN_MAX_DIALS_PER_MIN - dials_in_last_minute(db, now))
-    # Website-lead (TRIGGER) campaigns first: instant leads take priority over bulk lists
-    campaign_ids = [
-        cid for (cid, _kind) in sorted(
-            db.query(Campaign.id, Campaign.kind).filter(Campaign.status.in_(ACTIVE_STATUSES)).all(),
-            key=lambda row: 0 if row[1] == "TRIGGER" else 1,
-        )
-    ]
-    for campaign_id in campaign_ids:
+    call_capacity.note_live_calls(billing.platform_live_call_count(db))
+    active = db.query(Campaign.id, Campaign.kind, Campaign.client_id, Campaign.status).filter(
+        Campaign.status.in_(ACTIVE_STATUSES)
+    ).all()
+
+    # Bulk lists share the lines fairly: the client with the fewest live calls goes first, and nobody takes more than
+    # their share while another client's list is running too
+    bulk = [row for row in active if row.kind != "TRIGGER"]
+    bulk_clients = {row.client_id for row in bulk if row.status == "RUNNING"}
+    client_share = (
+        math.ceil(call_capacity.outbound_line_capacity() / len(bulk_clients)) if len(bulk_clients) > 1 else None
+    )
+    client_live = {client_id: billing.live_call_count(db, client_id) for client_id in bulk_clients}
+    bulk.sort(key=lambda row: client_live.get(row.client_id, 0))
+
+    def run_campaign(campaign_id: str, share: Optional[int] = None) -> None:
+        nonlocal placed, budget
         campaign = db.get(Campaign, campaign_id)
         try:
             if campaign.status == "SCHEDULED":
                 if campaign.start_at and campaign.start_at > now:
-                    continue
+                    return
                 campaign.status = "RUNNING"
                 db.commit()
             _sync_dialing(db, campaign, now)
             if campaign.status == "RUNNING" and in_calling_window(campaign, now) and budget > 0:
-                count = _dial_campaign(db, campaign, now, budget, dial)
+                count = _dial_campaign(db, campaign, now, budget, dial, share)
                 placed += count
                 budget -= count
             if campaign.status in ("RUNNING", "STOPPING"):
@@ -898,6 +914,19 @@ def run_campaign_tick(db: Session, now: Optional[datetime] = None,
         except Exception:
             db.rollback()
             logger.exception(f"Campaign {campaign_id} tick failed")
+
+    # Website-lead (TRIGGER) campaigns first: instant leads take priority over everything else
+    for row in active:
+        if row.kind == "TRIGGER":
+            run_campaign(row.id)
+    # Then people who rang while every line was busy, ahead of bulk lists
+    try:
+        placed += missed_call_callbacks.run_due(db, now, dial)
+    except Exception:
+        db.rollback()
+        logger.exception("Missed-call callbacks failed")
+    for row in bulk:
+        run_campaign(row.id, client_share)
     try:
         deliver_due_webhooks(db, now)
     except Exception:

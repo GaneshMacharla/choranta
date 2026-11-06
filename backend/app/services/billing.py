@@ -14,7 +14,7 @@ import json
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -27,7 +27,7 @@ from app.models.call import Call
 from app.models.client import Client
 from app.models.runtime_session import RuntimeSession
 from app.models.subscription import CallUsage, Plan
-from app.services import notifications, subscriptions
+from app.services import call_capacity, notifications, subscriptions
 from app.services.call_costing import estimate_call_cost
 from app.services.pricing import budget_credits_per_minute, get_pricing
 
@@ -56,47 +56,68 @@ def get_wallet(db: Session, client_id: str, lock: bool = False) -> ClientWallet:
     return wallet
 
 
-# Calls in these states hold a line; older rows are treated as stuck and don't count
+# Calls in these states hold a line, until they're old enough to be treated as stuck (a lost hangup webhook, or a
+# restart mid-call): a call that hasn't connected after LINE_HOLD_BEFORE_ANSWER, or one that has run past its own
+# maximum length by LINE_HOLD_MARGIN. LIVE_CALL_WINDOW only narrows the query: no call can legitimately last that long.
 LIVE_CALL_STATUSES = ("INITIATED", "RINGING", "ANSWERED", "ACTIVE")
+UNANSWERED_STATUSES = ("INITIATED", "RINGING")
 LIVE_CALL_WINDOW = timedelta(hours=3)
+LINE_HOLD_BEFORE_ANSWER = timedelta(minutes=5)
+LINE_HOLD_MARGIN = timedelta(minutes=5)
+
+
+def _naive_utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
+def _holds_line(status: str, created_at: datetime, answered_at: Optional[datetime], metadata: Optional[dict],
+                now: datetime) -> bool:
+    if status in UNANSWERED_STATUSES:
+        return now < _naive_utc(created_at) + LINE_HOLD_BEFORE_ANSWER
+    max_duration_s = float((metadata or {}).get("max_duration_s") or settings.CALL_MAX_DURATION_S)
+    return now < _naive_utc(answered_at or created_at) + timedelta(seconds=max_duration_s) + LINE_HOLD_MARGIN
+
+
+def _live_call_metadata(db: Session, *filters) -> List[Optional[dict]]:
+    """The metadata of each call holding a line, among calls matching `filters`."""
+    now = subscriptions.utcnow()
+    rows = (
+        db.query(Call.status, Call.created_at, Call.answered_at, Call.metadata_)
+        .filter(Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= now - LIVE_CALL_WINDOW, *filters)
+        .all()
+    )
+    return [meta for status, created_at, answered_at, meta in rows if _holds_line(status, created_at, answered_at, meta, now)]
 
 
 def live_call_count(db: Session, client_id: str) -> int:
-    since = subscriptions.utcnow() - LIVE_CALL_WINDOW
-    return (
-        db.query(func.count(Call.id))
-        .filter(Call.client_id == client_id, Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= since)
-        .scalar() or 0
-    )
+    return len(_live_call_metadata(db, Call.client_id == client_id))
 
 
 def platform_live_call_count(db: Session) -> int:
-    since = subscriptions.utcnow() - LIVE_CALL_WINDOW
-    return (
-        db.query(func.count(Call.id))
-        .filter(Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= since)
-        .scalar() or 0
-    )
+    return len(_live_call_metadata(db))
 
 
 def vobiz_live_call_count(db: Session) -> int:
-    since = subscriptions.utcnow() - LIVE_CALL_WINDOW
-    return (
-        db.query(func.count(Call.id))
-        .filter(Call.provider == "vobiz", Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= since)
-        .scalar() or 0
-    )
+    return len(_live_call_metadata(db, Call.provider == "vobiz"))
 
 
 def platform_headroom(db: Session) -> int:
     """
-    Calls that may still start across all clients: within the speech providers' limits and the Vobiz account's
-    concurrent calls (one pool for every client, sub-accounts and inbound calls included).
+    Calls that may still start across all clients, counting the lines kept for inbound calls: within the speech
+    providers' limits and the Vobiz account's concurrent calls (one pool for every client and sub-account).
     """
-    free = settings.MAX_CONCURRENT_CALLS_PLATFORM - platform_live_call_count(db)
-    if settings.VOBIZ_MAX_CONCURRENT_CALLS > 0:
-        free = min(free, settings.VOBIZ_MAX_CONCURRENT_CALLS - vobiz_live_call_count(db))
-    return max(0, free)
+    return call_capacity.free_for_inbound(platform_live_call_count(db), vobiz_live_call_count(db))
+
+
+def outbound_headroom(db: Session) -> int:
+    """Outbound calls that may still start: leaves the inbound lines free, and is 0 while outbound is paused."""
+    return call_capacity.free_for_outbound(platform_headroom(db))
+
+
+def browser_session_allowed(db: Session) -> bool:
+    """Browser test calls use no phone line but do use speech capacity: they never take the last free call."""
+    total = call_capacity.total_capacity()
+    return total - platform_live_call_count(db) > (1 if total > 1 else 0)
 
 
 PLATFORM_BUSY_REASON = "All lines are busy right now. Please try again in a few minutes."
@@ -118,14 +139,9 @@ def agent_max_call_seconds(db: Session, agent_version_id: Optional[str]) -> int:
 
 def held_credits(db: Session, client_id: str) -> Tuple[int, float]:
     """Live calls and the credits their budgets hold. Calls from before budgets hold a full-length call."""
-    since = subscriptions.utcnow() - LIVE_CALL_WINDOW
-    calls = (
-        db.query(Call.metadata_)
-        .filter(Call.client_id == client_id, Call.status.in_(LIVE_CALL_STATUSES), Call.created_at >= since)
-        .all()
-    )
+    calls = _live_call_metadata(db, Call.client_id == client_id)
     held = 0.0
-    for (meta,) in calls:
+    for meta in calls:
         meta = meta or {}
         if meta.get("is_test"):
             continue
@@ -164,6 +180,7 @@ def _wallet_or_plan_limit(db: Session, client_id: str) -> Optional[int]:
 
 def call_budget(
     db: Session, client_id: Optional[str], max_duration_s: Optional[float] = None, lock: bool = False,
+    inbound: bool = False,
 ) -> Tuple[bool, Optional[str], Optional[str], Optional[float]]:
     """
     Whether a new billable call may start, and the credits it may spend: (allowed, reason, code, budget).
@@ -173,8 +190,10 @@ def call_budget(
 
     With lock=True the wallet row stays locked until the caller commits: create the Call (with its
     budget) before committing, so concurrent call starts can't spend the same credits twice.
+
+    Only inbound calls (inbound=True) may use the lines kept free for them.
     """
-    if platform_headroom(db) <= 0:
+    if (platform_headroom(db) if inbound else outbound_headroom(db)) <= 0:
         return False, PLATFORM_BUSY_REASON, "CONCURRENCY", None
     if not settings.BILLING_ENFORCED or not client_id:
         return True, None, None, None
@@ -211,10 +230,10 @@ def call_budget(
 
 
 def check_call_allowed(
-    db: Session, client_id: Optional[str], max_duration_s: Optional[float] = None,
+    db: Session, client_id: Optional[str], max_duration_s: Optional[float] = None, inbound: bool = False,
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     """Whether a new billable call may start, as (allowed, reason, code); see call_budget."""
-    return call_budget(db, client_id, max_duration_s)[:3]
+    return call_budget(db, client_id, max_duration_s, inbound=inbound)[:3]
 
 
 def gst_split(total_received: float, client_state_code: Optional[str]) -> Dict[str, Any]:

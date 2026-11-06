@@ -8,6 +8,7 @@ from app.core.exceptions import NotFoundException
 from app.models.client import Client
 from app.repositories.client_repository import ClientRepository
 from app.runtime.providers.registry import default_registry
+from app.runtime.providers.sarvam.limits import background_llm
 from app.schemas.agent_draft import AgentDraftRequest, AgentDraftResponse
 from app.schemas.agent_spec import AgentConfigurationData
 
@@ -136,11 +137,12 @@ class AgentDraftService:
         ])
         try:
             llm = default_registry.get_llm(provider_name)
-            result = llm.generate(
-                system_instruction=DRAFT_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
-                temperature=0.4,
-            )
+            with background_llm():  # nobody is on the phone: live callers go first
+                result = llm.generate(
+                    system_instruction=DRAFT_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    temperature=0.4,
+                )
         except Exception as e:
             logger.warning(f"AI draft request failed ({provider_name}): {e}")
             return None

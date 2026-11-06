@@ -13,6 +13,10 @@ class InboundCallPayload(BaseModel):
     raw_params: Dict[str, Any] = Field(default_factory=dict)
 
 
+class CarrierLimitError(RuntimeError):
+    """The carrier refused a call because the account is at its limit. Try again later: nothing is wrong with the call."""
+
+
 class TelephonyProvider(BaseProvider):
     """
     Abstract interface for Telephony providers (e.g. Exotel).
@@ -80,9 +84,14 @@ class TelephonyProvider(BaseProvider):
         caller_id: str,
         flow_url: str,
         status_callback_url: Optional[str] = None,
-        custom_field: Optional[str] = None
+        custom_field: Optional[str] = None,
+        max_duration_s: Optional[int] = None,
+        ring_timeout_s: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Initiates an outbound call connecting the customer to an AI voice flow."""
+        """
+        Initiates an outbound call connecting the customer to an AI voice flow. Carriers that support it end the call
+        after max_duration_s and stop ringing after ring_timeout_s, so they don't hold a line; others ignore these.
+        """
         raise NotImplementedError("Outbound calling not implemented for this provider.")
 
     def outbound_call_id(self, result: Dict[str, Any]) -> Optional[str]:

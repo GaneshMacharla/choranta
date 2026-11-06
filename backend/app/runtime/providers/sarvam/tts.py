@@ -13,6 +13,7 @@ import httpx
 from app.core.config import settings
 from app.runtime.exceptions import ProviderUnavailable
 from app.runtime.providers.base import AudioResult
+from app.runtime.providers.sarvam import limits
 from app.runtime.providers.sarvam.common import SARVAM_REST_BASE_URL, sarvam_language
 from app.runtime.providers.tts import TextFeed, TTSProvider
 
@@ -168,6 +169,7 @@ class SarvamTTSProvider(TTSProvider):
     async def _open(self, key) -> _TTSConnection:
         from sarvamai import AsyncSarvamAI
 
+        await limits.wait_for_ws_open()
         model, language, speaker, pace, rate = key
         client = AsyncSarvamAI(api_subscription_key=self._api_key)
         manager = client.text_to_speech_streaming.connect(model=model, send_completion_event=True)
@@ -347,6 +349,7 @@ class SarvamTTSProvider(TTSProvider):
                 if emitted:
                     raise
                 logger.warning(f"Sarvam TTS stream failed ({type(e).__name__}: {e}); using REST.")
+                limits.note_ws_failure(e)
         # REST: the whole utterance in one request once all of its text has arrived
         async for text in feed:
             sent.append(text)
@@ -379,5 +382,6 @@ class SarvamTTSProvider(TTSProvider):
                 if emitted:
                     raise
                 logger.warning(f"Sarvam TTS stream failed ({type(e).__name__}: {e}); using REST.")
+                limits.note_ws_failure(e)
         async for chunk in self._rest_stream(text, voice_id, speed, language, sample_rate):
             yield chunk

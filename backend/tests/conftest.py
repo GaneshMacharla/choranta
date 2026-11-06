@@ -36,6 +36,10 @@ for _override in ("STT_PROVIDER_OVERRIDE", "TTS_PROVIDER_OVERRIDE", "LLM_PROVIDE
 object.__setattr__(settings, "BILLING_ENFORCED", False)
 # Existing suites dial through the (mock) Exotel carrier; Vobiz tests switch this themselves
 object.__setattr__(settings, "TELEPHONY_PROVIDER", "exotel")
+# Existing suites set the limits they test; test_call_capacity.py covers the Sarvam limits and the inbound reserve
+for _limit in ("SARVAM_LLM_REQUESTS_PER_MIN", "SARVAM_STT_WS_LIMIT", "SARVAM_TTS_WS_LIMIT", "INBOUND_RESERVED_LINES",
+               "SARVAM_WS_OPEN_SPACING_MS"):
+    object.__setattr__(settings, _limit, 0)
 from app.runtime.providers.registry import default_registry
 default_registry.enable_mock_providers()
 
@@ -50,6 +54,18 @@ def fresh_rate_limits():
     from app.core import rate_limit
     rate_limit.reset()
     yield
+
+
+@pytest.fixture(autouse=True)
+def fresh_call_capacity():
+    """An outbound pause or counters from one test must not carry into the next."""
+    from app.runtime.providers.sarvam import limits
+    from app.services import call_capacity
+    call_capacity.reset()
+    limits.reset()
+    yield
+    call_capacity.reset()
+    limits.reset()
 
 
 @pytest.fixture(autouse=True)

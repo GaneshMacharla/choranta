@@ -27,8 +27,11 @@ from app.models.call_script import StandardCallScript
 from app.models.whatsapp import WhatsAppAccount, WhatsAppFollowup, WhatsAppMessage
 from app.models.qualification import LeadQualificationSetup
 from app.models.numbers import ProviderNumber, NumberAssignment, NumberOperation, MockCarrierNumber, CarrierSubaccount
+from app.models.call_capacity import MissedCallCallback, CapacityDaily
 
 __all__ = [
+    "MissedCallCallback",
+    "CapacityDaily",
     "ProviderNumber",
     "NumberAssignment",
     "NumberOperation",

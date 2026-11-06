@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowDownLeft, IndianRupee, Info, Receipt, TrendingUp, Wallet } from 'lucide-react';
 import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
-import { FinanceBucket, FinancePeriod, FinanceSummary, financeService, rupees } from '../services/finance';
+import { CapacityReport, FinanceBucket, FinancePeriod, FinanceSummary, financeService, rupees } from '../services/finance';
 
 const PERIODS: { value: FinancePeriod; label: string }[] = [
   { value: '7d', label: '7 days' },
@@ -84,6 +84,8 @@ export const UsagePage: React.FC = () => {
       )}
 
       {!data && loading && <div className="py-16 text-center text-sm text-slate-500">Loading finance figures…</div>}
+
+      <CapacityCard />
 
       {data && (
         <div className={`space-y-6 transition-opacity ${loading ? 'opacity-60' : ''}`}>
@@ -254,6 +256,116 @@ const Legend: React.FC = () => (
     </span>
   </div>
 );
+
+const BOTTLENECK_LABEL: Record<CapacityReport['bottleneck'], string> = {
+  vobiz: 'Vobiz lines',
+  sarvam: 'Sarvam plan',
+  platform: 'Platform cap setting',
+};
+
+const count = (value: number) => Math.round(value).toLocaleString('en-IN');
+
+/** Call limits and what's holding calls back. Not tied to the period above: it covers now, today and 30 days. */
+const CapacityCard: React.FC = () => {
+  const [report, setReport] = useState<CapacityReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    financeService
+      .capacity()
+      .then((res) => live && setReport(res))
+      .catch((err) => live && setError(err.message || 'Could not load call capacity.'));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (error) {
+    return <div className="rounded-lg border border-rose-800/60 bg-rose-950/30 px-4 py-3 text-sm text-rose-200">{error}</div>;
+  }
+  if (!report) return null;
+
+  const { limits, live, today, last_30_days: month, llm_requests_per_call_minute: llm } = report;
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-100">Call capacity</h2>
+          <p className="text-xs text-slate-400">
+            Up to {limits.usable_calls} calls at once: {limits.outbound_lines} outbound, {limits.reserved_for_inbound} kept for inbound.
+            Limited by {BOTTLENECK_LABEL[report.bottleneck]}.
+          </p>
+        </div>
+        {live.outbound_paused_s > 0 ? (
+          <Badge variant="yellow">Outbound paused {live.outbound_paused_s}s</Badge>
+        ) : (
+          <span className="text-xs text-slate-400">
+            {live.calls} live now · {live.free_outbound} outbound free
+          </span>
+        )}
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-slate-500">
+              <th className="py-1.5 font-medium" />
+              <th className="py-1.5 font-medium text-right">Today</th>
+              <th className="py-1.5 font-medium text-right">Last 30 days</th>
+            </tr>
+          </thead>
+          <tbody className="text-slate-300">
+            {(
+              [
+                ['Peak calls at once', today.peak_live_calls, month.peak_live_calls],
+                ['Inbound calls refused (all lines busy)', today.inbound_refused_busy, month.inbound_refused_busy],
+                ['Callbacks connected / queued', null, null],
+                ['Campaign minutes waiting for a line', today.campaign_wait_seconds / 60, month.campaign_wait_seconds / 60],
+                ['Vobiz limit rejections', today.vobiz_limit_rejections, month.vobiz_limit_rejections],
+                ['Sarvam limit hits', today.sarvam_rejections, month.sarvam_rejections],
+                ['Turns answered by Gemini instead', today.gemini_fallbacks, month.gemini_fallbacks],
+              ] as [string, number | null, number | null][]
+            ).map(([label, day, total]) => (
+              <tr key={label} className="border-t border-[#102d38]">
+                <td className="py-1.5">{label}</td>
+                <td className="py-1.5 text-right font-mono text-slate-100">
+                  {day === null ? `${count(today.callbacks_connected)} / ${count(today.callbacks_queued)}` : count(day)}
+                </td>
+                <td className="py-1.5 text-right font-mono text-slate-100">
+                  {total === null ? `${count(month.callbacks_connected)} / ${count(month.callbacks_queued)}` : count(total)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="mt-3 text-xs text-slate-400">
+        Sarvam requests per call per minute: {llm.measured === null ? 'not enough calls measured yet' : `${llm.measured} measured`}
+        {' '}(capacity assumes {llm.assumed}).
+      </p>
+
+      {report.hints.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          {report.hints.map((hint) => (
+            <li
+              key={hint.text}
+              className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
+                hint.level === 'warning'
+                  ? 'border-amber-800/60 bg-amber-950/30 text-amber-200'
+                  : 'border-[#143c49] bg-[#091b22] text-slate-300'
+              }`}
+            >
+              {hint.level === 'warning' ? <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> : <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />}
+              <span>{hint.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+};
 
 const Breakdown: React.FC<{ rows: [string, number][]; total: number }> = ({ rows, total }) => {
   const shown = rows.filter(([, v]) => v > 0);

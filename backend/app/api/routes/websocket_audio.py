@@ -54,6 +54,7 @@ from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony.browser import BrowserTelephonyProvider
 from app.runtime.runtime import AgentRuntime
 from app.runtime.telephony.session import TelephonyMediaSession
+from app.services import billing
 
 logger = logging.getLogger("choranta.runtime.websocket")
 
@@ -243,7 +244,8 @@ def _create_call_record(db: Session, session_record, user_id: str) -> Call:
         started_at=now,
         answered_at=now,
         duration_seconds=0.0,
-        metadata_={"is_test": True, "channel": "websocket", "started_by": user_id},
+        metadata_={"is_test": True, "channel": "websocket", "started_by": user_id,
+                   "max_duration_s": settings.MAX_SESSION_DURATION_SECONDS},
     ))
 
 
@@ -264,6 +266,10 @@ async def runtime_audio_websocket(
 
     if len(active_audio_sessions) >= settings.MAX_CONCURRENT_SESSIONS:
         logger.warning(f"Max concurrent sessions limit ({settings.MAX_CONCURRENT_SESSIONS}) reached.")
+        await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER, reason="Server capacity reached")
+        return
+    if not billing.browser_session_allowed(db):
+        logger.warning("Refusing a browser test call: phone calls need the remaining speech capacity.")
         await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER, reason="Server capacity reached")
         return
 

@@ -20,11 +20,12 @@ from app.repositories.phone_number_repository import PhoneNumberRepository
 from app.runtime.events.emitter import EventEmitter
 from app.runtime.events.types import RuntimeEventType
 from app.runtime.providers.registry import default_registry
+from app.runtime.providers.telephony.base import CarrierLimitError
 from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
 from app.runtime.readiness.checker import RuntimeReadinessChecker
-from app.services import carrier_subaccounts, phone_numbers
+from app.services import call_capacity, carrier_subaccounts, phone_numbers
 from app.services.billing import (
-    PLATFORM_BUSY_REASON, agent_max_call_seconds, call_budget, check_call_allowed, platform_headroom,
+    PLATFORM_BUSY_REASON, agent_max_call_seconds, call_budget, check_call_allowed, outbound_headroom,
 )
 
 logger = logging.getLogger("choranta.services.outbound_calls")
@@ -141,7 +142,7 @@ def place_outbound_call(
     max_duration_s = agent_max_call_seconds(db, agent_version_id)
     if is_test:  # free, but still uses the speech providers' shared limits
         allowed, block_reason, block_code = (
-            (True, None, None) if platform_headroom(db) > 0 else (False, PLATFORM_BUSY_REASON, "CONCURRENCY"))
+            (True, None, None) if outbound_headroom(db) > 0 else (False, PLATFORM_BUSY_REASON, "CONCURRENCY"))
     else:
         allowed, block_reason, block_code = check_call_allowed(db, client_id, max_duration_s)
     if not allowed:
@@ -170,6 +171,7 @@ def place_outbound_call(
         "custom_field": custom_field,
         "variables": variables or {},
         "is_test": is_test,
+        "max_duration_s": max_duration_s,
         **(extra_metadata or {}),
     }
     if not is_test:
@@ -204,20 +206,36 @@ def place_outbound_call(
         status_callback_url = with_webhook_token(f"{base_url}/api/telephony/vobiz/hangup", "vobiz", call_id=saved_call.id)
 
     telephony_provider = default_registry.get_telephony(provider_name)
+    line_limits: Dict[str, int] = {}
     if provider_name == "vobiz":
         # A number in a client's Vobiz sub-account has to call with that sub-account's credentials
         sub_creds = carrier_subaccounts.caller_credentials(db, caller_number) if carrier_subaccounts.enabled() else None
         if sub_creds:
             telephony_provider = VobizTelephonyProvider(auth_id=sub_creds[0], auth_token=sub_creds[1])
         carrier_subaccounts.wait_for_dial_slot()
+        line_limits = {
+            "max_duration_s": int(max_duration_s) + settings.VOBIZ_TIME_LIMIT_MARGIN_S,
+            "ring_timeout_s": settings.VOBIZ_RING_TIMEOUT_S,
+        }
     try:
         call_result = telephony_provider.initiate_outbound_call(
             customer_number=destination_number,
             caller_id=caller_number,
             flow_url=flow_url,
             status_callback_url=status_callback_url,
-            custom_field=custom_field or f"agent:{agent_id}"
+            custom_field=custom_field or f"agent:{agent_id}",
+            **line_limits,
         )
+    except CarrierLimitError as exc:
+        # Nothing is wrong with this call: hold off and let the caller retry it without using up an attempt
+        logger.warning(f"Pausing outbound calls: {exc}")
+        saved_call.status = "FAILED"
+        saved_call.termination_reason = "carrier_limit"
+        saved_call.ended_at = datetime.now(timezone.utc)
+        db.commit()
+        call_capacity.count("vobiz_limit_rejections")
+        call_capacity.pause_outbound()
+        raise OutboundCallError("CONCURRENCY", PLATFORM_BUSY_REASON, 429)
     except Exception as exc:
         logger.error(f"Failed to initiate outbound call: {exc}")
         # Releases the reserved budget: failed calls don't hold credits

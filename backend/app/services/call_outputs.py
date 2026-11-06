@@ -17,6 +17,7 @@ from app.models.agent_version import AgentVersion
 from app.models.call import Call
 from app.models.runtime_event import RuntimeEvent
 from app.runtime.providers.registry import default_registry
+from app.runtime.providers.sarvam.limits import background_llm
 
 logger = logging.getLogger("choranta.services.call_outputs")
 
@@ -126,13 +127,14 @@ def extract_outputs(definitions: List[Dict[str, Any]], transcript: List[Tuple[st
         for d in definitions
     ) or "(none)"
     conversation = "\n".join(f"{speaker}: {text}" for speaker, text in transcript)
-    result = llm.generate(
-        system_instruction=EXTRACTION_PROMPT.format(variables=variables)
-        + (QUALIFICATION_PROMPT.format(criteria=criteria) if criteria else ""),
-        messages=[{"role": "user", "content": f"Transcript:\n{conversation}"}],
-        available_tools=None,
-        temperature=0.0,
-    )
+    with background_llm():  # the call is over: live callers go first
+        result = llm.generate(
+            system_instruction=EXTRACTION_PROMPT.format(variables=variables)
+            + (QUALIFICATION_PROMPT.format(criteria=criteria) if criteria else ""),
+            messages=[{"role": "user", "content": f"Transcript:\n{conversation}"}],
+            available_tools=None,
+            temperature=0.0,
+        )
     data = _parse_json(result.text or "")
     raw = data.get("outputs") if isinstance(data.get("outputs"), dict) else {}
     outputs = {d["name"]: _coerce(raw.get(d["name"]), d.get("data_type")) for d in definitions}

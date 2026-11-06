@@ -64,8 +64,10 @@ def vobiz_carrier(monkeypatch):
     provider = VobizTelephonyProvider(auth_id="MA_TEST", auth_token="tok", webhook_secret="vobiz_secret")
     dialed = []
 
-    def fake_dial(customer_number, caller_id, flow_url, status_callback_url=None, custom_field=None):
-        dialed.append({"to": customer_number, "from": caller_id, "answer_url": flow_url, "hangup_url": status_callback_url})
+    def fake_dial(customer_number, caller_id, flow_url, status_callback_url=None, custom_field=None,
+                  max_duration_s=None, ring_timeout_s=None):
+        dialed.append({"to": customer_number, "from": caller_id, "answer_url": flow_url, "hangup_url": status_callback_url,
+                       "max_duration_s": max_duration_s, "ring_timeout_s": ring_timeout_s})
         return {"api_id": "api-1", "message": "call fired", "request_uuid": "req-123"}
 
     monkeypatch.setattr(provider, "initiate_outbound_call", fake_dial)

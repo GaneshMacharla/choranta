@@ -6,9 +6,19 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin
 from app.models.user import User
+from app.services.capacity_stats import capacity_report
 from app.services.finance import finance_summary, period_range
 
 router = APIRouter(prefix="/finance", tags=["Finance"])
+
+
+@router.get("/capacity")
+def get_capacity(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Call limits, what's holding calls back, and whether the data supports buying more capacity (admin only)."""
+    return capacity_report(db)
 
 
 @router.get("/summary")

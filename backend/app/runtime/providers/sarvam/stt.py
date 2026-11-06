@@ -11,6 +11,7 @@ import httpx
 from app.core.config import settings
 from app.runtime.exceptions import ProviderUnavailable
 from app.runtime.providers.base import TranscriptResult
+from app.runtime.providers.sarvam import limits
 from app.runtime.providers.sarvam.common import (
     CONNECT_RETRIES, CONNECT_TIMEOUT_S, KEEPALIVE_S, SARVAM_REST_BASE_URL, sarvam_headers, sarvam_language,
 )
@@ -289,6 +290,7 @@ class SarvamLiveTranscriber:
                     raise
                 except Exception as e:
                     logger.warning(f"Live transcription send failed ({type(e).__name__}: {e}); using REST.")
+                    limits.note_ws_failure(e)
                     if segment is not None:
                         segment.failed = True
                     self._changed.set()
@@ -297,6 +299,7 @@ class SarvamLiveTranscriber:
             pass
 
     async def _open(self) -> None:
+        await limits.wait_for_ws_open()
         manager = self._connect_fn()
         ws = await manager.__aenter__()
         self._manager, self._ws = manager, ws
@@ -336,12 +339,14 @@ class SarvamLiveTranscriber:
                     pending.text = text
                 elif kind == "error":
                     logger.warning(f"Live transcription error from Sarvam: {getattr(data, 'message', data)}")
+                    limits.note_ws_failure(getattr(data, "message", data))
                 del self._speech[:-20]  # older segments belong to finished utterances
                 self._changed.set()
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.info(f"Live transcription connection ended ({type(e).__name__}: {e}).")
+            limits.note_ws_failure(e)
         if self._ws is ws:
             self._ws = None
         self._changed.set()

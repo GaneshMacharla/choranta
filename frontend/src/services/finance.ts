@@ -39,8 +39,39 @@ export interface FinanceSummary {
   clients: FinanceClientRow[];
 }
 
+export interface CapacityTotals {
+  peak_live_calls: number;
+  inbound_refused_busy: number;
+  callbacks_queued: number;
+  callbacks_connected: number;
+  callbacks_expired: number;
+  campaign_wait_seconds: number;
+  vobiz_limit_rejections: number;
+  sarvam_rejections: number;
+  gemini_fallbacks: number;
+  live_call_minutes: number;
+}
+
+export interface CapacityReport {
+  limits: {
+    vobiz_lines: number;
+    platform_cap: number;
+    sarvam_calls: number | null;
+    usable_calls: number;
+    reserved_for_inbound: number;
+    outbound_lines: number;
+  };
+  bottleneck: 'vobiz' | 'sarvam' | 'platform';
+  live: { calls: number; free_inbound: number; free_outbound: number; outbound_paused_s: number };
+  llm_requests_per_call_minute: { assumed: number; measured: number | null };
+  today: CapacityTotals;
+  last_30_days: CapacityTotals;
+  hints: { level: 'warning' | 'info'; text: string }[];
+}
+
 export const financeService = {
   summary: (period: FinancePeriod) => request<FinanceSummary>(`/finance/summary?period=${period}`),
+  capacity: () => request<CapacityReport>('/finance/capacity'),
 };
 
 /** ₹ amount, whole rupees once it's large enough that paise don't matter. */

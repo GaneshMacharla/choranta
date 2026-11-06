@@ -23,6 +23,7 @@ logger = logging.getLogger("choranta")
 
 
 INVENTORY_SYNC_CHECK_S = 60
+CAPACITY_STATS_FLUSH_S = 60
 
 
 async def _inventory_sync_loop() -> None:
@@ -81,6 +82,20 @@ async def _billing_sweep_loop() -> None:
         await asyncio.sleep(settings.BILLING_SWEEP_S)
 
 
+async def _capacity_stats_loop() -> None:
+    """Saves the capacity counters (peak calls, refusals, Sarvam rejections) for the Finance page."""
+    from app.db.session import SessionLocal
+    from app.services.capacity_stats import run_capacity_stats_job
+    while True:
+        await asyncio.sleep(CAPACITY_STATS_FLUSH_S)
+        try:
+            await asyncio.to_thread(run_capacity_stats_job, SessionLocal)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Capacity stats error: {type(e).__name__}: {e}")
+
+
 async def _whatsapp_loop() -> None:
     """Sends queued WhatsApp follow-ups and checks follow-up messages waiting for WhatsApp's approval."""
     from app.db.session import SessionLocal
@@ -106,6 +121,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_number_rental_loop()),
             asyncio.create_task(_campaign_loop()),
             asyncio.create_task(_billing_sweep_loop()),
+            asyncio.create_task(_capacity_stats_loop()),
             asyncio.create_task(_whatsapp_loop()),
         ]
         if settings.ENVIRONMENT != "test" else []

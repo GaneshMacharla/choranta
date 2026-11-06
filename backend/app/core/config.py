@@ -64,6 +64,22 @@ class Settings(BaseSettings):
     SARVAM_TIMEOUT_S: float = 10.0
     SARVAM_FALLBACK_TO_GEMINI: bool = True               # use Gemini for a turn if Sarvam errors
     SARVAM_RATE_LIMIT_RETRIES: int = 1                   # retries after a 429/503 before falling back
+    # The Sarvam plan's limits, per account (dashboard: indus.sarvam.ai/rate-limits; 0 = don't apply). Defaults are
+    # pay-as-you-go; Pro is 200 / 100 / 200 and Growth 300 / 100 / 1000. Adding credits doesn't raise them.
+    SARVAM_LLM_REQUESTS_PER_MIN: int = 60                # sarvam-105b-conversations
+    SARVAM_STT_WS_LIMIT: int = 20                        # streaming connections at once
+    SARVAM_TTS_WS_LIMIT: int = 60
+    # LLM requests one live call makes per minute: sets how many calls the plan carries. An estimate until the
+    # Finance page's capacity card has measured it from real calls.
+    SARVAM_LLM_REQUESTS_PER_CALL: float = 10.0
+    SARVAM_LLM_LIVE_WAIT_S: float = 0.5                  # a caller is waiting: after this, use the fallback model
+    SARVAM_LLM_BACKGROUND_WAIT_S: float = 30.0           # post-call work and drafts can wait this long for a request
+    SARVAM_LLM_LIVE_RESERVE: float = 0.25                # share of the request allowance background work leaves alone
+    SARVAM_WS_OPEN_SPACING_MS: int = 300                 # Sarvam rejects connections opened in a burst
+    # This many Sarvam rejections inside the window pause new outbound calls for OUTBOUND_PAUSE_S; inbound carries on
+    SPEECH_BACKPRESSURE_REJECTIONS: int = 3
+    SPEECH_BACKPRESSURE_WINDOW_S: float = 60.0
+    OUTBOUND_PAUSE_S: float = 30.0                       # also applies after Vobiz rejects a call at its limit
     SARVAM_STT_MODEL: str = "saaras:v4"
     SARVAM_STT_LANGUAGE: str = "unknown"                 # "unknown" = auto-detect (Hindi/English/Telugu/...)
     SARVAM_TTS_MODEL: str = "bulbul:v3"
@@ -115,11 +131,17 @@ class Settings(BaseSettings):
     GST_REGISTERED: bool = False
     # Monthly plans are retired: clients buy credits and pay per call (existing plans run out, then stop)
     PAYG_ONLY: bool = True
-    # Live calls across all clients. Each call makes ~6-10 Sarvam LLM requests a minute, so Sarvam
-    # Starter (sarvam-105b: 40 req/min, STT stream: 20, bulbul:v3 stream: 30) carries about 5 at once.
-    # Raise with the Sarvam plan (Pro ~7, Business ~15); never above the Exotel account's concurrent
+    # Live calls across all clients, as a manual ceiling. The Sarvam plan's limits (SARVAM_LLM_REQUESTS_PER_MIN and
+    # below) and the Vobiz account's lines also apply: the lowest wins. Never above the Exotel account's concurrent
     # calls or Voicebot channels.
     MAX_CONCURRENT_CALLS_PLATFORM: int = 5
+    # Lines campaigns and other outbound calls leave free, because a caller can't wait the way a campaign can
+    INBOUND_RESERVED_LINES: int = 1
+    # When every line is busy, an inbound caller is told they'll be called back and is called when a line frees up
+    MISSED_CALL_CALLBACKS_ENABLED: bool = True
+    MISSED_CALL_CALLBACK_MAX_ATTEMPTS: int = 2
+    MISSED_CALL_CALLBACK_EXPIRY_MIN: int = 30
+    MISSED_CALL_CALLBACK_RETRY_MIN: int = 5
     # Calls at a time follow the wallet (each live call holds a full-length call's credits); this caps it
     # for any one client, at most the platform cap
     MAX_CONCURRENT_CALLS_PER_CLIENT: int = 5
@@ -229,6 +251,9 @@ class Settings(BaseSettings):
     # & Quotas on Vobiz; default 3 and 1). Raise these when Vobiz raises the account's limits.
     VOBIZ_MAX_CONCURRENT_CALLS: int = 3
     VOBIZ_CPS: float = 1.0                         # new outbound calls per second
+    # Sent with every Vobiz dial, so a line isn't held by a phone nobody answers or by a call our server lost track of
+    VOBIZ_RING_TIMEOUT_S: int = 25                 # hang up after this much ringing; 0 = leave it to Vobiz
+    VOBIZ_TIME_LIMIT_MARGIN_S: int = 120           # Vobiz ends a call this long after the agent's own limit
     NUMBER_PURCHASES_PER_HOUR: int = 10            # per staff user; the same limits cover the client portal
     NUMBER_RELEASES_PER_HOUR: int = 10
     NUMBER_SYNCS_PER_HOUR: int = 6

@@ -78,7 +78,9 @@ class MockTelephonyProvider(TelephonyProvider):
         caller_id: str,
         flow_url: str,
         status_callback_url: Optional[str] = None,
-        custom_field: Optional[str] = None
+        custom_field: Optional[str] = None,
+        max_duration_s: Optional[int] = None,
+        ring_timeout_s: Optional[int] = None,
     ) -> Dict[str, Any]:
         import uuid
         call_sid = f"mock_call_{uuid.uuid4().hex[:12]}"

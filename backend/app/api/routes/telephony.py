@@ -33,8 +33,8 @@ from app.runtime.providers.telephony.vobiz import vobiz_call_status
 from app.runtime.telephony.session import TelephonyMediaSession, active_telephony_calls
 from app.services.call_costing import estimate_call_cost
 from app.services.pricing import PricingSnapshot, get_pricing
-from app.services import phone_numbers
-from app.services.billing import agent_max_call_seconds, call_budget
+from app.services import call_capacity, missed_call_callbacks, phone_numbers
+from app.services.billing import PLATFORM_BUSY_REASON, agent_max_call_seconds, call_budget
 from app.services.call_status import apply_call_status
 from app.services.outbound_calls import OutboundCallError, place_outbound_call, with_webhook_token
 from app.schemas.telephony import (
@@ -434,14 +434,17 @@ async def _answer_call(request: Request, db: Session, provider_name: str) -> Res
             return Response(content=rejection, media_type=media_type)
 
         # Reserves the call's credit budget under the wallet lock; the Call created below commits it
-        allowed, block_reason, _, credit_budget = call_budget(
-            db, route.client_id, agent_max_call_seconds(db, route.agent_version_id), lock=True)
+        max_duration_s = agent_max_call_seconds(db, route.agent_version_id)
+        allowed, block_reason, _, credit_budget = call_budget(db, route.client_id, max_duration_s, lock=True, inbound=True)
         if not allowed:
             db.commit()  # releases the wallet lock
             logger.warning(f"Rejecting inbound call for client {route.client_id}: {block_reason}")
-            rejection = telephony_provider.generate_reject_response(
-                "This service is temporarily unavailable. Please call back later."
-            )
+            message = "This service is temporarily unavailable. Please call back later."
+            if block_reason == PLATFORM_BUSY_REASON:
+                call_capacity.count("inbound_refused_busy")
+                if missed_call_callbacks.queue(db, route, payload.caller_number):
+                    message = "All our lines are busy right now. We will call you back shortly."
+            rejection = telephony_provider.generate_reject_response(message)
             return Response(content=rejection, media_type=media_type)
 
     # 5. Idempotency: webhook retries reuse the existing Call / Session
@@ -463,7 +466,7 @@ async def _answer_call(request: Request, db: Session, provider_name: str) -> Res
                 destination_number=payload.destination_number,
                 status="RINGING",
                 started_at=datetime.now(timezone.utc),
-                metadata_={**(payload.raw_params or {}),
+                metadata_={**(payload.raw_params or {}), "max_duration_s": max_duration_s,
                            **({"credit_budget": credit_budget} if credit_budget is not None else {})},
             ))
 

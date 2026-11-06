@@ -86,7 +86,8 @@ def wallet_out(db: Session, client_id: str, limit: int = 100) -> Dict[str, Any]:
         db.query(WalletTransaction).filter(WalletTransaction.client_id == client_id)
         .order_by(WalletTransaction.created_at.desc()).limit(limit).all()
     )
-    allowed, reason, _ = billing.check_call_allowed(db, client_id)
+    # inbound=True: the client isn't blocked just because only the lines kept for inbound calls are free
+    allowed, reason, _ = billing.check_call_allowed(db, client_id, inbound=True)
     out = {
         "client_id": client_id,
         "balance_inr": wallet.balance_inr,

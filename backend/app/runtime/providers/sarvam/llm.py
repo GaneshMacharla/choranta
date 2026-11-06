@@ -12,7 +12,9 @@ from app.core.config import settings
 from app.runtime.exceptions import ProviderUnavailable
 from app.runtime.providers.base import LLMResult, ToolCallRequest
 from app.runtime.providers.llm import LLMProvider
+from app.runtime.providers.sarvam import limits
 from app.runtime.providers.sarvam.common import CONNECT_RETRIES, CONNECT_TIMEOUT_S, KEEPALIVE_S
+from app.services import call_capacity
 
 logger = logging.getLogger("choranta.runtime.providers.sarvam.llm")
 
@@ -209,15 +211,28 @@ class SarvamLLMProvider(LLMProvider):
     ) -> LLMResult:
         return await asyncio.to_thread(self.generate, system_instruction, messages, available_tools, temperature, model)
 
+    @staticmethod
+    def _can_fall_back() -> bool:
+        return bool(settings.SARVAM_FALLBACK_TO_GEMINI and settings.GEMINI_API_KEY)
+
     def _open_stream(self, payload: Dict[str, Any]) -> httpx.Response:
         """Starts a streamed completion, retrying when Sarvam is rate-limited or briefly overloaded."""
         attempt = 0
         while True:
+            # Over our allowance: use the fallback without sending a request Sarvam would probably refuse. With no
+            # fallback, sending it anyway is the caller's only chance of an answer.
+            if not limits.acquire_llm_request() and self._can_fall_back():
+                call_capacity.record_speech_rejection("sarvam_llm_limited")
+                raise RuntimeError("Over the Sarvam plan's request limit")
+            if not limits.is_background():
+                call_capacity.count("sarvam_llm_requests")
             response = self._client.send(self._client.build_request("POST", "/chat/completions", json=payload), stream=True)
             if response.status_code < 400:
                 return response
             body = response.read().decode("utf-8", "replace")[:500]
             response.close()
+            if response.status_code in RATE_LIMIT_STATUSES:
+                call_capacity.record_speech_rejection(f"sarvam_{response.status_code}")
             if response.status_code in RATE_LIMIT_STATUSES and attempt < settings.SARVAM_RATE_LIMIT_RETRIES:
                 wait = _retry_wait(response, attempt)
                 logger.warning(f"Sarvam LLM returned {response.status_code}; retrying in {wait:.1f}s")
@@ -282,8 +297,9 @@ class SarvamLLMProvider(LLMProvider):
             if emitted:
                 logger.error(f"Sarvam stream interrupted mid-response: {type(e).__name__}: {e}")
                 raise
-            if settings.SARVAM_FALLBACK_TO_GEMINI and settings.GEMINI_API_KEY:
+            if self._can_fall_back():
                 logger.warning(f"Sarvam LLM failed ({type(e).__name__}: {e}); falling back to Gemini for this turn.")
+                call_capacity.count("gemini_fallbacks")
                 from app.runtime.providers.gemini.llm import GeminiLLMProvider
                 yield from GeminiLLMProvider().generate_stream(
                     system_instruction=system_instruction,
