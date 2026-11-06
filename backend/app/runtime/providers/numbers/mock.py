@@ -6,17 +6,22 @@ It keeps its own state in its own session, like a real carrier would: a purchase
 even when Choranta's own save afterwards fails, so recovery paths can be exercised.
 
 Buying one of the SCENARIO_NUMBERS reproduces a failure (shown in the inventory so staff know what they're picking).
+
+Customer KYC: every well-formed document verifies, except a PAN (or the PAN inside a GSTIN) whose four digits are
+0000, which fails. A company name containing "fail" finds no CIN. The mock keeps no KYC state of its own
+(kyc_status is None), so Choranta decides from its own record which checks are done.
 """
 import secrets
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
+from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
 
 from app.models.numbers import MockCarrierNumber
 from app.runtime.providers.numbers.base import (
-    InsufficientBalance, InventoryNumber, NumberNotFound, NumberProvider, NumberUnavailable, OwnedNumber, Page,
-    ProviderAuthError, ProviderUncertain, ProviderValidationError, Subaccount, Trunk,
+    InsufficientBalance, InventoryNumber, KycResult, NumberNotFound, NumberProvider, NumberUnavailable, OwnedNumber,
+    Page, ProviderAuthError, ProviderUncertain, ProviderValidationError, Subaccount, Trunk,
 )
 
 MOCK_BALANCE = 5000.0
@@ -173,9 +178,47 @@ class MockNumberProvider(NumberProvider):
     def list_trunks(self) -> List[Trunk]:
         return list(TRUNKS)
 
-    def create_subaccount(self, *, name, email, phone, description, kyc_mode) -> Subaccount:
+    def create_subaccount(self, *, name, email, phone, description, kyc_mode, business_type=None) -> Subaccount:
+        if kyc_mode == "customer_use" and not email:
+            raise ProviderValidationError("Mock carrier: customer_use sub-accounts need an email.")
         return Subaccount(auth_id=f"SA_MOCK{secrets.token_hex(5).upper()}", auth_token=secrets.token_urlsafe(24),
                           kyc_mode=kyc_mode)
+
+    def update_subaccount(self, sub_auth_id, *, business_type=None, enabled=None) -> None:
+        pass
+
+    def create_application(self, *, name, answer_url) -> str:
+        return f"mock_app_{secrets.token_hex(4)}"
+
+    @staticmethod
+    def _pan_result(kind: str, pan: str, name: str) -> KycResult:
+        if pan[5:9] == "0000":
+            return KycResult(kind=kind, status="failed", message="Mock carrier: no record found (simulated).")
+        return KycResult(kind=kind, status="verified", name=name)
+
+    def kyc_verify_pan(self, sub_auth_id, pan) -> KycResult:
+        return self._pan_result("pan", pan, "MOCK BUSINESS OWNER")
+
+    def kyc_verify_gst(self, sub_auth_id, gstin) -> KycResult:
+        return self._pan_result("gst", gstin[2:12], "MOCK BUSINESS PRIVATE LIMITED")
+
+    def kyc_cin_search(self, sub_auth_id, company_name) -> List[Dict[str, str]]:
+        if "fail" in company_name.lower():
+            return []
+        return [{"cin": "U72900TG2024PTC000001", "company_name": f"{company_name.upper()} PRIVATE LIMITED", "status": "Active"},
+                {"cin": "U72900TG2019PTC000002", "company_name": f"{company_name.upper()} SERVICES LLP", "status": "Strike Off"}]
+
+    def kyc_cin_confirm(self, sub_auth_id, company_name, cin) -> KycResult:
+        return KycResult(kind="cin", status="verified", name=company_name)
+
+    def kyc_digilocker_initiate(self, sub_auth_id, redirect_url, state) -> Dict[str, str]:
+        # Straight back to Choranta, as if the customer had approved on DigiLocker
+        sep = "&" if "?" in redirect_url else "?"
+        return {"auth_url": f"{redirect_url}{sep}{urlencode({'state': state})}",
+                "access_request_id": f"AR_MOCK{secrets.token_hex(4).upper()}"}
+
+    def kyc_digilocker_verify(self, sub_auth_id, access_request_id) -> KycResult:
+        return KycResult(kind="aadhaar", status="verified")
 
     def assign_subaccount(self, e164: str, sub_auth_id: str) -> None:
         self._owned_row(e164)

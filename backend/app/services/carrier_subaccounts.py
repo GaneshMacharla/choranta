@@ -1,14 +1,15 @@
 """
-Each client's Vobiz sub-account: created on their first number, holding their numbers and placing their calls.
+Each client's Vobiz sub-account: created when they start business verification, KYC'd by Vobiz in the client's own
+name (kyc_mode customer_use; see services/verifications.py), then holding their numbers and placing their calls.
 
-Off by default (VOBIZ_SUBACCOUNTS_ENABLED). Vobiz confirmed on 2026-11-02 that sub-accounts get no lines of their
-own: they share the main account's concurrent calls and CPS. They also can't use the main account's applications
-or SIP trunks, so a number moved into one loses the inbound application attached to it. Kept for if Vobiz changes
-that. Clients never see it: with kyc_mode personal_use the sub-account runs on Choranta's KYC and is billed to
-Choranta's main account, and Choranta charges the client's wallet as before.
+A sub-account can't use the main account's applications, so each gets its own inbound application pointing at
+Choranta's answer URL, and the client's numbers are attached to it. Lines and CPS are still the main account's,
+shared by everyone (billing.platform_headroom, wait_for_dial_slot). Vobiz bills the main account; Choranta charges
+the client's wallet as before.
 
-Moving a number out of a sub-account is refused for 15 days after its last call (Vobiz's cool-off). Until then the
-number stays where it is (ProviderNumber.subaccount_auth_id) and can't go to another client.
+Numbers move in only once the client is verified (an unverified sub-account's calls are blocked); until then a
+number staff gave the client stays on the main account. Moving a number out is refused for 15 days after its last
+call (Vobiz's cool-off): it stays where it is (ProviderNumber.subaccount_auth_id) and can't go to another client.
 """
 import logging
 import threading
@@ -22,7 +23,10 @@ from app.core import secrets_box
 from app.core.config import settings
 from app.models.client import Client
 from app.models.numbers import CarrierSubaccount, NumberOperation, ProviderNumber
-from app.runtime.providers.numbers import NumberNotFound, NumberProvider, NumberProviderError, ProviderUncertain
+from app.models.verification import ClientVerification
+from app.runtime.providers.numbers import (
+    NotConfigured, NumberNotFound, NumberProvider, NumberProviderError, ProviderUncertain, subaccount_provider,
+)
 from app.services import number_service as svc
 
 logger = logging.getLogger("choranta.services.carrier_subaccounts")
@@ -48,17 +52,19 @@ def _op(db: Session, pn: Optional[ProviderNumber], kind: str, actor: svc.Actor, 
     return op
 
 
-def ensure(db: Session, provider: NumberProvider, client: Client, actor: svc.Actor) -> CarrierSubaccount:
+def ensure(db: Session, provider: NumberProvider, client: Client, actor: svc.Actor, *, email: str,
+           business_type: str) -> CarrierSubaccount:
     """The client's sub-account, created at the carrier the first time. Raises NumberProviderError."""
     existing = for_client(db, client.id)
     if existing:
         return existing
-    kyc_mode = settings.VOBIZ_SUBACCOUNT_KYC_MODE or "personal_use"
-    op = _op(db, None, "CREATE_SUBACCOUNT", actor, client.id, {"kyc_mode": kyc_mode})
+    kyc_mode = settings.VOBIZ_SUBACCOUNT_KYC_MODE or "customer_use"
+    op = _op(db, None, "CREATE_SUBACCOUNT", actor, client.id, {"kyc_mode": kyc_mode, "business_type": business_type})
     try:
         created = provider.create_subaccount(
-            name=client.name, email=client.contact_email, phone=client.contact_phone,
+            name=client.name, email=email, phone=client.contact_phone,
             description=f"Choranta client {client.client_code or client.id}", kyc_mode=kyc_mode,
+            business_type=business_type,
         )
     except NumberProviderError as exc:
         op.operation_status = "UNCERTAIN" if isinstance(exc, ProviderUncertain) else "FAILED"
@@ -67,7 +73,7 @@ def ensure(db: Session, provider: NumberProvider, client: Client, actor: svc.Act
         raise
     row = CarrierSubaccount(client_id=client.id, provider="vobiz", auth_id=created.auth_id,
                             auth_token_enc=secrets_box.encrypt(created.auth_token), kyc_mode=created.kyc_mode or kyc_mode,
-                            is_mock=provider.is_mock, created_by=actor.label)
+                            business_type=business_type, is_mock=provider.is_mock, created_by=actor.label)
     db.add(row)
     op.operation_status = "SUCCEEDED"
     op.result = {"sub_auth_id": created.auth_id}
@@ -79,8 +85,56 @@ def ensure(db: Session, provider: NumberProvider, client: Client, actor: svc.Act
         logger.warning("Sub-account %s for client %s was created twice; %s is unused at Vobiz",
                        created.auth_id, client.id, created.auth_id)
         return for_client(db, client.id)
-    logger.info("%s created sub-account %s for client %s", actor.label, created.auth_id, client.id)
+    logger.info("%s created sub-account %s (%s, %s) for client %s", actor.label, created.auth_id, kyc_mode,
+                business_type, client.id)
     return row
+
+
+def token(sub: CarrierSubaccount) -> str:
+    return secrets_box.decrypt(sub.auth_token_enc)
+
+
+def _answer_url() -> str:
+    base = (settings.TELEPHONY_BASE_URL or "").rstrip("/")
+    if not base:
+        raise NotConfigured("TELEPHONY_BASE_URL isn't set, so Vobiz has no address to send inbound calls to.")
+    from app.services.outbound_calls import with_webhook_token  # outbound_calls imports this module
+    return with_webhook_token(f"{base}/api/telephony/vobiz/answer", "vobiz")
+
+
+def _close(provider: NumberProvider) -> None:
+    close = getattr(provider, "close", None)
+    if close:
+        close()
+
+
+def ensure_application(db: Session, sub: CarrierSubaccount, actor: svc.Actor) -> str:
+    """The sub-account's own inbound application, created the first time. Raises NumberProviderError."""
+    if sub.application_id:
+        return sub.application_id
+    answer_url = "https://mock.invalid/api/telephony/vobiz/answer" if sub.is_mock else _answer_url()
+    op = _op(db, None, "CREATE_APPLICATION", actor, sub.client_id, {"sub_auth_id": sub.auth_id})
+    provider = subaccount_provider(db, sub.auth_id, token(sub))
+    try:
+        app_id = provider.create_application(name=f"Choranta {sub.auth_id}", answer_url=answer_url)
+    except NumberProviderError as exc:
+        op.operation_status = "UNCERTAIN" if isinstance(exc, ProviderUncertain) else "FAILED"
+        op.error_code, op.error_message = exc.code, exc.message
+        db.commit()
+        raise
+    finally:
+        _close(provider)
+    sub.application_id = app_id
+    op.operation_status = "SUCCEEDED"
+    op.result = {"application_id": app_id}
+    db.commit()
+    return app_id
+
+
+def _verified(db: Session, client_id: str) -> bool:
+    return (db.query(ClientVerification.id)
+            .filter(ClientVerification.client_id == client_id, ClientVerification.is_mock.is_(svc.mock_mode()),
+                    ClientVerification.status == "VERIFIED").first() is not None)
 
 
 def move_out(db: Session, provider: NumberProvider, pn: ProviderNumber, actor: svc.Actor) -> bool:
@@ -111,38 +165,49 @@ def move_out(db: Session, provider: NumberProvider, pn: ProviderNumber, actor: s
     return True
 
 
-def move_in(db: Session, provider: NumberProvider, pn: ProviderNumber, client: Client, actor: svc.Actor) -> None:
+def move_in(db: Session, provider: NumberProvider, pn: ProviderNumber, client: Client, actor: svc.Actor) -> bool:
     """
-    Puts the number in the client's sub-account. Refused (409) while it is still held in another client's
-    sub-account. Any other failure leaves it on the main account, where it still works, and flags it for staff.
+    Puts the number in the verified client's sub-account and routes its inbound calls to the sub-account's
+    application. True when it's there. False when it stays on the main account: the client isn't verified yet, or
+    the move failed (flagged for staff; the main account's routing keeps working). Refused (409) while the number
+    is still held in another client's sub-account.
     """
     sub = for_client(db, client.id)
-    if sub and pn.subaccount_auth_id == sub.auth_id:
-        return
-    if pn.subaccount_auth_id and not move_out(db, provider, pn, actor):
+    if pn.subaccount_auth_id and (not sub or pn.subaccount_auth_id != sub.auth_id) and not move_out(db, provider, pn, actor):
         raise svc.NumberServiceError(409, "subaccount_cool_off", pn.attention)
-    try:
-        sub = ensure(db, provider, client, actor)
-    except NumberProviderError as exc:
-        pn.attention = (f"Couldn't create {client.name}'s Vobiz sub-account ({exc.message}); its calls use the main "
-                        "account's lines for now. Re-assign the number to try again.")
+    if not sub or not _verified(db, client.id):
+        return False
+    if pn.subaccount_auth_id != sub.auth_id:
+        op = _op(db, pn, "ASSIGN_SUBACCOUNT", actor, client.id, {"sub_auth_id": sub.auth_id})
+        try:
+            provider.assign_subaccount(pn.e164, sub.auth_id)
+        except NumberProviderError as exc:
+            op.operation_status = "UNCERTAIN" if isinstance(exc, ProviderUncertain) else "FAILED"
+            op.error_code, op.error_message = exc.code, exc.message
+            pn.attention = (f"Couldn't move the number into {client.name}'s Vobiz sub-account ({exc.message}); it "
+                            "stays on the main account for now. Re-assign the number to try again.")
+            db.commit()
+            return False
+        pn.subaccount_auth_id = sub.auth_id
+        op.operation_status = "SUCCEEDED"
         db.commit()
-        return
-    op = _op(db, pn, "ASSIGN_SUBACCOUNT", actor, client.id, {"sub_auth_id": sub.auth_id})
     try:
-        provider.assign_subaccount(pn.e164, sub.auth_id)
+        app_id = ensure_application(db, sub, actor)
+        sub_provider = subaccount_provider(db, sub.auth_id, token(sub))
+        try:
+            sub_provider.attach_application(pn.e164, app_id)
+        finally:
+            _close(sub_provider)
     except NumberProviderError as exc:
-        op.operation_status = "UNCERTAIN" if isinstance(exc, ProviderUncertain) else "FAILED"
-        op.error_code, op.error_message = exc.code, exc.message
-        pn.attention = (f"Couldn't move the number into {client.name}'s Vobiz sub-account ({exc.message}); its calls "
-                        "use the main account's lines for now. Re-assign the number to try again.")
+        pn.attention = (f"Inbound calls to this number won't reach Choranta: couldn't attach it to {client.name}'s "
+                        f"Vobiz application ({exc.message}). Re-assign the number to try again.")
         db.commit()
-        return
-    pn.subaccount_auth_id = sub.auth_id
-    if pn.attention and "sub-account" in pn.attention:
+        return True
+    pn.application_id = app_id
+    if pn.attention and ("sub-account" in pn.attention or "Inbound" in pn.attention):
         pn.attention = None
-    op.operation_status = "SUCCEEDED"
     db.commit()
+    return True
 
 
 def caller_credentials(db: Session, e164: str) -> Optional[Tuple[str, str]]:

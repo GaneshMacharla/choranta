@@ -85,10 +85,11 @@ def assign(db: Session, number_id: str, *, client_id: str, actor: svc.Actor, age
                 provider.assign_trunk(pn.e164, trunk_id)
             except NumberProviderError as exc:
                 raise _failed(db, op, exc)
-        svc.attach_application(db, provider, pn, actor)
+        moved = False
         if carrier_subaccounts.enabled() and pn.provider == "vobiz":
             try:
-                carrier_subaccounts.move_in(db, provider, pn, client, actor)
+                # A verified client's own sub-account, with its own inbound application
+                moved = carrier_subaccounts.move_in(db, provider, pn, client, actor)
             except svc.NumberServiceError as exc:
                 op = db.get(NumberOperation, op.id)
                 op.operation_status, op.error_code, op.error_message = "FAILED", exc.code, exc.message
@@ -96,6 +97,8 @@ def assign(db: Session, number_id: str, *, client_id: str, actor: svc.Actor, age
                 raise svc.NumberServiceError(exc.status_code, exc.code, exc.message, op)
             except NumberProviderError as exc:
                 raise _failed(db, op, exc)
+        if not moved:
+            svc.attach_application(db, provider, pn, actor)
 
     try:
         routing = clash or PhoneNumber(id=generate_unique_id("phn", 10), client_id=client_id, provider=pn.provider,

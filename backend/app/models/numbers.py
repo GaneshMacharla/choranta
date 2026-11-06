@@ -116,6 +116,8 @@ class CarrierSubaccount(Base):
     auth_id = Column(String(128), nullable=False, unique=True)
     auth_token_enc = Column(Text, nullable=False)
     kyc_mode = Column(String(32), nullable=False)        # personal_use (Choranta's KYC) or customer_use
+    business_type = Column(String(32), nullable=True)    # what the client is KYC'd as at Vobiz (individual, ...)
+    application_id = Column(String(128), nullable=True)  # its own inbound application (it can't use the main one's)
     is_mock = Column(Boolean, nullable=False, default=False)
     created_by = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=_now, nullable=False)

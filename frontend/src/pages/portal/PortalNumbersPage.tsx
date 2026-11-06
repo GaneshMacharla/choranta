@@ -32,7 +32,7 @@ export const PortalNumbersPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [buyOpen, setBuyOpen] = useState(false);
-  const [verification, setVerification] = useState<{ status: VerificationStatus; note: string | null }>({ status: 'NOT_STARTED', note: null });
+  const [verification, setVerification] = useState<VerificationStatus>('NOT_STARTED');
   const [contactPhone, setContactPhone] = useState<string | null>(null);
   const [activating, setActivating] = useState<PortalNumber | null>(null);
 
@@ -41,7 +41,7 @@ export const PortalNumbersPage: React.FC = () => {
       .then(([n, a, w]) => {
         setNumbers(n.numbers);
         setPricing(n.pricing);
-        setVerification({ status: n.verification_status, note: n.verification_note });
+        setVerification(n.verification_status);
         setContactPhone(n.contact_phone);
         setAgents(a);
         setBalance(w.balance_inr);
@@ -79,43 +79,33 @@ export const PortalNumbersPage: React.FC = () => {
           <h1 className="text-xl font-bold">Phone numbers</h1>
           <p className="text-xs text-slate-400">Numbers your AI employees answer and call from. Rent is charged monthly from your wallet.</p>
         </div>
-        {verification.status === 'APPROVED' ? (
+        {verification === 'VERIFIED' ? (
           <Button variant="primary" onClick={() => setBuyOpen(true)} disabled={pricing.length === 0}>
             <Plus className="mr-1.5 h-4 w-4" /> Get a number
           </Button>
         ) : (
           <Link to="/portal/verification">
             <Button variant="primary" leftIcon={<ShieldCheck className="h-4 w-4" />}>
-              {verification.status === 'NOT_STARTED' ? 'Verify your business' : 'View verification'}
+              {verification === 'NOT_STARTED' ? 'Verify your business' : 'Finish verification'}
             </Button>
           </Link>
         )}
       </div>
 
-      {verification.status !== 'APPROVED' && (
-        <div className={`flex items-start gap-3 rounded-lg border p-4 text-sm ${
-          verification.status === 'REJECTED' ? 'border-rose-800/60 bg-rose-950/30 text-rose-200'
-            : verification.status === 'PENDING' ? 'border-sky-800/60 bg-sky-950/30 text-sky-100'
-            : 'border-[#143c49] bg-[#071c22] text-slate-200'}`}>
-          {verification.status === 'PENDING' ? <Clock className="mt-0.5 h-5 w-5 shrink-0" /> : <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-[#00df8f]" />}
+      {verification !== 'VERIFIED' && (
+        <div className="flex items-start gap-3 rounded-lg border border-[#143c49] bg-[#071c22] p-4 text-sm text-slate-200">
+          {verification === 'IN_PROGRESS' ? <Clock className="mt-0.5 h-5 w-5 shrink-0 text-sky-300" /> : <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-[#00df8f]" />}
           <div className="space-y-1">
-            {verification.status === 'NOT_STARTED' && (
+            {verification === 'NOT_STARTED' ? (
               <>
                 <p className="font-semibold">Step 1: verify your business (one time)</p>
-                <p className="text-xs text-slate-400">Indian telecom rules require business details and documents before a phone number is issued. It takes about 5 minutes; our team usually reviews it within 1–3 business days.</p>
+                <p className="text-xs text-slate-400">Indian telecom rules require a verified owner for every phone number. Enter your PAN and GSTIN, or verify Aadhaar through DigiLocker: it takes a few minutes and is checked instantly.</p>
               </>
-            )}
-            {verification.status === 'PENDING' && (
+            ) : (
               <>
-                <p className="font-semibold">Your business verification is under review</p>
-                <p className="text-xs opacity-80">We'll notify you when it's approved, usually within 1–3 business days. Then you can get numbers right away.</p>
-              </>
-            )}
-            {verification.status === 'REJECTED' && (
-              <>
-                <p className="font-semibold">Your verification needs a change</p>
-                {verification.note && <p className="text-xs">{verification.note}</p>}
-                <Link to="/portal/verification" className="text-xs font-semibold underline">Fix and resubmit</Link>
+                <p className="font-semibold">Finish verifying your business</p>
+                <p className="text-xs text-slate-400">You've started. Complete the remaining documents and you can get numbers right away.</p>
+                <Link to="/portal/verification" className="text-xs font-semibold underline">Continue verification</Link>
               </>
             )}
           </div>
@@ -140,7 +130,7 @@ export const PortalNumbersPage: React.FC = () => {
           <div className="flex flex-col items-center gap-3 px-6 py-12 text-center text-xs text-slate-400">
             <Phone className="h-8 w-8 text-slate-600" />
             <p>You don't have a phone number yet. Get one so customers can call your AI employee, and so it can call them.</p>
-            {verification.status === 'APPROVED' ? (
+            {verification === 'VERIFIED' ? (
               <Button variant="primary" size="sm" onClick={() => setBuyOpen(true)} disabled={pricing.length === 0}>
                 <Plus className="mr-1 h-3.5 w-3.5" /> Get a number
               </Button>

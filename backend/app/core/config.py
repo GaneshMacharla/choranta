@@ -218,12 +218,13 @@ class Settings(BaseSettings):
     PHONE_NUMBER_MOCK_MODE: bool = False           # simulated carrier with sample numbers; never calls Vobiz; refused in production
     VOBIZ_APPLICATION_ID: Optional[str] = None     # Vobiz XML application (answer URL) bought numbers are attached to for inbound calls
     NUMBER_PURCHASE_CURRENCY: str = "INR"
-    # Off: client numbers stay on the main account. Sub-accounts share the main account's concurrency and CPS
-    # (Vobiz, 2026-11-02) and can't use its applications, so they'd add no lines and break inbound calls.
-    # When on, each client gets a sub-account on their first number. personal_use = the sub-account runs on
-    # Choranta's KYC; customer_use = each client completes its own KYC.
-    VOBIZ_SUBACCOUNTS_ENABLED: bool = False
-    VOBIZ_SUBACCOUNT_KYC_MODE: str = "personal_use"
+    # Each client is KYC-verified in their own name (Vobiz customer_use, the way Vobiz recommends for resellers,
+    # 2026-11-03): business verification creates their sub-account, and once verified their numbers move into it,
+    # with its own inbound application (sub-accounts can't use the main account's). Lines and CPS are still shared
+    # with the main account. Off = every number stays on the main account under Choranta's KYC.
+    VOBIZ_SUBACCOUNTS_ENABLED: bool = True
+    VOBIZ_SUBACCOUNT_KYC_MODE: str = "customer_use"
+    VOBIZ_KYC_TEST_MODE: bool = False              # Vobiz's mock KYC endpoints (magic inputs like TESTSUCCESS0001)
     # The Vobiz account's limits, shared by all clients and sub-accounts, inbound calls included (Settings > Limits
     # & Quotas on Vobiz; default 3 and 1). Raise these when Vobiz raises the account's limits.
     VOBIZ_MAX_CONCURRENT_CALLS: int = 3
@@ -233,8 +234,6 @@ class Settings(BaseSettings):
     NUMBER_SYNCS_PER_HOUR: int = 6
     # Where phone call recordings (stereo WAV: caller left, agent right) are stored
     RECORDINGS_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "recordings")
-    # Business verification (KYC) documents clients upload before buying numbers; private, admin download only
-    KYC_UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "kyc")
     RUN_REAL_TELEPHONY_TESTS: bool = False
 
     # --------------------------------------------------------

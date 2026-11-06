@@ -44,10 +44,11 @@ def verified_business(request, db: Session):
     if "telephony_setup" not in request.fixturenames:
         return
     from app.models.verification import ClientVerification
+    from app.services import verifications
     cid = request.getfixturevalue("telephony_setup")["client"].id
-    if not db.get(ClientVerification, cid):
-        db.add(ClientVerification(client_id=cid, status="APPROVED", legal_name="Test Clinic", pan="ABCDE1234F",
-                                  registered_address="Hyderabad", signatory_name="Owner", documents=[]))
+    if not verifications.get(db, cid):
+        db.add(ClientVerification(client_id=cid, status="VERIFIED", kyc_type="BUSINESS", email="owner@clinic.in",
+                                  calls_blocked=False, is_mock=True, checks={}))
         db.commit()
 
 

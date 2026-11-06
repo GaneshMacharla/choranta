@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.runtime.providers.numbers.base import (
-    InsufficientBalance, InventoryNumber, NotConfigured, NumberNotFound, NumberProvider, NumberProviderError,
-    NumberUnavailable, OwnedNumber, Page, ProviderAuthError, ProviderUnavailable, ProviderUncertain,
+    InsufficientBalance, InventoryNumber, KycResult, KycStatus, NotConfigured, NumberNotFound, NumberProvider,
+    NumberProviderError, NumberUnavailable, OwnedNumber, Page, ProviderAuthError, ProviderUnavailable, ProviderUncertain,
     ProviderValidationError, Subaccount, Trunk,
 )
 
@@ -27,8 +27,18 @@ def number_provider(db: Session) -> NumberProvider:
     return VobizNumberProvider()
 
 
+def subaccount_provider(db: Session, auth_id: str, auth_token: str) -> NumberProvider:
+    """A provider acting as a client's sub-account (for what Vobiz only lets the sub-account itself do)."""
+    if mock_mode():
+        from app.runtime.providers.numbers.mock import MockNumberProvider
+        return MockNumberProvider(db)
+    from app.runtime.providers.numbers.vobiz import VobizNumberProvider
+    return VobizNumberProvider(auth_id=auth_id, auth_token=auth_token)
+
+
 __all__ = [
-    "InsufficientBalance", "InventoryNumber", "NotConfigured", "NumberNotFound", "NumberProvider", "NumberProviderError",
+    "InsufficientBalance", "InventoryNumber", "KycResult", "KycStatus", "NotConfigured", "NumberNotFound", "NumberProvider", "NumberProviderError",
     "NumberUnavailable", "OwnedNumber", "Page", "ProviderAuthError", "ProviderUnavailable", "ProviderUncertain",
     "ProviderValidationError", "Subaccount", "Trunk", "mock_mode", "number_provider",
+    "subaccount_provider",
 ]

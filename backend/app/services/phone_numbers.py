@@ -120,7 +120,7 @@ def buy_number(db: Session, client_id: str, phone_number: str, number_type: str,
                require_verification: bool = True) -> PhoneNumber:
     """Buys the number on Vobiz, gives it to the client and charges the setup fee + first month's rent."""
     if require_verification:
-        verifications.require_approved(db, client_id)
+        verifications.require_verified(db, client_id)
     price = db.get(NumberPricing, number_type)
     if not price or not price.is_available:
         raise ValidationException(f"{number_type} numbers aren't available right now.")

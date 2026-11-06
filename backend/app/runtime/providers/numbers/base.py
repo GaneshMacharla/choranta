@@ -115,6 +115,23 @@ class Trunk:
     name: str
 
 
+@dataclass
+class KycResult:
+    """One document checked by the carrier. calls_blocked is None when the carrier doesn't say."""
+    kind: str                          # pan, gst, cin, aadhaar
+    status: str                        # verified, failed, pending
+    calls_blocked: Optional[bool] = None
+    name: Optional[str] = None         # the name the government record holds (PAN holder, GST legal name)
+    message: Optional[str] = None
+
+
+@dataclass
+class KycStatus:
+    overall: str                       # not_started, pending, verified, failed
+    calls_blocked: bool
+    checks: Dict[str, str] = field(default_factory=dict)  # pan/gst/cin/aadhaar -> not_started/pending/verified/failed
+
+
 # ---------------------------------------------------------------- interface
 
 class NumberProvider:
@@ -159,9 +176,43 @@ class NumberProvider:
         return []
 
     def create_subaccount(self, *, name: str, email: Optional[str], phone: Optional[str], description: str,
-                          kyc_mode: str) -> Subaccount:
+                          kyc_mode: str, business_type: Optional[str] = None) -> Subaccount:
         """A new sub-account; its token is in the result only (the carrier never shows it again)."""
         raise NotImplementedError
+
+    def update_subaccount(self, sub_auth_id: str, *, business_type: Optional[str] = None,
+                          enabled: Optional[bool] = None) -> None:
+        raise NotImplementedError
+
+    def create_application(self, *, name: str, answer_url: str) -> str:
+        """An inbound-call application on the account the provider authenticates as; returns its id."""
+        raise NotImplementedError
+
+    # KYC of a customer sub-account, authenticated as the parent account
+
+    def kyc_verify_pan(self, sub_auth_id: str, pan: str) -> KycResult:
+        raise NotImplementedError
+
+    def kyc_verify_gst(self, sub_auth_id: str, gstin: str) -> KycResult:
+        raise NotImplementedError
+
+    def kyc_cin_search(self, sub_auth_id: str, company_name: str) -> List[Dict[str, str]]:
+        """Companies matching the name: [{cin, company_name, status}]."""
+        raise NotImplementedError
+
+    def kyc_cin_confirm(self, sub_auth_id: str, company_name: str, cin: str) -> KycResult:
+        raise NotImplementedError
+
+    def kyc_digilocker_initiate(self, sub_auth_id: str, redirect_url: str, state: str) -> Dict[str, str]:
+        """{auth_url, access_request_id}: send the customer to auth_url; DigiLocker returns them to redirect_url."""
+        raise NotImplementedError
+
+    def kyc_digilocker_verify(self, sub_auth_id: str, access_request_id: str) -> KycResult:
+        raise NotImplementedError
+
+    def kyc_status(self, sub_auth_id: str) -> Optional[KycStatus]:
+        """The carrier's view of the sub-account's KYC, or None when it keeps none (the mock)."""
+        return None
 
     def assign_subaccount(self, e164: str, sub_auth_id: str) -> None:
         raise NotImplementedError

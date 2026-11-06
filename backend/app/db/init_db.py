@@ -459,6 +459,8 @@ _ADDED_COLUMNS = [
     ("api_keys", "key_enc", "TEXT"),
     ("provider_numbers", "subaccount_auth_id", "VARCHAR(128)"),
     ("number_rentals", "reminders_sent", "JSON"),
+    ("carrier_subaccounts", "business_type", "VARCHAR(32)"),
+    ("carrier_subaccounts", "application_id", "VARCHAR(128)"),
 ]
 
 

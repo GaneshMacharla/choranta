@@ -1,4 +1,4 @@
-import { markUtc, request } from './api';
+import { request } from './api';
 import { Call, CallDetail } from './telephony';
 import { AvailableNumber, NumberPrice, NumberType, PaymentOrder, Subscription } from './plans';
 import { CreditPack } from './pricing';
@@ -133,35 +133,41 @@ export interface PortalNumber {
   activated_by?: string | null;
 }
 
-export type VerificationStatus = 'NOT_STARTED' | 'PENDING' | 'APPROVED' | 'REJECTED';
+export type VerificationStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'VERIFIED';
+export type KycType = 'INDIVIDUAL' | 'BUSINESS';
+export type KycCheckKind = 'pan' | 'gst' | 'cin' | 'aadhaar';
 
-export interface BusinessVerification {
-  status: VerificationStatus;
-  client_id?: string;
-  client_name?: string | null;
-  client_code?: string | null;
-  legal_name?: string;
-  pan?: string;
-  gstin?: string | null;
-  cin?: string | null;
-  registered_address?: string;
-  signatory_name?: string;
-  signatory_designation?: string | null;
-  signatory_phone?: string | null;
-  documents?: Array<{ index: number; kind: string; label: string; filename: string; size: number; content_type: string }>;
-  admin_note?: string | null;
-  submitted_at?: string;
-  reviewed_at?: string | null;
-  document_kinds: Record<string, string>;
+export interface KycCheck {
+  status: 'verified' | 'failed' | 'pending';
+  label: string;
+  value?: string | null;
+  name?: string | null;
+  message?: string | null;
+  checked_at?: string;
 }
 
-/** Multipart upload with the user's token (request() always sends JSON). */
-async function postForm<T>(path: string, form: FormData): Promise<T> {
-  const token = localStorage.getItem('choranta_token');
-  const response = await fetch(`/api${path}`, { method: 'POST', body: form, headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error || data?.detail || response.statusText || 'Upload failed.');
-  return markUtc(data) as T;
+/** Business verification (KYC): Vobiz checks each document on the client's own sub-account. */
+export interface BusinessVerification {
+  status: VerificationStatus;
+  client_id?: string | null;
+  client_name?: string | null;
+  client_code?: string | null;
+  kyc_type?: KycType;
+  email?: string;
+  calls_blocked?: boolean;
+  checks?: Partial<Record<KycCheckKind, KycCheck>>;
+  verified_at?: string | null;
+  updated_at?: string;
+  created_at?: string;
+  kyc_types: Record<KycType, { label: string; hint: string }>;
+  mock?: boolean;
+  test_inputs?: boolean; // Vobiz's KYC test mode: magic values like TESTSUCCESS0001 instead of real numbers
+}
+
+export interface CinMatch {
+  cin: string;
+  company_name: string;
+  status: string;
 }
 
 export interface PaymentInstructions {
@@ -256,7 +262,6 @@ export const portalService = {
       pricing: NumberPrice[];
       grace_days: number;
       verification_status: VerificationStatus;
-      verification_note: string | null;
       contact_phone: string | null;
     }>('/portal/numbers'),
   numberDetail: (id: string) => request<PortalNumber>(`/portal/numbers/${id}`),
@@ -264,7 +269,20 @@ export const portalService = {
     request<PortalNumber>(`/portal/numbers/${id}/test`, { method: 'POST', body: JSON.stringify({ phone }) }),
   activateNumber: (id: string) => request<PortalNumber>(`/portal/numbers/${id}/activate`, { method: 'POST' }),
   verification: () => request<BusinessVerification>('/portal/verification'),
-  submitVerification: (form: FormData) => postForm<BusinessVerification>('/portal/verification', form),
+  startVerification: (kyc_type: KycType, email: string) =>
+    request<BusinessVerification>('/portal/verification/start', { method: 'POST', body: JSON.stringify({ kyc_type, email }) }),
+  verifyPan: (pan: string) =>
+    request<BusinessVerification>('/portal/verification/pan', { method: 'POST', body: JSON.stringify({ pan }) }),
+  verifyGst: (gstin: string) =>
+    request<BusinessVerification>('/portal/verification/gst', { method: 'POST', body: JSON.stringify({ gstin }) }),
+  searchCin: (company_name: string) =>
+    request<{ matches: CinMatch[] }>('/portal/verification/cin/search', { method: 'POST', body: JSON.stringify({ company_name }) }),
+  confirmCin: (company_name: string, cin: string) =>
+    request<BusinessVerification>('/portal/verification/cin', { method: 'POST', body: JSON.stringify({ company_name, cin }) }),
+  startAadhaar: (return_url: string) =>
+    request<{ auth_url: string }>('/portal/verification/aadhaar/start', { method: 'POST', body: JSON.stringify({ return_url }) }),
+  completeAadhaar: (state: string) =>
+    request<BusinessVerification>('/portal/verification/aadhaar/complete', { method: 'POST', body: JSON.stringify({ state }) }),
   availableNumbers: (numberType: NumberType, region?: string) =>
     request<AvailableNumber[]>(`/portal/numbers/available?number_type=${numberType}${region ? `&region=${encodeURIComponent(region)}` : ''}`),
   buyNumber: (phone_number: string, number_type: NumberType) =>

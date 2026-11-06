@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -25,7 +25,8 @@ from app.models.property import Property
 from app.models.subscription import PaymentOrder
 from app.models.user import User
 from app.services import (
-    exotel_numbers, notifications, outbound_insights, phone_numbers, razorpay_gateway, subscriptions, verifications,
+    exotel_numbers, notifications, number_service, outbound_insights, phone_numbers, razorpay_gateway, subscriptions,
+    verifications,
 )
 from app.services.pricing import get_pricing
 
@@ -388,35 +389,88 @@ def my_numbers(account: ClientAccount = Depends(require_client_user), db: Sessio
         "pricing": [phone_numbers.pricing_out(p) for p in phone_numbers.get_pricing(db) if p.is_available],
         "grace_days": settings.NUMBER_GRACE_DAYS,
         "verification_status": verification.status if verification else "NOT_STARTED",
-        "verification_note": verification.admin_note if verification else None,
         "contact_phone": client.contact_phone if client else None,
     }
 
 
+class VerificationStart(BaseModel):
+    kyc_type: str = Field(..., max_length=16)
+    email: str = Field(..., max_length=255)
+
+
+class PanCheck(BaseModel):
+    pan: str = Field(..., max_length=16)
+
+
+class GstCheck(BaseModel):
+    gstin: str = Field(..., max_length=20)
+
+
+class CinSearch(BaseModel):
+    company_name: str = Field(..., max_length=200)
+
+
+class CinConfirm(BaseModel):
+    company_name: str = Field(..., max_length=200)
+    cin: str = Field(..., max_length=32)
+
+
+class AadhaarStart(BaseModel):
+    return_url: str = Field(..., max_length=500)
+
+
+class AadhaarComplete(BaseModel):
+    state: str = Field(..., max_length=200)
+
+
 @router.get("/verification")
 def my_verification(account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
-    """The client's business verification (details and document names; files are never sent back)."""
+    """The client's business verification, each document's result included (re-checked with Vobiz if pending)."""
     _, client_id = account
-    return verifications.out(db, verifications.get(db, client_id))
+    v = verifications.get(db, client_id)
+    if v and any(c.get("status") == "pending" for c in (v.checks or {}).values()):
+        v = verifications.refresh(db, client_id)
+    return verifications.out(db, v)
 
 
-@router.post("/verification")
-async def submit_verification(
-    request: Request, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db),
-):
-    """Multipart form: the business details plus files named after the document kinds (pan_card, ...)."""
-    _, client_id = account
-    form = await request.form()
-    details = {k: form.get(k) for k in ("legal_name", "pan", "gstin", "cin", "registered_address", "signatory_name",
-                                        "signatory_designation", "signatory_phone")}
-    files = {}
-    for kind in verifications.DOCUMENT_KINDS:
-        upload = form.get(kind)
-        if upload is not None and hasattr(upload, "read"):
-            data = await upload.read(verifications.MAX_FILE_BYTES + 1)
-            if data:
-                files[kind] = (upload.filename or kind, data)
-    return verifications.out(db, verifications.submit(db, client_id, details, files))
+@router.post("/verification/start")
+def start_verification(req: VerificationStart, account: ClientAccount = Depends(require_client_user),
+                       db: Session = Depends(get_db)):
+    user, client_id = account
+    actor = number_service.Actor(f"CLIENT {client_id}", user.id)
+    return verifications.out(db, verifications.start(db, client_id, req.kyc_type, req.email, actor))
+
+
+@router.post("/verification/pan")
+def verify_pan(req: PanCheck, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    return verifications.out(db, verifications.verify_pan(db, account[1], req.pan))
+
+
+@router.post("/verification/gst")
+def verify_gst(req: GstCheck, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    return verifications.out(db, verifications.verify_gst(db, account[1], req.gstin))
+
+
+@router.post("/verification/cin/search")
+def search_cin(req: CinSearch, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    return {"matches": verifications.cin_search(db, account[1], req.company_name)}
+
+
+@router.post("/verification/cin")
+def confirm_cin(req: CinConfirm, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    return verifications.out(db, verifications.cin_confirm(db, account[1], req.company_name, req.cin))
+
+
+@router.post("/verification/aadhaar/start")
+def start_aadhaar(req: AadhaarStart, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
+    """Where to send the client to share their Aadhaar from DigiLocker; they come back to return_url."""
+    return verifications.aadhaar_start(db, account[1], req.return_url)
+
+
+@router.post("/verification/aadhaar/complete")
+def complete_aadhaar(req: AadhaarComplete, account: ClientAccount = Depends(require_client_user),
+                     db: Session = Depends(get_db)):
+    return verifications.out(db, verifications.aadhaar_complete(db, account[1], req.state))
 
 
 @router.get("/numbers/available")

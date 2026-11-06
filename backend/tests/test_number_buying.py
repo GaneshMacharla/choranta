@@ -1,47 +1,24 @@
-from urllib.parse import urlparse
 """
-Client number buying: verify the business once (admin approves) -> pick a number -> pay setup fee + first
+Client number buying: verify the business once (Vobiz checks the documents) -> pick a number -> pay setup fee + first
 month -> number is READY_TO_TEST -> assign an AI employee -> test call to the client's phone -> ACTIVE.
 """
-import io
+from urllib.parse import urlparse
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.security import generate_unique_id
 from app.models.billing import WalletTransaction
 from app.models.call import Call
 from app.models.notification import ClientNotification
+from app.models.numbers import CarrierSubaccount, ProviderNumber
 from app.models.phone_number import PhoneNumber
-from app.runtime.providers.registry import default_registry
 from app.services import billing
 from test_billing import company  # noqa: F401
 from test_vobiz_telephony import vobiz_carrier  # noqa: F401
 from test_phase3c_telephony import telephony_setup  # noqa: F401
 from test_portal import _client_headers
-
-PDF = b"%PDF-1.4\n%test document\n"
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
-DETAILS = {
-    "legal_name": "Smile Dental Care Pvt Ltd", "pan": "abcde1234f", "gstin": "36ABCDE1234F1Z5",
-    "registered_address": "Plot 12, KPHB Colony, Kukatpally, Hyderabad 500072",
-    "signatory_name": "Ganesh Macharla", "signatory_designation": "Director", "signatory_phone": "+919876500000",
-}
-
-
-def _files(**overrides):
-    files = {"pan_card": ("pan.pdf", PDF), "gst_certificate": ("gst.pdf", PDF),
-             "address_proof": ("bill.png", PNG), "signatory_id": ("aadhaar.pdf", PDF)}
-    files.update(overrides)
-    return {k: (v[0], io.BytesIO(v[1]), "application/octet-stream") for k, v in files.items() if v is not None}
-
-
-@pytest.fixture
-def kyc_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "KYC_UPLOAD_DIR", str(tmp_path / "kyc"), raising=False)
-    return tmp_path
 
 
 @pytest.fixture
@@ -50,47 +27,17 @@ def portal(client: TestClient, auth_headers: dict, telephony_setup):
     return {"headers": _client_headers(client, auth_headers, cid, f"numbers-{cid}@clinic.example.com"), "client_id": cid}
 
 
-def _verify(client, auth_headers, portal):
-    resp = client.post("/api/portal/verification", headers=portal["headers"], data=DETAILS, files=_files())
-    assert resp.status_code == 200, resp.text
-    assert client.post(f"/api/verifications/{portal['client_id']}/approve", headers=auth_headers).status_code == 200
-
-
-def test_verification_checks_and_review(client: TestClient, auth_headers: dict, operator_headers: dict, portal, db: Session, kyc_dir):
-    h, cid = portal["headers"], portal["client_id"]
-    assert client.get("/api/portal/verification", headers=h).json()["status"] == "NOT_STARTED"
-
-    assert client.post("/api/portal/verification", headers=h, data={**DETAILS, "pan": "123"}, files=_files()).status_code == 422
-    assert client.post("/api/portal/verification", headers=h, data={**DETAILS, "gstin": "36ZZZZZ9999Z1Z5"}, files=_files()).status_code == 422
-    assert client.post("/api/portal/verification", headers=h, data=DETAILS, files=_files(address_proof=None)).status_code == 422
-    assert client.post("/api/portal/verification", headers=h, data=DETAILS,
-                       files=_files(pan_card=("pan.exe", b"MZ\x90\x00not a pdf"))).status_code == 422
-    big = b"%PDF-" + b"0" * (5 * 1024 * 1024 + 10)
-    assert client.post("/api/portal/verification", headers=h, data=DETAILS, files=_files(pan_card=("big.pdf", big))).status_code == 422
-
-    submitted = client.post("/api/portal/verification", headers=h, data=DETAILS, files=_files()).json()
-    assert submitted["status"] == "PENDING" and submitted["pan"] == "ABCDE1234F" and len(submitted["documents"]) == 4
-    assert "path" not in submitted["documents"][0]  # files never go back to the client
-
-    # Admin queue, download, reject -> client fixes -> approve
-    queue = client.get("/api/verifications", headers=operator_headers, params={"status": "PENDING"}).json()
-    assert cid in [v["client_id"] for v in queue]
-    doc = client.get(f"/api/verifications/{cid}/documents/0", headers=operator_headers)
-    assert doc.status_code == 200 and doc.content.startswith(b"%PDF-")
-    assert client.get(f"/api/verifications/{cid}/documents/0", headers=h).status_code == 403
-    assert client.post(f"/api/verifications/{cid}/approve", headers=operator_headers).status_code == 403
-    assert client.post(f"/api/verifications/{cid}/reject", headers=auth_headers, json={"note": "Address proof is blurry"}).status_code == 200
-    assert client.get("/api/portal/verification", headers=h).json()["admin_note"] == "Address proof is blurry"
-
-    resubmitted = client.post("/api/portal/verification", headers=h, data=DETAILS, files={"address_proof": ("new.png", io.BytesIO(PNG), "image/png")})
-    assert resubmitted.status_code == 200 and resubmitted.json()["status"] == "PENDING"  # other documents kept
-    assert client.post(f"/api/verifications/{cid}/approve", headers=auth_headers).json()["status"] == "APPROVED"
-    kinds = {n.kind for n in db.query(ClientNotification).filter(ClientNotification.client_id == cid).all()}
-    assert {"VERIFICATION_REJECTED", "VERIFICATION_APPROVED"} <= kinds
+def _verify(client, portal):
+    h = portal["headers"]
+    assert client.post("/api/portal/verification/start", headers=h,
+                       json={"kyc_type": "BUSINESS", "email": "owner@smile.in"}).status_code == 200
+    client.post("/api/portal/verification/pan", headers=h, json={"pan": "ABCDE1234F"})
+    done = client.post("/api/portal/verification/gst", headers=h, json={"gstin": "36ABCDE1234F1Z5"})
+    assert done.json()["status"] == "VERIFIED", done.text
 
 
 def test_buy_test_and_activate_number(client: TestClient, auth_headers: dict, portal, telephony_setup, db: Session,
-                                      company, kyc_dir, vobiz_carrier):
+                                      company, vobiz_carrier):
     h, cid = portal["headers"], portal["client_id"]
 
     # Setup fee set by the admin; the client has 1000 bought credits
@@ -106,11 +53,14 @@ def test_buy_test_and_activate_number(client: TestClient, auth_headers: dict, po
     assert blocked.status_code == 403 and "Verify your business" in blocked.json()["error"]
     assert blocked.json()["details"]["code"] == "VERIFICATION_REQUIRED"
 
-    _verify(client, auth_headers, portal)
+    _verify(client, portal)
     bought = client.post("/api/portal/numbers", headers=h, json={"phone_number": pick, "number_type": "Mobile"})
     assert bought.status_code == 201, bought.text
     number = bought.json()
     assert number["status"] == "READY_TO_TEST"
+    # It sits in the client's own (KYC'd) Vobiz sub-account
+    sub = db.query(CarrierSubaccount).filter(CarrierSubaccount.client_id == cid).one()
+    assert db.query(ProviderNumber).filter(ProviderNumber.e164 == pick).one().subaccount_auth_id == sub.auth_id
     assert billing.get_wallet(db, cid).balance_inr == pytest.approx(1000 - 699 - 199)
     notes = {t.note for t in db.query(WalletTransaction).filter(WalletTransaction.client_id == cid).all()}
     assert any(n and n.startswith("Number setup fee") for n in notes)
