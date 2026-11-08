@@ -25,7 +25,7 @@ from app.models.property import Property
 from app.models.subscription import PaymentOrder
 from app.models.user import User
 from app.services import (
-    exotel_numbers, notifications, number_service, outbound_insights, phone_numbers, razorpay_gateway, subscriptions,
+    notifications, number_service, outbound_insights, phone_numbers, razorpay_gateway, subscriptions,
     verifications,
 )
 from app.services.pricing import get_pricing
@@ -132,6 +132,8 @@ def summary(account: ClientAccount = Depends(require_client_user), db: Session =
     daily: Dict[str, Dict[str, float]] = defaultdict(lambda: {"calls": 0, "minutes": 0.0, "spend_inr": 0.0})
     month = {"calls": 0, "minutes": 0.0, "spend_inr": 0.0}
     for c in calls:
+        if (c.metadata_ or {}).get("is_test"):
+            continue  # trial and number-test calls aren't usage
         created = _aware(c.created_at)
         minutes = (c.duration_seconds or 0) / 60.0
         if created >= since:
@@ -209,6 +211,8 @@ def wallet(account: ClientAccount = Depends(require_client_user), db: Session = 
 @router.get("/invoices")
 def invoices(account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
     _, client_id = account
+    if not settings.INVOICES_ENABLED:
+        return []
     rows = db.query(Invoice).filter(Invoice.client_id == client_id).order_by(Invoice.created_at.desc()).all()
     return [invoice_out(i) for i in rows]
 
@@ -217,7 +221,7 @@ def invoices(account: ClientAccount = Depends(require_client_user), db: Session 
 def invoice_pdf(invoice_id: str, account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
     _, client_id = account
     invoice = db.get(Invoice, invoice_id)
-    if not invoice or invoice.client_id != client_id:
+    if not invoice or invoice.client_id != client_id or not settings.INVOICES_ENABLED:
         raise HTTPException(status_code=404, detail="Invoice not found.")
     return invoice_pdf_response(invoice)
 
@@ -248,8 +252,9 @@ def payment_instructions(account: ClientAccount = Depends(require_client_user)):
         "gst_rate_percent": settings.EFFECTIVE_GST_RATE_PERCENT,
         "gst_registered": settings.GST_REGISTERED,
         "note": "After paying, share the UTR / UPI reference with your Choranta contact. Your wallet is credited "
-                + ("with the amount excluding GST, and a GST invoice is issued." if settings.GST_REGISTERED
-                   else "with the full amount (1 credit per Rs 1), and a payment receipt is issued."),
+                + ("with the amount excluding GST" if settings.GST_REGISTERED else "with the full amount (1 credit per Rs 1)")
+                + ("." if not settings.INVOICES_ENABLED
+                   else ", and a GST invoice is issued." if settings.GST_REGISTERED else ", and a payment receipt is issued."),
     }
 
 
@@ -476,10 +481,7 @@ def complete_aadhaar(req: AadhaarComplete, account: ClientAccount = Depends(requ
 @router.get("/numbers/available")
 def available_numbers(number_type: str = "Landline", region: str | None = None,
                       account: ClientAccount = Depends(require_client_user), db: Session = Depends(get_db)):
-    try:
-        return phone_numbers.search(db, number_type, region)
-    except exotel_numbers.ExotelNumberError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+    return phone_numbers.search(db, number_type, region)
 
 
 @router.post("/numbers", status_code=201)
@@ -573,4 +575,6 @@ def my_agents(account: ClientAccount = Depends(require_client_user), db: Session
         a for (a,) in db.query(AgentVersion.agent_id)
         .filter(AgentVersion.agent_id.in_([a.id for a in agents]), AgentVersion.status == "PUBLISHED").distinct().all()
     } if agents else set()
-    return [{"id": a.id, "name": a.name, "role": a.role, "published": a.id in published} for a in agents]
+    from app.runtime.readiness.checker import live_block_reason
+    return [{"id": a.id, "name": a.name, "role": a.role, "published": a.id in published,
+             "live": a.id in published and live_block_reason(a) is None} for a in agents]

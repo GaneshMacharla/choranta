@@ -153,15 +153,18 @@ def test_version_comparison_and_rollback(client, auth_headers):
     assert v3["configuration_json"]["conversation"]["tone"] != "soothing"
 
 
-def test_knowledge_tools_and_integrations_attachment(client, auth_headers):
+def test_knowledge_tools_and_integrations_attachment(client, auth_headers, db):
+    from app.models import KnowledgeSource
+    db.add(KnowledgeSource(id="knw_attach_test", name="Clinic FAQ.txt", type="FAQ", description="Test document", status="READY", meta={}))
+    db.commit()
     cli = client.post("/api/clients", json={"name": "Multi-Tool Medical", "business_type": "HOSPITAL"}, headers=auth_headers).json()
     agent = client.post("/api/agents", json={"client_id": cli["id"], "name": "General Triage", "role": "Triage AI"}, headers=auth_headers).json()
     agent_id = agent["id"]
 
     # 1. Knowledge catalog
     knw_list = client.get("/api/knowledge", headers=auth_headers).json()
-    assert len(knw_list) > 0
-    test_knw_id = knw_list[0]["id"]
+    assert any(k["id"] == "knw_attach_test" for k in knw_list)
+    test_knw_id = "knw_attach_test"
 
     # Attach knowledge to agent
     att_knw = client.post(f"/api/agents/{agent_id}/knowledge/{test_knw_id}", headers=auth_headers)

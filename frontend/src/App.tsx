@@ -33,7 +33,7 @@ import { PortalCallsPage } from './pages/portal/PortalCallsPage';
 import { PortalBillingPage } from './pages/portal/PortalBillingPage';
 import { PortalInventoryPage } from './pages/portal/PortalInventoryPage';
 import { PortalCoursesPage } from './pages/portal/PortalCoursesPage';
-import { PortalKnowledgePage } from './pages/portal/PortalKnowledgePage';
+// import { PortalKnowledgePage } from './pages/portal/PortalKnowledgePage'; // hidden from clients for now
 import { PortalNumbersPage } from './pages/portal/PortalNumbersPage';
 import { PortalPlansPage } from './pages/portal/PortalPlansPage';
 import {
@@ -81,7 +81,8 @@ export function App() {
               <Route path="billing" element={<PortalBillingPage />} />
               <Route path="inventory" element={<PortalInventoryPage />} />
               <Route path="courses" element={<PortalCoursesPage />} />
-              <Route path="knowledge" element={<PortalKnowledgePage />} />
+              {/* Knowledge base hidden from clients for now */}
+              {/* <Route path="knowledge" element={<PortalKnowledgePage />} /> */}
             </Route>
 
             {/* Protected Internal Routes */}

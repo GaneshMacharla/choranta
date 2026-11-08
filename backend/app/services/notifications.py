@@ -30,7 +30,7 @@ def has_ai_employee(db: Session, client_id: str) -> bool:
     if db.query(Agent.id).filter(Agent.client_id == client_id).first():
         return True
     return db.query(AgentRequest.id).filter(
-        AgentRequest.client_id == client_id, AgentRequest.status.in_(("PENDING", "IN_PROGRESS", "COMPLETED"))
+        AgentRequest.client_id == client_id, AgentRequest.status.in_(("PENDING", "IN_PROGRESS", "CLIENT_TRIAL", "COMPLETED"))
     ).first() is not None
 
 

@@ -40,6 +40,7 @@ from app.schemas.agent_spec import ConversationSpec
 from app.runtime.tools.catalog import describe_tools
 from app.runtime.telephony.recorder import CallRecorder
 from app.runtime.telephony import tts_cache
+from app.runtime.workers import LLM_POOL, run_tool
 from app.runtime import call_rules
 from app.services.call_costing import estimate_call_cost
 
@@ -81,8 +82,13 @@ PHONE_STYLE_INSTRUCTIONS = VOICE_STYLE_INSTRUCTIONS
 END_CALL_TOOL = call_rules.END_CALL_TOOL
 # The schema's stock fallback; agents that keep it get a natural, localized line instead
 STOCK_FALLBACK_RESPONSE = ConversationSpec.model_fields["fallback_response"].default
-# When the agent's voice provider fails mid-call (outage, out of credits), sentences are spoken with this one
-TTS_FALLBACK_PROVIDER = "sarvam"
+
+
+def _is_question(sentence: str) -> bool:
+    return sentence.rstrip().rstrip("\"'”’)").endswith(("?", "？"))
+# When the agent's voice fails on a streamed reply, wait at most this long for the rest of its text before
+# saying it in the fallback voice (see VOICE_TTS_FALLBACK_PROVIDERS)
+FALLBACK_FEED_WAIT_S = 10
 
 # The agent stops talking for the caller only once this much pitched sound (a voice) is heard: loud rumble,
 # breath or wind on the mic has almost none, so it no longer cuts the agent off
@@ -357,6 +363,26 @@ class TelephonyMediaSession:
         if self.context and self.context.agent_spec.conversation.greeting and self._should_greet():
             greeting = self.context.resolved_greeting or self.context.agent_spec.conversation.greeting
             self._start_turn(self._speak_text(greeting, is_greeting=True))
+        self._release_db()
+
+    def _release_db(self) -> None:
+        """
+        Ends the call's open database transaction, if any, so its pooled connection goes back to the pool:
+        a call lasts minutes but only touches the database at setup, the odd lookup, and the end. Loaded rows
+        stay usable (not expired); the next query simply borrows a connection again.
+        """
+        db = self.db
+        if not db.in_transaction():
+            return
+        expire = db.expire_on_commit
+        db.expire_on_commit = False
+        try:
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Could not release the database connection: {type(e).__name__}: {e}")
+            db.rollback()
+        finally:
+            db.expire_on_commit = expire
 
     def _should_greet(self) -> bool:
         return True
@@ -827,6 +853,7 @@ class TelephonyMediaSession:
             t_llm = time.perf_counter()
             first_token_ms = None
             rounds = 0
+            end_refused = False
             while True:
                 final = None
                 messages = self.context.conversation.to_llm_messages()
@@ -837,6 +864,9 @@ class TelephonyMediaSession:
                     available_tools=tools if rounds < limits.max_tool_rounds else None,
                 )
                 streamed_text: List[str] = []
+                round_start = len(turn.full_text_parts)
+                spoken: List[str] = []       # sentences actually queued for speech this round
+                skipped_chars = 0            # read past the cap while looking for the reply's question
                 try:
                     async for item in stream:
                         if isinstance(item, str):
@@ -846,16 +876,32 @@ class TelephonyMediaSession:
                             streamed_text.append(item)
                             turn.full_text_parts.append(item)
                             for sentence in chunker.feed(item):
+                                over_cap = bool(max_chars) and queued_chars >= max_chars
+                                if over_cap and not _is_question(sentence):
+                                    # Past the cap: skip extras (EMI, exact timings) but keep reading for the question
+                                    skipped_chars += len(sentence)
+                                    continue
                                 await put(sentence)
+                                spoken.append(sentence)
                                 queued_chars += len(sentence)
-                            if max_chars and queued_chars >= max_chars:
-                                # Long-winded reply: stop after the sentence that crossed the cap
+                                if over_cap:
+                                    capped = True  # the question after the facts: said, and the reply ends on it
+                                    break
+                            if capped:
+                                break
+                            if max_chars and queued_chars >= max_chars and (
+                                    spoken and _is_question(spoken[-1])
+                                    or skipped_chars >= max(0, settings.VOICE_QUESTION_SEARCH_CHARS)):
+                                # Long-winded reply: it ended on its question, or none came soon enough
                                 capped = True
                                 break
                         else:
                             final = item
                 finally:
                     await stream.aclose()
+                if skipped_chars:
+                    # Remember only what the caller heard, so the conversation doesn't assume the skipped extras
+                    turn.full_text_parts[round_start:] = [" ".join(spoken)]
                 if final is not None:
                     self.context.usage_tracker.record_llm(
                         final.usage.get("input_tokens", 0), final.usage.get("output_tokens", 0)
@@ -869,6 +915,19 @@ class TelephonyMediaSession:
                     break
                 if final is None or not final.tool_calls or rounds >= limits.max_tool_rounds:
                     break
+
+                if call_rules.wants_to_end(final.tool_calls) and call_rules.refuse_early_end(
+                        self.context.conversation, end_refused, "".join(streamed_text) or final.text):
+                    # Hanging up on a caller who hasn't finished: say what happens next instead (see call_rules)
+                    end_refused = True
+                    call_rules.refuse_end_call(self.context.conversation, final.text, final.tool_calls)
+                    self._emit(RuntimeEventType.TOOL_CALL_COMPLETED, {
+                        "tool_name": "end_call", "success": False, "error": "refused: caller hadn't finished"})
+                    for sentence in chunker.flush():
+                        await put(sentence)
+                        queued_chars += len(sentence)
+                    rounds += 1
+                    continue
 
                 if any(tc.tool_name == "end_call" for tc in final.tool_calls):
                     # The agent is wrapping up: say goodbye (if it hasn't) and hang up after speaking
@@ -911,7 +970,7 @@ class TelephonyMediaSession:
                         "call_id": tc.id, "tool_name": tc.tool_name, "arguments": tc.arguments
                     })
                     t_tool = time.perf_counter()
-                    result = await asyncio.to_thread(
+                    result = await run_tool(
                         self.runtime.tool_executor.execute_tool,
                         tool_call_id=tc.id,
                         tool_name=tc.tool_name,
@@ -933,7 +992,10 @@ class TelephonyMediaSession:
 
             if not capped:
                 for sentence in chunker.flush():
+                    if max_chars and queued_chars >= max_chars and not _is_question(sentence):
+                        continue  # past the cap: the leftover is an extra, not the question
                     await put(sentence)
+                    queued_chars += len(sentence)
             if not "".join(turn.full_text_parts).strip():
                 fallback = self._fallback_text()
                 turn.full_text_parts.append(fallback)
@@ -1119,17 +1181,36 @@ class TelephonyMediaSession:
             raise
         except Exception as e:
             logger.error(f"TTS failed for sentence: {type(e).__name__}: {e}")
-            if not sentence.audio and spec.providers.tts != TTS_FALLBACK_PROVIDER:
-                # e.g. Cartesia out of credits: say it in a Sarvam voice rather than leave the caller in silence
+            if not sentence.audio:
+                # e.g. the voice provider is down or out of credits: say it in another vendor's voice rather
+                # than leave the caller in silence
                 await self._synthesize_fallback(sentence)
         finally:
             sentence.done = True
             sentence.updated.set()
 
+    def _fallback_tts_provider(self) -> Optional[str]:
+        """The first voice provider in VOICE_TTS_FALLBACK_PROVIDERS other than the agent's own that has an API key."""
+        own = self.context.agent_spec.providers.tts
+        for name in (p.strip().lower() for p in settings.VOICE_TTS_FALLBACK_PROVIDERS.split(",")):
+            if name and name != own and getattr(settings, f"{name.upper()}_API_KEY", None):
+                return name
+        return None
+
     async def _synthesize_fallback(self, sentence: _SpokenSentence) -> None:
         spec = self.context.agent_spec
+        name = self._fallback_tts_provider()
+        if not name:
+            logger.error(f"No fallback voice configured after {spec.providers.tts} failed (VOICE_TTS_FALLBACK_PROVIDERS).")
+            return
         try:
-            fallback = self.registry.get_tts(TTS_FALLBACK_PROVIDER)
+            if sentence.feed is not None:
+                # A streamed utterance: wait for the LLM to finish writing it, so the whole reply is said
+                for _ in range(FALLBACK_FEED_WAIT_S * 20):
+                    if sentence.feed.closed:
+                        break
+                    await asyncio.sleep(0.05)
+            fallback = self.registry.get_tts(name)
             native = self._native_rate_kwargs(fallback)
             async with _speech_provider_slot():
                 async for chunk in fallback.synthesize_stream(
@@ -1139,11 +1220,12 @@ class TelephonyMediaSession:
                     if chunk:
                         sentence.audio.extend(self._carrier_audio(chunk, bool(native)))
                         sentence.updated.set()
-            logger.warning(f"Spoke a sentence with the {TTS_FALLBACK_PROVIDER} voice after {spec.providers.tts} failed.")
+            self.context.usage_tracker.record_tts(len(sentence.audio) / self._carrier_bytes_per_second, characters=len(sentence.text))
+            logger.warning(f"Spoke a sentence with the {name} voice after {spec.providers.tts} failed.")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"Fallback TTS failed too: {type(e).__name__}: {e}")
+            logger.error(f"Fallback TTS ({name}) failed too: {type(e).__name__}: {e}")
 
     async def _play_sentence(self, turn: _AssistantTurn, sentence: _SpokenSentence, on_wait=None) -> None:
         """Sends one utterance's audio paced to real time; after a false interruption, resumes at the phrase it was in."""
@@ -1327,6 +1409,7 @@ class TelephonyMediaSession:
         try:
             while not self.closed:
                 await asyncio.sleep(0.5)
+                self._release_db()
                 if not self.context:
                     continue
                 budget_state = self._budget_state()
@@ -1520,7 +1603,7 @@ async def _iterate_in_thread(fn, **kwargs) -> AsyncIterator[Any]:
         finally:
             put(("end", None))
 
-    loop.run_in_executor(None, run)
+    loop.run_in_executor(LLM_POOL, run)
     try:
         while True:
             kind, value = await queue.get()

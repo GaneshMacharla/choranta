@@ -102,7 +102,7 @@ REAL_ESTATE_LEAD_QUALIFICATION_TEMPLATE: Dict[str, Any] = {
             "primary": "en-IN",
             "supported": ["en-IN", "hi", "te"]
         },
-        "knowledge_sources": ["knw_property_catalog"],
+        "knowledge_sources": [],
         "tools": [
             "search_properties",
             "update_lead_record"
@@ -264,7 +264,7 @@ COACHING_ADMISSION_COUNSELLOR_TEMPLATE: Dict[str, Any] = {
             "primary": "en-IN",
             "supported": ["en-IN", "hi", "te"]
         },
-        "knowledge_sources": ["knw_coaching_course_catalog"],
+        "knowledge_sources": [],
         "tools": [
             "check_availability",
             "book_appointment",
@@ -383,6 +383,8 @@ for _tpl in AVAILABLE_AGENT_TEMPLATES:
     _tpl["default_config"]["instructions"].update(CALL_SCRIPTS.get(_tpl["id"], {}))
     _tpl["default_config"]["instructions"]["script_source"] = _tpl["id"] if _tpl["id"] in CALL_SCRIPTS else ""
     # Switched-off tools aren't offered by any template
+    # An agent built from the template starts with the template's call direction
+    _tpl["default_config"].setdefault("business_context", {})["call_direction"] = _tpl["call_direction"]
     _tpl["default_config"]["tools"] = live_tool_ids(_tpl["default_config"].get("tools"))
     _tpl["preview"]["enabled_tools"] = live_tool_ids(_tpl["preview"].get("enabled_tools"))
 

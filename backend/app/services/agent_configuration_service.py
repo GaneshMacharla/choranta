@@ -1,11 +1,12 @@
+from typing import List, Tuple
 from sqlalchemy.orm import Session
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import NotFoundException, ValidationException
 from app.models.agent import Agent
 from app.models.client import Client
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.client_repository import ClientRepository
 from app.repositories.agent_configuration_repository import AgentConfigurationRepository
-from app.repositories.knowledge_repository import KnowledgeRepository
+from app.repositories.knowledge_repository import KnowledgeRepository, belongs_to_agent
 from app.repositories.tool_repository import ToolRepository
 from app.repositories.integration_repository import IntegrationRepository
 from app.schemas.agent_spec import (
@@ -15,6 +16,7 @@ from app.schemas.agent_spec import (
 )
 from app.services.agent_spec_builder import AgentSpecBuilder
 from app.services.agent_spec_validator import AgentSpecValidator
+from app.services.knowledge_store import DOCUMENT
 
 
 class AgentConfigurationService:
@@ -49,7 +51,9 @@ class AgentConfigurationService:
 
         cfg_dict = config_record.configuration_data.copy()
         # Merge attached sources
-        cfg_dict["knowledge_sources"] = sorted(list(set(cfg_dict.get("knowledge_sources", []) + attached_knw)))
+        cfg_dict["knowledge_sources"], _ = self.usable_knowledge(
+            agent, sorted(list(set(cfg_dict.get("knowledge_sources", []) + attached_knw)))
+        )
         cfg_dict["tools"] = sorted(list(set(cfg_dict.get("tools", []) + attached_tools)))
         cfg_dict["integrations"] = sorted(list(set(cfg_dict.get("integrations", []) + attached_ints)))
 
@@ -63,6 +67,11 @@ class AgentConfigurationService:
         agent = self.agent_repo.get_by_id(agent_id)
         if not agent:
             raise NotFoundException("Agent", agent_id)
+
+        usable, foreign = self.usable_knowledge(agent, data.knowledge_sources)
+        if foreign:
+            raise ValidationException(f"This AI employee can't use knowledge from another client ({', '.join(foreign)}).")
+        data = data.model_copy(update={"knowledge_sources": usable})
 
         config_record = self.config_repo.save_or_update(agent_id, data.model_dump())
 
@@ -93,6 +102,20 @@ class AgentConfigurationService:
             configuration=data,
             updated_at=config_record.updated_at.isoformat()
         )
+
+    def usable_knowledge(self, agent: Agent, knowledge_ids: List[str]) -> Tuple[List[str], List[str]]:
+        """
+        Splits knowledge ids into (what this agent can use, what belongs to someone else). Uploaded documents are
+        for the team to read, so they're left out of both. Unknown ids stay in the first list; publishing reports them.
+        """
+        usable, foreign = [], []
+        for knowledge_id in knowledge_ids:
+            source = self.knowledge_repo.get_by_id(knowledge_id)
+            if source is not None and not belongs_to_agent(source, agent):
+                foreign.append(knowledge_id)
+            elif getattr(source, "type", None) != DOCUMENT:
+                usable.append(knowledge_id)
+        return usable, foreign
 
     def validate_configuration(self, agent_id: str) -> ValidationResult:
         agent = self.agent_repo.get_by_id(agent_id)

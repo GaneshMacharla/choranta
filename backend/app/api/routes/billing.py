@@ -99,6 +99,7 @@ def wallet_out(db: Session, client_id: str, limit: int = 100) -> Dict[str, Any]:
         "max_concurrent_calls": billing.client_concurrency_limit(db, client_id),
         "live_calls": billing.live_call_count(db, client_id),
         "gst_registered": settings.GST_REGISTERED,
+        "invoices_enabled": settings.INVOICES_ENABLED,
         "subscription": subscriptions.subscription_out(db, client_id),
         "transactions": [transaction_out(t) for t in txns],
     }
@@ -184,6 +185,8 @@ def adjust_wallet(client_id: str, req: AdjustmentRequest, db: Session = Depends(
 @router.get("/clients/{client_id}/invoices")
 def list_invoices(client_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_operator)) -> List[Dict[str, Any]]:
     _client_or_404(db, client_id)
+    if not settings.INVOICES_ENABLED:
+        return []
     invoices = db.query(Invoice).filter(Invoice.client_id == client_id).order_by(Invoice.created_at.desc()).all()
     return [invoice_out(i) for i in invoices]
 
@@ -191,7 +194,7 @@ def list_invoices(client_id: str, db: Session = Depends(get_db), current_user: U
 @router.get("/invoices/{invoice_id}/pdf")
 def get_invoice_pdf(invoice_id: str, db: Session = Depends(get_db), current_user: User = Depends(require_operator)):
     invoice = db.get(Invoice, invoice_id)
-    if not invoice:
+    if not invoice or not settings.INVOICES_ENABLED:
         raise HTTPException(status_code=404, detail="Invoice not found.")
     return invoice_pdf_response(invoice)
 

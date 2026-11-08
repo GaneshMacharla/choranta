@@ -124,6 +124,9 @@ class AgentService:
             update_dict["status"] = target_status
 
         updated = self.agent_repo.update(agent, update_dict)
+        if update_dict.get("status") == "DEPLOYED":
+            from app.services.agent_requests import complete_for_agent
+            complete_for_agent(self.db, updated)
         return self._to_response(updated, client_name=client.name)
 
     def delete_agent(self, agent_id: str) -> None:

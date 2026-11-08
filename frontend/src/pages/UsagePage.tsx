@@ -215,8 +215,8 @@ export const UsagePage: React.FC = () => {
           <div className="flex items-start gap-2 text-xs text-slate-500">
             <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
             <p>
-              Call cost is estimated from the configured provider rates (the same ones calls are charged from), not a carrier
-              invoice; compare with Settings → Carrier cost check. Revenue and cost exclude GST; test calls aren't counted.
+              Call cost is estimated from the configured provider rates (the same ones calls are charged from), not the carrier's
+              actual bill. Revenue and cost exclude GST; test calls aren't counted.
               {data.mock_numbers > 0 && ` Includes ${data.mock_numbers} simulated (mock mode) number${data.mock_numbers === 1 ? '' : 's'}.`}
             </p>
           </div>

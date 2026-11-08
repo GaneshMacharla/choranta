@@ -45,7 +45,7 @@ def test_coaching_template_creates_valid_agent(db):
         assert config["business_context"]["business_name"] == client.name
         assert "counsellor" in config["identity"]["persona"].lower()
         assert config["languages"]["supported"] == ["en-IN", "hi", "te"]
-        assert config["knowledge_sources"] == ["knw_coaching_course_catalog"]
+        assert config["knowledge_sources"] == []
         assert config["tools"] == []  # every tool is switched off for now (SWITCHED_OFF_TOOLS)
 
         company_var = next(v for v in config["variables"]["inputs"] if v["name"] == "company_name")

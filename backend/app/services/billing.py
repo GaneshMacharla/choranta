@@ -4,7 +4,8 @@ Prepaid credits.
 1 credit = Rs 1 (pre-GST). Clients buy credits by recharging (online, bank transfer or UPI); the payment
 issues a GST tax invoice (tax on the advance) and adds the taxable value to the wallet as bought credits,
 which never expire. Until the company is GST-registered (settings.GST_REGISTERED) no GST is charged:
-the full amount becomes credits and the document is a payment receipt. As soon as a call ends it costs its real cost + the admin's profit %, so tax is never
+the full amount becomes credits and the document is a payment receipt. With settings.INVOICES_ENABLED off no document
+is created at all. As soon as a call ends it costs its real cost + the admin's profit %, so tax is never
 charged twice.
 
 Clients on a monthly plan (services/subscriptions.py) use the period's plan credits first; only the rest
@@ -281,12 +282,14 @@ def _next_invoice_number(db: Session, fy: str) -> tuple:
 def _issue_invoice(
     db: Session, client_id: str, amount_received: float, reference: Optional[str], admin_id: Optional[str],
     description: Optional[str] = None, issue_date: Optional[date] = None,
-) -> Tuple[Invoice, Dict[str, Any]]:
-    """Adds (does not commit) a GST tax invoice for a GST-inclusive amount received."""
+) -> Tuple[Optional[Invoice], Dict[str, Any]]:
+    """Adds (does not commit) a GST tax invoice for a GST-inclusive amount received; no invoice while they're switched off."""
     if amount_received <= 0:
         raise ValidationException("Payment amount must be greater than zero.")
     bill_to = _bill_to(db, client_id)
     split = gst_split(amount_received, bill_to.get("state_code"))
+    if not settings.INVOICES_ENABLED:
+        return None, split
     day = issue_date or datetime.now(timezone.utc).date()
     fy = financial_year(day)
     sequence, number = _next_invoice_number(db, fy)
@@ -325,14 +328,15 @@ def record_payment(
         type="CREDIT",
         amount_inr=split["taxable_inr"],
         balance_after_inr=wallet.balance_inr,
-        invoice_id=invoice.id,
+        invoice_id=invoice.id if invoice else None,
         reference=reference,
-        note=f"Recharge, invoice {invoice.number}",
+        note=f"Recharge, invoice {invoice.number}" if invoice else "Recharge",
         created_by=admin_id,
     )
     db.add(txn)
     db.flush()
-    invoice.transaction_id = txn.id
+    if invoice:
+        invoice.transaction_id = txn.id
     notifications.notify(
         db, client_id, "CREDITS_ADDED", f"{notifications.credits_text(split['taxable_inr'])} credits added",
         f"You now have {notifications.credits_text(wallet.balance_inr)} bought credits. They never expire.",
@@ -340,8 +344,9 @@ def record_payment(
     )
     if commit:
         db.commit()
-    logger.info(f"Recorded payment of Rs {amount_received} for {client_id}: invoice {invoice.number}, wallet {wallet.balance_inr}")
-    return {"invoice_id": invoice.id, "invoice_number": invoice.number, "balance_inr": wallet.balance_inr, **split}
+    logger.info(f"Recorded payment of Rs {amount_received} for {client_id}: wallet {wallet.balance_inr}")
+    return {"invoice_id": invoice.id if invoice else None, "invoice_number": invoice.number if invoice else None,
+            "balance_inr": wallet.balance_inr, **split}
 
 
 def plan_price_with_gst(plan: Plan) -> float:
@@ -381,8 +386,8 @@ def pay_for_plan(
                              link="/portal/employees", level="success")
     if commit:
         db.commit()
-    logger.info(f"Recorded {plan.name} plan payment for {client_id}: invoice {invoice.number}")
-    return {"invoice_id": invoice.id, "invoice_number": invoice.number,
+    logger.info(f"Recorded {plan.name} plan payment for {client_id}")
+    return {"invoice_id": invoice.id if invoice else None, "invoice_number": invoice.number if invoice else None,
             "subscription": subscriptions.subscription_out(db, client_id), **split}
 
 
@@ -573,11 +578,9 @@ def charge_unbilled_calls(db: Session, now: Optional[datetime] = None) -> int:
 
 
 def run_billing_sweep_job(session_factory) -> None:
-    from app.services.carrier_costs import record_carrier_prices
     db = session_factory()
     try:
         charge_unbilled_calls(db)
-        record_carrier_prices(db)
     finally:
         db.close()
 

@@ -1,12 +1,12 @@
 import re
-from typing import Any, Dict, List, Optional
-from app.models.tool import live_tool_ids
+from typing import Any, Dict, Iterable, List, Optional
+from app.models.tool import SWITCHED_OFF_TOOLS, live_tool_ids
 from app.schemas.agent_spec import CanonicalAgentSpec
 from app.runtime.conversation import ConversationState
 from app.runtime.usage.tracker import UsageTracker
 from app.core.config import settings
 from app.runtime.providers.overrides import apply_provider_overrides
-from app.runtime.greeting_language import is_english, language_name, localize_greeting
+from app.runtime.greeting_language import detect_language, is_english, language_name, localize_greeting
 
 # Tools that record who the caller is; the call's known phone number fills them in
 CONTACT_TOOLS = {
@@ -14,6 +14,24 @@ CONTACT_TOOLS = {
 }
 # Test Lab calls simulate a phone call without a real number
 TEST_CALL_PHONE = "+910000000000"
+# The caller's latest messages restated with each reply, so the agent doesn't re-ask what they already said
+CALLER_RECAP_MESSAGES = 8
+
+
+def without_unavailable_tools(text: str, live_tools: Iterable[str], enabled_tools: Optional[Iterable[str]] = None) -> str:
+    """
+    Removes the names of tools this AI employee can't use (switched off, or not enabled) from its instructions.
+    Told to "book a callback with schedule_callback" while the tool isn't sent, Sarvam answers with an empty reply.
+    "...with schedule_callback" loses the phrase; any other mention becomes plain words.
+    """
+    live = set(live_tools or [])
+    for tool in sorted(set(SWITCHED_OFF_TOOLS) | set(enabled_tools or [])):
+        if tool in live or tool not in text:
+            continue
+        name = re.escape(tool)
+        text = re.sub(rf"\s+(?:using|with|via|through|by calling|by using)\s+`?{name}`?\b", "", text)
+        text = re.sub(rf"`?\b{name}\b`?", tool.replace("_", " "), text)
+    return text
 
 
 class RuntimeContext:
@@ -149,12 +167,39 @@ class RuntimeContext:
 
         # Fixed instructions first (identical on every turn and every call to this agent, so the LLM provider can
         # reuse them from cache), then this call's details, then this turn's knowledge
-        base = self.conversation.system_instruction + getattr(self, "call_details", "")
+        base = self.conversation.system_instruction + getattr(self, "call_details", "") + self._caller_so_far()
         if self.knowledge_index is None:
             return base
         said = [m.content for m in self.conversation.messages
                 if str(getattr(m.role, "value", m.role)).lower() == "user" and m.content][-2:]
         return base + relevant_knowledge(self.knowledge_index, " ".join(said))
+
+    def _caller_so_far(self) -> str:
+        """
+        Everything the caller has said on this call, restated last. With only the call script's question list in
+        mind, Sarvam re-asked what the caller had already said ("which course?" after they named it).
+        """
+        said = [str(m.content).strip() for m in self.conversation.messages
+                if str(getattr(m.role, "value", m.role)).lower() == "user" and str(m.content or "").strip()]
+        if not said:
+            return ""
+        return (
+            "\n\nWhat the caller has told you so far (never ask for any of this again; ask only the next question "
+            "whose answer isn't here):\n" + "\n".join(f"- {s[:200]}" for s in said[-CALLER_RECAP_MESSAGES:])
+            + self._reply_language(said[-1])
+        )
+
+    def _reply_language(self, latest: str) -> str:
+        """Names the language to reply in when the caller's latest message is clearly in a supported one."""
+        code = detect_language(latest)
+        if not code:
+            return ""
+        languages = self.agent_spec.languages
+        supported = {language_name(c) for c in ([languages.primary] + list(languages.supported or []))} if languages else set()
+        if len(supported) < 2:
+            return ""  # a one-language agent has nothing to choose
+        name = language_name(code)
+        return f"\n\nThe caller's latest message is in {name}: reply in {name}." if name in supported else ""
 
     def fill_placeholders(self, text: str) -> str:
         """Fills {{variable}} placeholders from the session's variables and drops any left unresolved,
@@ -186,11 +231,18 @@ class RuntimeContext:
         ]
 
         primary = spec.languages.primary if spec.languages else "en"
-        if not is_english(primary):
-            others = [language_name(code) for code in (spec.languages.supported or []) if code != primary]
+        others = list(dict.fromkeys(
+            language_name(code) for code in ((spec.languages.supported if spec.languages else None) or [])
+            if language_name(code) != language_name(primary)
+        ))
+        if not is_english(primary) or others:
+            # "Only if the caller clearly speaks it" (and later "start in Telugu") made Sarvam answer English callers
+            # in the primary language; each reply is also told the language of the caller's latest message
             lines.append(
-                f"Language: speak {language_name(primary)} by default, from your first reply onwards"
-                + (f"; switch to {', '.join(dict.fromkeys(others))} only if the caller clearly speaks it" if others else "")
+                f"Language: your greeting is in {language_name(primary)}"
+                + (f". From your first reply on, always reply in the language of the caller's latest message "
+                   f"({', '.join([language_name(primary)] + others)}): an English message gets an English reply, "
+                   "even right after a greeting in another language" if others else "")
                 + "."
             )
 
@@ -222,8 +274,16 @@ class RuntimeContext:
             for esc in spec.instructions.escalation_rules:
                 lines.append(f"- {esc}")
 
+        live = set(live_tool_ids(spec.tools.enabled))
+        if not live & CONTACT_TOOLS:
+            lines.append(
+                "\nWhat you can do on this call: you can't book, register or save anything yourself. When a step says to "
+                "book, register or save something, take the details and tell the caller our team will confirm and call "
+                "them back. Never say it is already booked or registered."
+            )
+
         lines.append(self._call_flow(spec))
-        return "\n".join(lines)
+        return without_unavailable_tools("\n".join(lines), live, spec.tools.enabled)
 
     def _compile_call_details(self, spec: CanonicalAgentSpec) -> str:
         """
@@ -271,7 +331,8 @@ class RuntimeContext:
         lines = [
             "\nCaller Contact (known from this call):",
             f"- Phone number: {self.contact_phone}. Never ask the caller for their phone number - it is already on "
-            "file. Use it for bookings, leads and callbacks. Only note a different number if the caller offers one.",
+            "file. Use it for bookings, leads and callbacks. Only note a different number if the caller offers one. "
+            "Don't read it out: say \"on this number\".",
         ]
         name = str(self.metadata.get("user_name") or "").strip()
         if name:
@@ -333,7 +394,8 @@ class RuntimeContext:
         points = [p for p in (getattr(script, "offer_points", None) or []) if p.strip()]
         agreed = (getattr(script, "next_step", "") or "").strip()
         understand = (
-            "3. Understand - ask these questions, one per reply, in this order, skipping any already answered or known: "
+            "3. Understand - ask the next of these questions whose answer you don't have yet, one per reply (if the "
+            "caller already said it, even in passing, skip it): "
             + " | ".join(f'"{q}"' for q in questions) + "."
             if questions else
             "3. Understand - ask the few questions your Core Responsibilities need (at most two or three, one at a time). "

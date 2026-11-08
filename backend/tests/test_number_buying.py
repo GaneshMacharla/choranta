@@ -90,13 +90,13 @@ def test_buy_test_and_activate_number(client: TestClient, auth_headers: dict, po
 
 def test_skip_test_and_failed_test(client: TestClient, auth_headers: dict, portal, telephony_setup, db: Session):
     cid = portal["client_id"]
-    pn = PhoneNumber(id=generate_unique_id("phn_"), client_id=cid, phone_number="+914071230000", provider="exotel",
+    pn = PhoneNumber(id=generate_unique_id("phn_"), client_id=cid, phone_number="+914071230000", provider="vobiz",
                      provider_number_id="EXO_T", status="READY_TO_TEST", metadata_={})
     db.add(pn)
     db.commit()
     from app.services import phone_numbers
     failed_call = Call(id=generate_unique_id("call"), client_id=cid, agent_id=telephony_setup["agent"].id,
-                       agent_version_id=telephony_setup["version"].id, direction="OUTBOUND", status="INITIATED", provider="exotel",
+                       agent_version_id=telephony_setup["version"].id, direction="OUTBOUND", status="INITIATED", provider="vobiz",
                        provider_call_id=generate_unique_id("exo"), caller_number=pn.phone_number, destination_number="+919876500000",
                        metadata_={"number_test": pn.id})
     db.add(failed_call)

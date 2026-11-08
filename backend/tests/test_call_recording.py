@@ -48,7 +48,7 @@ def test_recording_endpoint_serves_wav_and_requires_auth(client: TestClient, aut
         destination_number="+914045209348",
         direction="OUTBOUND",
         status="COMPLETED",
-        provider="exotel",
+        provider="vobiz",
         provider_call_id=generate_unique_id("exo_"),
         metadata_={"recording_file": "rec_test.wav"},
     )

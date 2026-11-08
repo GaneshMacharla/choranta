@@ -22,6 +22,8 @@ logger = logging.getLogger("choranta.runtime.providers.sarvam.llm")
 # so wait at most this long before retrying (Retry-After, else a short backoff)
 RATE_LIMIT_STATUSES = (429, 503)
 MAX_RETRY_WAIT_S = 2.0
+# Sarvam occasionally returns an empty completion (no text, no tool call): asked again this many times
+EMPTY_REPLY_RETRIES = 1
 
 
 def _retry_wait(response: httpx.Response, attempt: int) -> float:
@@ -192,7 +194,7 @@ class SarvamLLMProvider(LLMProvider):
         system_instruction: str,
         messages: List[Dict[str, Any]],
         available_tools: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.7,
+        temperature: Optional[float] = None,
         model: Optional[str] = None
     ) -> LLMResult:
         result = None
@@ -206,7 +208,7 @@ class SarvamLLMProvider(LLMProvider):
         system_instruction: str,
         messages: List[Dict[str, Any]],
         available_tools: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.7,
+        temperature: Optional[float] = None,
         model: Optional[str] = None
     ) -> LLMResult:
         return await asyncio.to_thread(self.generate, system_instruction, messages, available_tools, temperature, model)
@@ -246,12 +248,44 @@ class SarvamLLMProvider(LLMProvider):
         system_instruction: str,
         messages: List[Dict[str, Any]],
         available_tools: Optional[List[Dict[str, Any]]] = None,
-        temperature: float = 0.7,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None
+    ) -> Iterator[Union[str, LLMResult]]:
+        """
+        Streams the reply. Sarvam sometimes answers with nothing at all (no text, no tool call); since nothing has
+        reached the caller then, it is asked once more instead of leaving them a canned fallback line.
+        """
+        used = {"input_tokens": 0, "output_tokens": 0}
+        for attempt in range(1 + EMPTY_REPLY_RETRIES):
+            result = None
+            for item in self._stream_once(system_instruction, messages, available_tools, temperature, model):
+                if isinstance(item, str):
+                    yield item
+                else:
+                    result = item
+            if result is None:
+                return
+            for key in used:
+                used[key] += int((result.usage or {}).get(key) or 0)
+            if result.text or result.tool_calls or attempt == EMPTY_REPLY_RETRIES:
+                result.usage = {**(result.usage or {}), **used}
+                yield result
+                return
+            logger.warning("Sarvam LLM returned an empty reply; asking again.")
+
+    def _stream_once(
+        self,
+        system_instruction: str,
+        messages: List[Dict[str, Any]],
+        available_tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: Optional[float] = None,
         model: Optional[str] = None
     ) -> Iterator[Union[str, LLMResult]]:
         if self._client is None:
             self.initialize({})
 
+        if temperature is None:
+            temperature = settings.SARVAM_TEMPERATURE
         payload = self._payload(system_instruction, messages, available_tools, temperature, model, stream=True)
         prompt_chars = sum(len(str(m.get("content") or "")) for m in payload["messages"])
         text_parts: List[str] = []

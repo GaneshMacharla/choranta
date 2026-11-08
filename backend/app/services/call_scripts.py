@@ -84,6 +84,35 @@ _SUPERSEDED_SCRIPTS = {
         ("Snowflake and DBT batch starting Monday, 19 October 2026", "Real projects included", "Free demo class"),
         "Book a free demo class",
     ),
+    # Interrogation-first order (name or qualification before what the caller needs), replaced 2026-11-07
+    "coaching_admission_counsellor": (
+        ("Are you the student or a parent?", "Which class is the student in?",
+         "Which exam or subject are you preparing for?", "Do you prefer morning, evening or weekend batches?"),
+        ("The matching course and its next batch start date", "Fees and instalment options", "Free demo class"),
+        "Book a free demo class",
+    ),
+    "clinic_receptionist": (
+        ("What is the patient's name?", "Which doctor or what problem is it for?", "Which day suits you?"),
+        ("Doctor availability", "Consultation fee"),
+        "Book the appointment",
+    ),
+    "hospital_front_desk": (
+        ("Which department or doctor do you need?", "What is the patient's name?", "Which day suits you?"),
+        ("Department timings", "Available slots"),
+        "Book the appointment or connect them to the right department",
+    ),
+    "coaching_front_desk": (
+        ("Which course or class are you asking about?", "Are you the student or a parent?", "Which batch timing suits you?"),
+        ("Matching course and batch", "Fees and instalments", "Free demo class"),
+        "Book a free demo class or a centre visit",
+    ),
+    "skill_training_counsellor": (
+        ("What is your highest qualification?", "Are you a fresher or working, and in which field?",
+         "Which course are you interested in?", "Online or classroom, weekday or weekend?"),
+        ("Matching course: syllabus highlights, duration, projects", "Fees and EMI options",
+         "Placement assistance as described in the catalogue"),
+        "Book a free demo class or counselling session",
+    ),
 }
 
 

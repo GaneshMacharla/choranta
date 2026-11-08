@@ -17,7 +17,7 @@ def fresh_cache():
 
 
 def _key(text: str, voice: str = "shubh"):
-    return tts_cache.cache_key("sarvam", voice, 1.0, "hi-IN", "ExotelProvider", text)
+    return tts_cache.cache_key("sarvam", voice, 1.0, "hi-IN", "VobizProvider", text)
 
 
 def test_cache_returns_stored_audio_only_for_same_voice_and_text():
@@ -65,7 +65,7 @@ def _fake_session():
         _sentence_language=lambda text: "hi-IN",
         _native_rate_kwargs=lambda tts: {},
         _tts_cache_key=lambda sentence, language: tts_cache.cache_key(
-            "sarvam", "shubh", 1.0, language, "ExotelProvider", sentence.text
+            "sarvam", "shubh", 1.0, language, "VobizProvider", sentence.text
         ),
         _carrier_audio=lambda chunk, native: chunk,
     )

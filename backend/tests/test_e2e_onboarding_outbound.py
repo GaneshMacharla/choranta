@@ -2,8 +2,8 @@
 End-to-end: a new client pays, asks for an AI employee, Choranta builds it from a template and publishes it,
 then it calls a bulk campaign list and an instant website lead.
 
-Everything goes through the real API and the real dialer (place_outbound_call); only Exotel's HTTP API is
-replaced, so the test records exactly what Choranta would send to Exotel. No real calls are made.
+Everything goes through the real API and the real dialer (place_outbound_call); only the carrier's HTTP API is
+replaced, so the test records exactly what Choranta would send to Vobiz. No real calls are made.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -24,36 +24,37 @@ from test_instant_leads import _SharedSession
 from test_portal import _client_headers
 
 
-class FakeExotel:
-    """Records Calls/connect requests and answers like Exotel does."""
+class FakeCarrier:
+    """Records outbound call requests."""
 
     def __init__(self):
         self.requests = []
 
-    def __call__(self, provider, customer_number, caller_id, flow_url, status_callback_url=None, custom_field=None):
+    def __call__(self, provider, customer_number, caller_id, flow_url, status_callback_url=None, custom_field=None, **_):
         self.requests.append({"to": customer_number, "caller_id": caller_id, "flow_url": flow_url,
                               "status_callback": status_callback_url, "custom_field": custom_field})
-        return {"Call": {"Sid": generate_unique_id("exo_sid"), "Status": "in-progress"}}
+        return {"Call": {"Sid": generate_unique_id("carrier_sid"), "Status": "in-progress"}}
 
 
 @pytest.fixture
 def live_like(monkeypatch, db: Session):
-    """Settings as in a real deployment: billing enforced, simulated payments, Exotel configured."""
+    """Settings as in a real deployment: billing enforced, simulated payments, Vobiz configured."""
     for name, value in {
         "BILLING_ENFORCED": True, "SIMULATED_PAYMENTS": True, "RAZORPAY_KEY_ID": "", "RAZORPAY_KEY_SECRET": "",
-        "TELEPHONY_BASE_URL": "https://choranta.example.com", "EXOTEL_FLOW_ID": "1234", "EXOTEL_ACCOUNT_SID": "acct",
+        "TELEPHONY_BASE_URL": "https://choranta.example.com",
+        "AGENT_REQUEST_REQUIRES_DOCUMENTS": True,
     }.items():
         monkeypatch.setattr(settings, name, value, raising=False)
-    exotel = FakeExotel()
-    provider = default_registry.get_telephony("exotel")
-    monkeypatch.setattr(type(provider), "initiate_outbound_call", lambda self, **kwargs: exotel(self, **kwargs))
+    carrier = FakeCarrier()
+    provider = default_registry.get_telephony("vobiz")
+    monkeypatch.setattr(type(provider), "initiate_outbound_call", lambda self, **kwargs: carrier(self, **kwargs))
     # Website leads: the API's after-response work runs on the test session, dialling for real
     monkeypatch.setattr(public_leads, "SESSION_FACTORY", lambda: _SharedSession(db))
     monkeypatch.setattr(campaign_svc, "in_calling_window", lambda campaign, now: True)
     instant_leads.rate_limiter = instant_leads.RateLimiter(instant_leads.RATE_LIMIT_PER_MIN)
     instant_leads._key_cache.clear()
     campaign_svc._caller_cache.clear()
-    return exotel
+    return carrier
 
 
 def _ok(resp, code=200):
@@ -62,7 +63,7 @@ def _ok(resp, code=200):
 
 
 def test_onboarding_to_bulk_and_instant_outbound(client: TestClient, auth_headers: dict, db: Session, live_like):
-    exotel = live_like
+    carrier = live_like
 
     # ---- 1. Admin creates the client; the client logs in to the portal
     company = _ok(client.post("/api/clients", headers=auth_headers,
@@ -121,9 +122,9 @@ def test_onboarding_to_bulk_and_instant_outbound(client: TestClient, auth_header
     kinds = {n["kind"] for n in _ok(client.get("/api/portal/notifications", headers=portal))["items"]}
     assert {"EMPLOYEE_SETUP", "EMPLOYEE_READY"} <= kinds
 
-    # ---- 5. The client's own number (bought from Choranta; created directly since buying talks to Exotel)
+    # ---- 5. The client's own number (bought from Choranta; created directly since buying talks to Vobiz)
     number = PhoneNumber(id=generate_unique_id("phn_"), client_id=company["id"], phone_number="+914071234567",
-                         provider="exotel", provider_number_id="EXO_E2E", status="ACTIVE")
+                         provider="vobiz", provider_number_id="EXO_E2E", status="ACTIVE")
     db.add(number)
     db.commit()
     _ok(client.patch(f"/api/portal/numbers/{number.id}", headers=portal, json={"agent_id": agent["id"]}))
@@ -139,12 +140,12 @@ def test_onboarding_to_bulk_and_instant_outbound(client: TestClient, auth_header
     assert _ok(client.post(f"/api/portal/campaigns/{bulk['id']}/launch", headers=portal, json={"consent": True}))["status"] in ("RUNNING", "SCHEDULED")
 
     placed = campaign_svc.run_campaign_tick(db, IN_WINDOW)
-    assert placed == 2, exotel.requests
-    assert sorted(r["to"] for r in exotel.requests) == ["+919876500011", "+919876500012"]
-    for r in exotel.requests:
+    assert placed == 2, carrier.requests
+    assert sorted(r["to"] for r in carrier.requests) == ["+919876500011", "+919876500012"]
+    for r in carrier.requests:
         assert r["caller_id"] == "+914071234567"  # the client's own number
-        assert r["flow_url"].endswith("/acct/exoml/start_voice/1234")
-        assert r["status_callback"].startswith("https://choranta.example.com/api/telephony/exotel/status")
+        assert r["flow_url"].startswith("https://choranta.example.com/api/telephony/vobiz/answer")
+        assert r["status_callback"].startswith("https://choranta.example.com/api/telephony/vobiz/hangup")
     calls = db.query(Call).filter(Call.client_id == company["id"]).all()
     assert len(calls) == 2 and all(c.status == "INITIATED" and c.agent_id == agent["id"] for c in calls)
     asha = next(c for c in calls if c.destination_number == "+919876500011")
@@ -168,13 +169,13 @@ def test_onboarding_to_bulk_and_instant_outbound(client: TestClient, auth_header
     raw_key = key.get("key") or key.get("api_key") or key.get("raw_key")
     assert raw_key, key
 
-    before = len(exotel.requests)
+    before = len(carrier.requests)
     lead = client.post("/api/public/leads", headers={"X-API-Key": raw_key}, json={
         "phone": "98765 00099", "name": "Kiran", "consent": True, "source": "website-form", "treatment": "Implants",
     })
     assert lead.status_code in (200, 201, 202), lead.text
-    assert len(exotel.requests) == before + 1, "website lead was not dialled straight away"
-    assert exotel.requests[-1]["to"] == "+919876500099" and exotel.requests[-1]["caller_id"] == "+914071234567"
+    assert len(carrier.requests) == before + 1, "website lead was not dialled straight away"
+    assert carrier.requests[-1]["to"] == "+919876500099" and carrier.requests[-1]["caller_id"] == "+914071234567"
     recipient = db.query(CampaignRecipient).filter(CampaignRecipient.campaign_id == trigger["id"]).one()
     assert recipient.phone == "+919876500099" and recipient.attempts == 1
 
@@ -182,7 +183,7 @@ def test_onboarding_to_bulk_and_instant_outbound(client: TestClient, auth_header
     again = client.post("/api/public/leads", headers={"X-API-Key": raw_key}, json={
         "phone": "+91 98765 00099", "name": "Kiran", "consent": True,
     })
-    assert again.status_code in (200, 201, 202) and len(exotel.requests) == before + 1
+    assert again.status_code in (200, 201, 202) and len(carrier.requests) == before + 1
 
     # Everything the client got told along the way
     told = {n.kind for n in db.query(ClientNotification).filter(ClientNotification.client_id == company["id"]).all()}

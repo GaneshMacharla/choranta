@@ -50,7 +50,7 @@ def _call_with_transcript(db: Session, setup, turns, call: Call = None) -> Call:
         call = Call(
             id=generate_unique_id("call"), client_id=setup["client"].id, agent_id=setup["agent"].id,
             agent_version_id=setup["version"].id, caller_number="+914045209348", destination_number="+919876543210",
-            direction="OUTBOUND", status="COMPLETED", provider="exotel", provider_call_id=generate_unique_id("exo"),
+            direction="OUTBOUND", status="COMPLETED", provider="vobiz", provider_call_id=generate_unique_id("exo"),
             metadata_={},
         )
         db.add(call)

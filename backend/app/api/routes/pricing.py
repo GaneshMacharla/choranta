@@ -1,13 +1,12 @@
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin
 from app.models.user import User
 from app.core.config import settings
-from app.services.carrier_costs import carrier_cost_report
 from app.services.pricing import (
     PricingSnapshot, credit_packs_out, estimated_credits_per_minute, get_pricing, recent_charge_per_minute, update_pricing,
 )
@@ -61,13 +60,3 @@ def update_pricing_settings(
     """Sets the profit % added to every call's real cost (admin only)."""
     pricing = update_pricing(db, req.profit_percent, current_user.id)
     return _response(db, pricing)
-
-
-@router.get("/carrier-check")
-def carrier_cost_check(
-    days: int = Query(30, ge=1, le=90),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin)
-):
-    """Choranta's phone-line cost estimate vs what Exotel actually charged per call (admin only)."""
-    return carrier_cost_report(db, days=days)

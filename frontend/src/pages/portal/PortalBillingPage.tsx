@@ -98,6 +98,7 @@ export const PortalBillingPage: React.FC = () => {
     setTopupOpen(true);
   };
   const docName = gst ? 'invoice' : 'receipt';
+  const invoicesOn = wallet.invoices_enabled;
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-2">
@@ -223,13 +224,13 @@ export const PortalBillingPage: React.FC = () => {
             gstRate={gstRate}
             busyPlanId={busy?.startsWith('plan-') ? busy.slice(5) : null}
             onChoose={(plan) =>
-              pay('plan-' + plan.id, { purpose: 'SUBSCRIPTION', plan_id: plan.id }, `Payment received. Your ${plan.name} plan is set, and the ${gst ? 'GST invoice' : 'receipt'} is below.`)
+              pay('plan-' + plan.id, { purpose: 'SUBSCRIPTION', plan_id: plan.id }, `Payment received. Your ${plan.name} plan is set${invoicesOn ? `, and the ${gst ? 'GST invoice' : 'receipt'} is below` : ''}.`)
             }
           />
         </div>
       )}
 
-      <Card
+      {invoicesOn && <Card
         title={gst ? 'Invoices' : 'Receipts'}
         subtitle={gst ? 'GST tax invoices for your plans and credit purchases' : 'Payment receipts for your credit purchases'}
         noPadding
@@ -273,7 +274,7 @@ export const PortalBillingPage: React.FC = () => {
             </tbody>
           </table>
         </div>
-      </Card>
+      </Card>}
 
       <Card title="Wallet activity" subtitle="Top-ups and call charges" noPadding>
         <WalletLedger transactions={wallet.transactions} />
@@ -285,8 +286,8 @@ export const PortalBillingPage: React.FC = () => {
         title="Buy credits"
         description={
           gst
-            ? `Pay any amount from ${inr(info.min_topup_inr, 0)}, GST included. You get 1 credit per ₹1 excluding GST, and a GST invoice is issued. Bought credits never expire.`
-            : `Pay any amount from ${inr(info.min_topup_inr, 0)}. You get 1 credit per ₹1 and a payment receipt. Bought credits never expire.`
+            ? `Pay any amount from ${inr(info.min_topup_inr, 0)}, GST included. You get 1 credit per ₹1 excluding GST${invoicesOn ? ', and a GST invoice is issued' : ''}. Bought credits never expire.`
+            : `Pay any amount from ${inr(info.min_topup_inr, 0)}. You get 1 credit per ₹1${invoicesOn ? ' and a payment receipt' : ''}. Bought credits never expire.`
         }
       >
         <div className="space-y-3 text-xs">

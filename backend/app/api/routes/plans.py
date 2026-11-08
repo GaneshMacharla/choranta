@@ -11,7 +11,7 @@ from app.api.deps import get_any_user, get_db, require_admin, require_operator
 from app.models.client import Client
 from app.models.subscription import CallUsage, NumberPricing, Plan
 from app.models.user import User
-from app.services import billing, exotel_numbers, phone_numbers, razorpay_gateway, subscriptions
+from app.services import billing, phone_numbers, razorpay_gateway, subscriptions
 from app.services.pricing import estimated_credits_per_minute
 
 logger = logging.getLogger("choranta.api.plans")
@@ -197,10 +197,7 @@ def update_number_pricing(number_type: str, req: NumberPriceRequest, db: Session
 def admin_search_numbers(client_id: str, number_type: str = "Landline", region: Optional[str] = None,
                          db: Session = Depends(get_db), user: User = Depends(require_admin)):
     _client_or_404(db, client_id)
-    try:
-        return phone_numbers.search(db, number_type, region)
-    except exotel_numbers.ExotelNumberError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+    return phone_numbers.search(db, number_type, region)
 
 
 @router.post("/clients/{client_id}/numbers/buy", status_code=201)

@@ -21,7 +21,7 @@ class Campaign(Base):
     kind = Column(String(16), nullable=False, default="BULK", index=True)
     agent_id = Column(String(64), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     agent_version_id = Column(String(64), ForeignKey("agent_versions.id", ondelete="RESTRICT"), nullable=False)
-    provider = Column(String(32), nullable=False, default="exotel")
+    provider = Column(String(32), nullable=False, default="vobiz")
     caller_number_ids = Column(JSON, nullable=False, default=list)  # PhoneNumber ids, rotated round-robin
 
     # DRAFT / SCHEDULED / RUNNING / PAUSED / STOPPING / COMPLETED / CANCELLED

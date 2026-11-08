@@ -159,8 +159,8 @@ export const PortalNumbersPage: React.FC = () => {
                   >
                     <option value="">No AI employee (calls rejected)</option>
                     {agents.map((a) => (
-                      <option key={a.id} value={a.id} disabled={!a.published}>
-                        {a.name}{a.published ? '' : ' (not published)'}
+                      <option key={a.id} value={a.id} disabled={!a.live}>
+                        {a.name}{a.live ? '' : ' (still being set up)'}
                       </option>
                     ))}
                   </select>

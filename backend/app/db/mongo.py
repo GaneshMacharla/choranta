@@ -6,10 +6,13 @@ Collections:
 - knowledge_entries: one per note, FAQ, uploaded document or business-details sheet (what AI employees read)
 - knowledge_files:   the original bytes of each uploaded document, kept apart so listing entries stays light
 """
+import logging
 import threading
 from typing import Any, Optional
 
 from app.core.config import settings
+
+logger = logging.getLogger("choranta.db.mongo")
 
 ENTRIES = "knowledge_entries"
 FILES = "knowledge_files"
@@ -51,7 +54,9 @@ def database() -> Any:
                 db[FILES].create_index("client_id")
             except Exception as exc:
                 client.close()
-                raise KnowledgeStoreUnavailable(f"Couldn't reach the knowledge database: {exc}") from exc
+                # This message reaches clients; the server names and network details stay in the log
+                logger.error("Couldn't reach MongoDB: %s", exc)
+                raise KnowledgeStoreUnavailable("Knowledge is temporarily unavailable. Please try again in a few minutes.") from exc
             _client = client
     return _client[settings.MONGODB_DB]
 

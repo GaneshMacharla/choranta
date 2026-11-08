@@ -13,8 +13,8 @@ class PhoneNumber(Base):
     agent_id = Column(String(64), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
     agent_version_id = Column(String(64), ForeignKey("agent_versions.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    provider = Column(String(32), nullable=False, default="exotel")  # exotel
-    provider_number_id = Column(String(128), nullable=True)  # ExoPhone sid from exotel
+    provider = Column(String(32), nullable=False, default="vobiz")
+    provider_number_id = Column(String(128), nullable=True)  # the carrier's id for the number
     phone_number = Column(String(32), nullable=False, unique=True, index=True)  # E.164 e.g. +14155552671
     country_code = Column(String(8), nullable=False, default="US")  # US, IN, GB, etc.
     status = Column(String(32), nullable=False, default="ACTIVE", index=True)  # ACTIVE, READY_TO_TEST (bought, waiting for a test call), INACTIVE, PROVISIONING

@@ -129,7 +129,7 @@ def test_qualified_inbound_caller_is_a_hot_lead(db: Session, setup):
     call = Call(
         id=generate_unique_id("call_"), client_id=client_id, agent_id=setup["agent"].id,
         agent_version_id=setup["version"].id, caller_number="+919811112222", destination_number="+914000000000",
-        direction="INBOUND", status="COMPLETED", provider="exotel", provider_call_id=generate_unique_id("exo_"),
+        direction="INBOUND", status="COMPLETED", provider="vobiz", provider_call_id=generate_unique_id("exo_"),
         created_at=datetime.utcnow(),
         metadata_={"outputs_status": "done", "interest": "interested", "summary": "Wants NEET coaching",
                    "qualification": {"status": "qualified", "reason": "Demo class booked", "source": "rules"}},

@@ -1,6 +1,6 @@
 """
 Applies a carrier's call status (completed, busy, no-answer, ...) to a Call record. Shared by the
-Exotel status webhook and the mock environment, which ends simulated calls the same way.
+Vobiz hangup webhook and the mock environment, which ends simulated calls the same way.
 """
 from datetime import datetime, timezone
 from typing import Optional

@@ -367,7 +367,7 @@ def complete_pending_mock_calls(
     current_user=Depends(require_operator),
 ) -> Dict[str, Any]:
     """
-    Ends outbound calls placed through the mock carrier, as Exotel's status callback would.
+    Ends outbound calls placed through the mock carrier, as the carrier's hangup callback would.
     The mock carrier never reports back, so without this campaign recipients stay DIALING.
     Narrow it with campaign_id or call_ids; the dialer picks up the outcomes on its next tick.
     """

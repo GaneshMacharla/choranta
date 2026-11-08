@@ -38,7 +38,7 @@ export const billingService = {
   previewPayment: (clientId: string, amount_received_inr: number) =>
     request<GstSplit>(`${c(clientId)}/wallet/payments/preview`, { method: 'POST', body: JSON.stringify({ amount_received_inr }) }),
   recordPayment: (clientId: string, amount_received_inr: number, reference: string) =>
-    request<GstSplit & { invoice_number: string; balance_inr: number }>(`${c(clientId)}/wallet/payments`, {
+    request<GstSplit & { invoice_number: string | null; balance_inr: number }>(`${c(clientId)}/wallet/payments`, {
       method: 'POST',
       body: JSON.stringify({ amount_received_inr, reference: reference || null }),
     }),

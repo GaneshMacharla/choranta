@@ -1,5 +1,5 @@
 """
-AI employee requests: once a client has paid (an active plan or any paid invoice), they give their company
+AI employee requests: once a client has paid (an active plan or any payment), they give their company
 name, type of business, the languages their customers speak and a name for the AI employee in the portal. A Choranta admin sets up everything else
 in the agent wizard and links the agent, which completes the request. The company name and business type
 also update the client's profile.
@@ -9,15 +9,17 @@ name; admins tell them apart by the client code shown alongside (e.g. "Priya · 
 """
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.exceptions import ChorantaException, ConflictException, NotFoundException, ValidationException
 from app.models.agent import Agent
 from app.models.agent_request import AgentRequest
-from app.models.billing import Invoice
+from app.models.agent_version import AgentVersion
+from app.models.billing import Invoice, WalletTransaction
 from app.models.client import Client
 from app.db import mongo
 from app.services import knowledge_store, notifications, sarvam_voices, subscriptions
@@ -48,8 +50,11 @@ BUSINESS_TYPES: Dict[str, str] = {
     "OTHER": "Other",
 }
 COMPANY_MIN, COMPANY_MAX = 2, 100
-OPEN_STATUSES = ("PENDING", "IN_PROGRESS")
-STATUSES = ("PENDING", "IN_PROGRESS", "COMPLETED", "REJECTED", "CANCELLED")
+# CLIENT_TRIAL: the team sent it to the client to try; the team still decides when it goes live
+OPEN_STATUSES = ("PENDING", "IN_PROGRESS", "CLIENT_TRIAL")
+STATUSES = ("PENDING", "IN_PROGRESS", "CLIENT_TRIAL", "COMPLETED", "REJECTED", "CANCELLED")
+# A trial call that ends this soon after connecting because the connection dropped is given back
+TRIAL_DROPPED_GRACE_S = 30
 NAME_MIN, NAME_MAX = 2, 40
 
 
@@ -58,14 +63,19 @@ def has_paid(db: Session, client_id: str) -> bool:
     sub = subscriptions.get_subscription(db, client_id)
     if subscriptions.is_usable(sub):
         return True
-    return db.query(Invoice.id).filter(Invoice.client_id == client_id).first() is not None
+    if db.query(Invoice.id).filter(Invoice.client_id == client_id).first() is not None:
+        return True
+    return db.query(WalletTransaction.id).filter(
+        WalletTransaction.client_id == client_id, WalletTransaction.type == "CREDIT").first() is not None
 
 
 def needs_documents(db: Session, client_id: str) -> bool:
     """
     Before their first AI employee, a client uploads files about their business (brochure, price list, FAQ...):
-    Choranta's team builds the employee from them. Not checked when the knowledge store isn't set up.
+    Choranta's team builds the employee from them. Not checked when switched off or the knowledge store isn't set up.
     """
+    if not settings.AGENT_REQUEST_REQUIRES_DOCUMENTS:
+        return False
     if db.query(Agent.id).filter(Agent.client_id == client_id).first():
         return False
     return mongo.configured() and not knowledge_store.has_documents(client_id)
@@ -159,18 +169,121 @@ def start_request(db: Session, request: AgentRequest, admin_id: str) -> AgentReq
     return request
 
 
+def link_request(db: Session, request: AgentRequest, agent_id: str, admin_id: str) -> AgentRequest:
+    """Records the AI employee being built for this request. The client hears nothing until it goes live."""
+    if request.status not in OPEN_STATUSES:
+        raise ValidationException(f"This request is {request.status.lower()}.")
+    agent = db.get(Agent, agent_id)
+    if not agent or agent.client_id != request.client_id:
+        raise ValidationException("Link an AI employee that belongs to this client.")
+    if request.status == "PENDING":
+        start_request(db, request, admin_id)
+    request.agent_id = agent.id
+    request.handled_by = admin_id
+    db.commit()
+    return request
+
+
+def latest_published_version(db: Session, agent_id: str) -> Optional[AgentVersion]:
+    return (
+        db.query(AgentVersion)
+        .filter(AgentVersion.agent_id == agent_id, AgentVersion.status == "PUBLISHED")
+        .order_by(AgentVersion.version_number.desc())
+        .first()
+    )
+
+
+def send_for_trial(db: Session, request: AgentRequest, admin_id: str) -> AgentRequest:
+    """Lets the client try the AI employee once from the portal. Sending again gives them a fresh trial call."""
+    if request.status not in ("IN_PROGRESS", "CLIENT_TRIAL"):
+        raise ValidationException(f"This request is {request.status.lower().replace('_', ' ')}.")
+    agent = db.get(Agent, request.agent_id) if request.agent_id else None
+    if not agent or agent.client_id != request.client_id:
+        raise ValidationException("Build the AI employee for this request before sending it to the client.")
+    version = latest_published_version(db, agent.id)
+    if not version:
+        raise ValidationException(f"Publish a version of {agent.name} before sending it to the client.")
+    from app.runtime.readiness.checker import RuntimeReadinessChecker
+    readiness = RuntimeReadinessChecker(db).check(agent.id, version.id)
+    if not readiness["ready"]:
+        raise ValidationException(f"{agent.name} isn't ready for calls yet: " + "; ".join(readiness["errors"]))
+    request.status = "CLIENT_TRIAL"
+    request.trial_calls_used = 0
+    request.handled_by = admin_id
+    notifications.notify(db, request.client_id, "EMPLOYEE_TRIAL", f"{request.name} is ready for you to try",
+                         "Talk to it from your browser. Our team will contact you soon.", link="/portal/employees")
+    db.commit()
+    return request
+
+
+def reserve_trial_call(db: Session, request_id: str, client_id: str) -> Tuple[AgentRequest, Agent, AgentVersion]:
+    """
+    Takes one of the client's trial calls, under a row lock so two tabs can't both take the last one.
+    A refusal raises; the request's session then ends and releases the lock.
+    """
+    request = db.query(AgentRequest).filter(AgentRequest.id == request_id).with_for_update().first()
+    if not request or request.client_id != client_id:
+        raise NotFoundException("AI employee request", request_id)
+    if request.status != "CLIENT_TRIAL":
+        raise ValidationException(f"{request.name} isn't ready for you to try yet.")
+    if (request.trial_calls_used or 0) >= settings.CLIENT_TRIAL_CALLS:
+        raise ConflictException(f"You've already tried {request.name}. Our team will contact you soon.")
+    agent = db.get(Agent, request.agent_id) if request.agent_id else None
+    version = latest_published_version(db, agent.id) if agent else None
+    if not agent or not version:
+        raise ValidationException(f"{request.name} isn't ready for you to try yet.")
+    request.trial_calls_used = (request.trial_calls_used or 0) + 1
+    db.commit()
+    return request, agent, version
+
+
+def release_trial_call(db: Session, request_id: str) -> None:
+    """Gives a trial call back (it never connected, or dropped straight away)."""
+    request = db.query(AgentRequest).filter(AgentRequest.id == request_id).with_for_update().first()
+    if request and (request.trial_calls_used or 0) > 0:
+        request.trial_calls_used -= 1
+    db.commit()
+
+
+def trial_call_counts(reason: str, connected_seconds: Optional[float]) -> bool:
+    """Whether an ended trial call used up the trial."""
+    if connected_seconds is None:
+        return False  # never connected
+    return not (reason == "connection_failed" and connected_seconds < TRIAL_DROPPED_GRACE_S)
+
+
+def _finish(db: Session, request: AgentRequest, agent: Agent) -> None:
+    request.status = "COMPLETED"
+    request.agent_id = agent.id
+    request.completed_at = datetime.now(timezone.utc)
+    notifications.notify(db, request.client_id, "EMPLOYEE_READY", f"{request.name} is ready!",
+                         "Connect it to a phone number to start taking calls.", link="/portal/numbers", level="success")
+
+
+def complete_for_agent(db: Session, agent: Agent) -> None:
+    """The AI employee went live: tells the client, and closes the request it was built for."""
+    requests = db.query(AgentRequest).filter(AgentRequest.agent_id == agent.id, AgentRequest.status.in_(OPEN_STATUSES)).all()
+    for request in requests:
+        _finish(db, request, agent)
+    if requests:
+        db.commit()
+
+
 def complete_request(db: Session, request: AgentRequest, agent_id: str, admin_id: str) -> AgentRequest:
     if request.status not in OPEN_STATUSES:
         raise ValidationException(f"This request is {request.status.lower()}.")
     agent = db.get(Agent, agent_id)
     if not agent or agent.client_id != request.client_id:
         raise ValidationException("Link an AI employee that belongs to this client.")
-    request.status = "COMPLETED"
-    request.agent_id = agent.id
+    # The client is told it can take calls, so it must be able to
+    from app.runtime.readiness.checker import live_block_reason
+    if not db.query(AgentVersion.id).filter(AgentVersion.agent_id == agent.id, AgentVersion.status == "PUBLISHED").first():
+        raise ValidationException(f"{agent.name} has no published version yet.")
+    not_live = live_block_reason(agent)
+    if not_live:
+        raise ValidationException(not_live)
     request.handled_by = admin_id
-    request.completed_at = datetime.now(timezone.utc)
-    notifications.notify(db, request.client_id, "EMPLOYEE_READY", f"{request.name} is ready!",
-                         "Connect it to a phone number to start taking calls.", link="/portal/numbers", level="success")
+    _finish(db, request, agent)
     db.commit()
     return request
 
@@ -221,6 +334,9 @@ def request_out(db: Session, request: AgentRequest, client: Optional[Client] = N
         "agent_id": request.agent_id,
         "agent_name": agent.name if agent else None,
         "admin_note": request.admin_note,
+        "trial_calls_used": request.trial_calls_used or 0,
+        "trial_calls_allowed": settings.CLIENT_TRIAL_CALLS,
+        "trial_max_minutes": max(1, round(settings.CLIENT_TRIAL_MAX_DURATION_S / 60)),
         "created_at": request.created_at,
         "updated_at": request.updated_at,
         "completed_at": request.completed_at,

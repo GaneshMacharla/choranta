@@ -14,7 +14,7 @@ class CampaignSettings(BaseModel):
     kind: Literal["BULK", "TRIGGER"] = "BULK"  # TRIGGER = always-on website leads
     agent_id: str
     agent_version_id: str
-    provider: str = "exotel"
+    provider: str = "vobiz"
     caller_number_ids: List[str] = Field(default_factory=list)
     timezone: Optional[str] = None  # defaults to the client's timezone
     windows: List[CallingWindow] = Field(default_factory=lambda: [CallingWindow(start_min=600, end_min=1140)])

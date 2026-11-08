@@ -5,6 +5,15 @@ from app.models.agent import Agent
 from app.services import knowledge_store
 
 
+def belongs_to_agent(source: Any, agent: Agent) -> bool:
+    """Whether this AI employee may use the entry: the shared library, its client's knowledge, or its own private notes."""
+    owner = getattr(source, "owner_agent_id", None)
+    if owner:
+        return owner == agent.id
+    client_id = getattr(source, "client_id", None)
+    return not client_id or client_id == agent.client_id
+
+
 class KnowledgeRepository:
     """
     Knowledge an AI employee can use: the shared library and per-agent entries (SQL), and its client's
@@ -30,7 +39,7 @@ class KnowledgeRepository:
     def attach_to_agent(self, agent_id: str, knowledge_id: str) -> bool:
         agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
         source = self.get_by_id(knowledge_id)
-        if not agent or not source:
+        if not agent or not source or not belongs_to_agent(source, agent):
             return False
         if isinstance(source, knowledge_store.StoredKnowledge):
             if source.type == knowledge_store.DOCUMENT:

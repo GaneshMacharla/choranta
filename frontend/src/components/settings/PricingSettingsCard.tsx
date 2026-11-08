@@ -62,7 +62,7 @@ export const PricingSettingsCard: React.FC = () => {
           </label>
         </div>
         <p className="leading-relaxed text-slate-500">
-          When a call ends, Choranta works out its real cost (Exotel minutes, speech-to-text, text-to-speech and LLM),
+          When a call ends, Choranta works out its real cost (Vobiz minutes, speech-to-text, text-to-speech and LLM),
           adds the profit %, and takes that many credits (₹1 = 1 credit) from the client's wallet. How many calls a
           client can run at once follows their balance: each live call holds what a full-length call would cost.
         </p>

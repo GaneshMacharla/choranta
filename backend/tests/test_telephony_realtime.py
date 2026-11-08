@@ -11,7 +11,7 @@ from app.models.call import Call
 from app.runtime.context import RuntimeContext
 from app.runtime.providers.base import LLMResult, TranscriptResult
 from app.runtime.providers.registry import default_registry
-from app.runtime.providers.telephony.exotel import ExotelTelephonyProvider
+from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
 from app.runtime.telephony import session as session_module
 from app.runtime.telephony.session import TelephonyMediaSession
 from app.runtime.telephony.speech_text import SentenceChunker, is_backchannel
@@ -30,10 +30,10 @@ class FakeWebSocket:
         self.sent.append(json.loads(text))
 
     def media_frames(self) -> int:
-        return sum(1 for m in self.sent if m["event"] == "media")
+        return sum(1 for m in self.sent if m["event"] == "playAudio")
 
     def clears(self) -> int:
-        return sum(1 for m in self.sent if m["event"] == "clear")
+        return sum(1 for m in self.sent if m["event"] == "clearAudio")
 
 
 class FakeSTT:
@@ -94,7 +94,7 @@ def _session(db: Session, telephony_setup) -> TelephonyMediaSession:
         destination_number="+914045209348",
         direction="OUTBOUND",
         status="ACTIVE",
-        provider="exotel",
+        provider="vobiz",
         provider_call_id=generate_unique_id("exo_"),
     )
     db.add(call)
@@ -102,7 +102,7 @@ def _session(db: Session, telephony_setup) -> TelephonyMediaSession:
     ws = FakeWebSocket()
     s = TelephonyMediaSession(
         websocket=ws, call_record=call, stream_sid="stream_rt", db=db,
-        telephony_provider=ExotelTelephonyProvider(webhook_secret="x"),
+        telephony_provider=VobizTelephonyProvider(webhook_secret="x"),
     )
     spec = _build_test_agent_spec(telephony_setup["agent"].id)
     s.context = RuntimeContext("ses_rt", call.agent_id, call.client_id, call.agent_version_id, spec, {})

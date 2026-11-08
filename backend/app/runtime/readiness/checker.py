@@ -1,10 +1,18 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 from app.models.client import Client
 from app.schemas.agent_spec import CanonicalAgentSpec
 from app.runtime.providers.registry import ProviderRegistry, default_registry
+
+
+def live_block_reason(agent: Optional[Agent]) -> Optional[str]:
+    """Why this AI employee can't take real calls, or None if it can. Test calls don't go through this."""
+    if not settings.AGENT_STATUS_ENFORCED or agent is None or agent.status == "DEPLOYED":
+        return None
+    return f"{agent.name} isn't live (its status is {agent.status}). Press Go live on its Test tab to take real calls."
 
 
 class RuntimeReadinessChecker:
@@ -96,7 +104,6 @@ class RuntimeReadinessChecker:
             errors.append(f"Configured TTS provider '{spec.providers.tts}' is not registered.")
 
         # In provider mode, verify required credentials
-        from app.core.config import settings
         if self.registry.mode in ("provider", "real"):
             if (spec.providers.stt == "cartesia" or spec.providers.tts == "cartesia") and not settings.CARTESIA_API_KEY:
                 errors.append("Cartesia API key (CARTESIA_API_KEY) is not configured in server environment.")

@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import av
 from aiortc import MediaStreamTrack, RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
@@ -23,7 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_operator
+from app.api.deps import require_client_user, require_operator
+from app.core.config import settings
 from app.core.security import generate_unique_id
 from app.db.session import SessionLocal, get_db
 from app.models.agent import Agent
@@ -37,6 +38,7 @@ from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony.browser import BROWSER_SAMPLE_RATE, BrowserTelephonyProvider
 from app.runtime.runtime import AgentRuntime
 from app.runtime.telephony.session import TelephonyMediaSession
+from app.services import agent_requests, billing
 
 logger = logging.getLogger("choranta.runtime.webrtc")
 
@@ -118,7 +120,7 @@ _LIVE_EVENTS = {
 
 
 class BrowserMediaSession(TelephonyMediaSession):
-    """A phone call session whose carrier is a WebRTC peer connection instead of an Exotel media stream."""
+    """A phone call session whose carrier is a WebRTC peer connection instead of a carrier media stream."""
 
     def __init__(self, call_record: Call, db: Session, track: AgentAudioTrack,
                  notify: Callable[[Dict[str, Any]], None], on_hang_up: Callable[[str], None]):
@@ -153,8 +155,12 @@ class BrowserMediaSession(TelephonyMediaSession):
 class BrowserCall:
     """One browser test call: the peer connection, its phone session and the database session it uses."""
 
-    def __init__(self, call_id: str):
+    def __init__(self, call_id: str,
+                 on_end: Optional[Callable[[Session, str, Optional[float]], None]] = None):
         self.call_id = call_id
+        # Told how the call ended: the reason, and how long it was connected (None = never connected)
+        self._on_end = on_end
+        self._connected_at: Optional[float] = None
         self.db = SessionLocal()
         self.track = AgentAudioTrack()
         self.pc = RTCPeerConnection(RTCConfiguration(iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]))
@@ -212,6 +218,7 @@ class BrowserCall:
             logger.info(f"Browser call {self.call_id}: WebRTC {state}.")
             if state == "connected" and not self._started:
                 self._started = True
+                self._connected_at = time.monotonic()
                 await self.session.initialize()  # plays the greeting
                 self.notify({"type": "connected", "call_id": self.call_id})
             elif state in ("failed", "closed"):
@@ -271,11 +278,19 @@ class BrowserCall:
                 await self.pc.close()
             except Exception:
                 pass
+            if self._on_end:
+                connected = time.monotonic() - self._connected_at if self._connected_at is not None else None
+                try:
+                    self.db.rollback()
+                    self._on_end(self.db, reason, connected)
+                except Exception as e:
+                    logger.error(f"Browser call {self.call_id}: end hook failed: {type(e).__name__}: {e}")
             self.db.close()
             logger.info(f"Browser call {self.call_id} ended ({reason}).")
 
 
-def _create_call_record(db: Session, req: BrowserCallRequest, user: User) -> Call:
+def _create_call_record(db: Session, req: BrowserCallRequest, user: User,
+                        extra_metadata: Optional[Dict[str, Any]] = None) -> Call:
     """Creates the test Call and starts its runtime session, as the carrier webhook does for a phone call."""
     agent = db.get(Agent, req.agent_id)
     version = db.get(AgentVersion, req.agent_version_id)
@@ -319,22 +334,29 @@ def _create_call_record(db: Session, req: BrowserCallRequest, user: User) -> Cal
         started_at=now,
         answered_at=now,
         duration_seconds=0.0,
-        metadata_={"is_test": True, "channel": "browser", "started_by": user.id, "variables": variables},
+        metadata_={"is_test": True, "channel": "browser", "started_by": user.id, "variables": variables,
+                   **(extra_metadata or {})},
     ))
 
 
-@router.post("", response_model=BrowserCallResponse, status_code=status.HTTP_201_CREATED)
-async def start_browser_call(
-    req: BrowserCallRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_operator),
-):
-    """Starts a free test call with an AI Employee from the browser (WebRTC SDP offer in, answer out)."""
-    if req.type != "offer":
-        raise HTTPException(status_code=400, detail="Expected an SDP offer.")
-    call_record = _create_call_record(db, req, current_user)  # readiness errors become 4xx responses
+# A call nobody connects to (e.g. the browser gave up) is ended after this long
+CONNECT_TIMEOUT_S = 30
 
-    call = BrowserCall(call_record.id)
+
+async def _start_call(db: Session, req: BrowserCallRequest, user: User,
+                      extra_metadata: Optional[Dict[str, Any]] = None,
+                      on_end: Optional[Callable[[Session, str, Optional[float]], None]] = None) -> BrowserCallResponse:
+    """Creates the test call and answers the browser's offer. Readiness errors become 4xx responses."""
+    try:
+        call_record = _create_call_record(db, req, user, extra_metadata)
+    except Exception:
+        if on_end:  # no call was made, so it ends here
+            if not db.is_active:  # a database error left the session needing a rollback
+                db.rollback()
+            on_end(db, "not_started", None)
+        raise
+
+    call = BrowserCall(call_record.id, on_end=on_end)
     active_browser_calls[call.call_id] = call
     try:
         answer = await call.connect(RTCSessionDescription(sdp=req.sdp, type=req.type))
@@ -343,9 +365,8 @@ async def start_browser_call(
         await call.end("connection_failed")
         raise HTTPException(status_code=400, detail="Could not set up the audio connection.")
 
-    # Nobody connected (e.g. the browser gave up): don't leave the call open
     async def expire_if_unconnected():
-        await asyncio.sleep(30)
+        await asyncio.sleep(CONNECT_TIMEOUT_S)
         if not call._started:
             await call.end("connection_timeout")
     asyncio.create_task(expire_if_unconnected())
@@ -358,9 +379,75 @@ async def start_browser_call(
     )
 
 
+@router.post("", response_model=BrowserCallResponse, status_code=status.HTTP_201_CREATED)
+async def start_browser_call(
+    req: BrowserCallRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_operator),
+):
+    """Starts a free test call with an AI Employee from the browser (WebRTC SDP offer in, answer out)."""
+    if req.type != "offer":
+        raise HTTPException(status_code=400, detail="Expected an SDP offer.")
+    return await _start_call(db, req, current_user)
+
+
 @router.post("/{call_id}/hangup")
 async def hang_up_browser_call(call_id: str, _: User = Depends(require_operator)):
     """Ends a browser test call (the tester pressed End Call)."""
+    call = active_browser_calls.get(call_id)
+    if call:
+        await call.end("caller_hangup")
+    return {"status": "ended", "call_id": call_id}
+
+
+# ---------------------------------------------------------------- client trial calls
+
+portal_router = APIRouter(prefix="/portal/agent-requests", tags=["Client Portal"])
+
+
+class TrialCallRequest(BaseModel):
+    sdp: str = Field(..., description="The browser's SDP offer (with ICE candidates gathered)")
+    type: str = "offer"
+
+
+def _trial_call_ended(request_id: str) -> Callable[[Session, str, Optional[float]], None]:
+    def on_end(db: Session, reason: str, connected_seconds: Optional[float]) -> None:
+        if not agent_requests.trial_call_counts(reason, connected_seconds):
+            agent_requests.release_trial_call(db, request_id)
+    return on_end
+
+
+@portal_router.post("/{request_id}/trial-call", response_model=BrowserCallResponse, status_code=status.HTTP_201_CREATED)
+async def start_trial_call(
+    request_id: str,
+    req: TrialCallRequest,
+    account: Tuple[User, str] = Depends(require_client_user),
+    db: Session = Depends(get_db),
+):
+    """
+    The client tries the AI employee the team sent them: a short, free browser call. The server picks the
+    employee and its published version, so a client can only ever reach their own.
+    """
+    user, client_id = account
+    if req.type != "offer":
+        raise HTTPException(status_code=400, detail="Expected an SDP offer.")
+    if not billing.browser_session_allowed(db):
+        raise HTTPException(status_code=429, detail=billing.PLATFORM_BUSY_REASON)
+    request, agent, version = agent_requests.reserve_trial_call(db, request_id, client_id)
+    call_req = BrowserCallRequest(agent_id=agent.id, agent_version_id=version.id, sdp=req.sdp, type=req.type,
+                                  user_name=user.name or None, company_name=request.company_name or None)
+    extra = {"trial_request_id": request.id, "max_duration_s": settings.CLIENT_TRIAL_MAX_DURATION_S}
+    return await _start_call(db, call_req, user, extra_metadata=extra, on_end=_trial_call_ended(request.id))
+
+
+@portal_router.post("/{request_id}/trial-call/{call_id}/hangup")
+async def hang_up_trial_call(request_id: str, call_id: str, account: Tuple[User, str] = Depends(require_client_user),
+                             db: Session = Depends(get_db)):
+    """Ends the client's trial call (they pressed End Call)."""
+    _, client_id = account
+    record = db.get(Call, call_id)
+    if not record or record.client_id != client_id or (record.metadata_ or {}).get("trial_request_id") != request_id:
+        raise HTTPException(status_code=404, detail="Call not found.")
     call = active_browser_calls.get(call_id)
     if call:
         await call.end("caller_hangup")

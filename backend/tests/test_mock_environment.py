@@ -90,14 +90,14 @@ def test_complete_pending_ends_only_mock_outbound_calls(client, operator_headers
     def outbound(call_id, provider_call_id):
         return Call(
             id=call_id, client_id=agent.client_id, agent_id=agent.id, agent_version_id="mock_agtv_1",
-            provider="exotel", provider_call_id=provider_call_id, direction="OUTBOUND",
+            provider="vobiz", provider_call_id=provider_call_id, direction="OUTBOUND",
             caller_number="+910000000000", destination_number="+919876543210", status="INITIATED",
         )
 
     db.add_all([
         outbound("call_sim_a", "mock_call_aaaaaaaaaaaa"),
         outbound("call_sim_b", "mock_call_bbbbbbbbbbbb"),
-        outbound("call_real_c", "exotel_real_sid"),
+        outbound("call_real_c", "vobiz_real_sid"),
     ])
     db.commit()
 

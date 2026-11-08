@@ -90,7 +90,7 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
   return (
     <Card
       title="Billing & Wallet"
-      subtitle={`Prepaid wallet: payments issue ${wallet.gst_registered ? 'GST invoices' : 'receipts (no GST)'}, calls are charged automatically`}
+      subtitle={`Prepaid wallet: ${wallet.invoices_enabled ? `payments issue ${wallet.gst_registered ? 'GST invoices' : 'receipts (no GST)'}, ` : ''}calls are charged automatically`}
     >
       <div className="space-y-4 text-xs">
         {error && (
@@ -134,10 +134,10 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
         <div className="rounded border border-[#1b2030] bg-[#0d101a] p-3 text-slate-400">
           <span className="text-slate-300">{profile?.legal_name}</span>
           {profile?.gstin ? ` · GSTIN ${profile.gstin}` : ' · GSTIN not set'}
-          {profile?.state_code ? ` · State code ${profile.state_code}` : ' · State not set (invoices use your state)'}
+          {profile?.state_code ? ` · State code ${profile.state_code}` : (wallet.invoices_enabled ? ' · State not set (invoices use your state)' : ' · State not set')}
         </div>
 
-        <div className="rounded border border-[#1b2030]">
+        {wallet.invoices_enabled && <div className="rounded border border-[#1b2030]">
           <p className="border-b border-[#1b2030] px-4 py-2 font-semibold text-slate-300">Invoices</p>
           {invoices.length === 0 ? (
             <p className="px-4 py-3 text-slate-500">No invoices yet.</p>
@@ -153,7 +153,7 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
               </div>
             ))
           )}
-        </div>
+        </div>}
 
         <div className="rounded border border-[#1b2030]">
           <p className="border-b border-[#1b2030] px-4 py-2 font-semibold text-slate-300">Wallet activity</p>
@@ -190,8 +190,8 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
         title="Record payment"
         description={
           wallet.gst_registered
-            ? 'Amount received from the client, including GST. A GST invoice is issued and the wallet is credited with the taxable value.'
-            : 'Amount received from the client. A payment receipt is issued and the wallet is credited with the full amount (no GST).'
+            ? `Amount received from the client, including GST. ${wallet.invoices_enabled ? 'A GST invoice is issued and the' : 'The'} wallet is credited with the taxable value.`
+            : `Amount received from the client. ${wallet.invoices_enabled ? 'A payment receipt is issued and the' : 'The'} wallet is credited with the full amount (no GST).`
         }
       >
         <div className="space-y-3 text-xs">
@@ -214,19 +214,19 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
               ) : (
                 <div className="flex justify-between"><span>IGST</span><span>{inr(split.igst_inr)}</span></div>
               )}
-              <div className="flex justify-between border-t border-[#1b2030] pt-1 font-semibold"><span>{split.gst_registered ? 'Invoice total' : 'Receipt total'}</span><span>{inr(split.total_inr)}</span></div>
+              <div className="flex justify-between border-t border-[#1b2030] pt-1 font-semibold"><span>{!wallet.invoices_enabled ? 'Total' : split.gst_registered ? 'Invoice total' : 'Receipt total'}</span><span>{inr(split.total_inr)}</span></div>
             </div>
           )}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
             <Button variant="primary" disabled={!split} isLoading={busy === 'pay'} onClick={() => run('pay', () => billingService.recordPayment(clientId, Number(amount), reference))}>
-              Record & issue invoice
+              {wallet.invoices_enabled ? 'Record & issue invoice' : 'Record payment'}
             </Button>
           </div>
         </div>
       </Modal>
 
-      <Modal isOpen={modal === 'adjust'} onClose={() => setModal(null)} title="Adjust wallet" description="Refunds, goodwill credits or corrections. No invoice is issued.">
+      <Modal isOpen={modal === 'adjust'} onClose={() => setModal(null)} title="Adjust wallet" description={`Refunds, goodwill credits or corrections.${wallet.invoices_enabled ? ' No invoice is issued.' : ''}`}>
         <div className="space-y-3 text-xs">
           <label className="block space-y-1">
             <span className="text-slate-300">Amount (₹; negative to deduct)</span>
@@ -245,7 +245,7 @@ export const ClientBillingCard: React.FC<{ clientId: string }> = ({ clientId }) 
         </div>
       </Modal>
 
-      <Modal isOpen={modal === 'profile'} onClose={() => setModal(null)} title="Billing profile" description="Printed on the client's GST invoices.">
+      <Modal isOpen={modal === 'profile'} onClose={() => setModal(null)} title="Billing profile" description={wallet.invoices_enabled ? "Printed on the client's GST invoices." : "The client's billing details."}>
         {profileDraft && (
           <div className="space-y-3 text-xs">
             {([

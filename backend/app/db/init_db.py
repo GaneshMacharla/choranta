@@ -269,163 +269,6 @@ def seed_catalogs(db: Session) -> None:
     db.query(Integration).filter(Integration.id.in_(_RETIRED_INTEGRATIONS)).update(
         {"connection_status": "DISABLED"}, synchronize_session=False)
 
-    # 3. Knowledge Sources
-    initial_knowledge = [
-        {
-            "id": "knw_hospital_services",
-            "name": "Hospital Services & Departments Directory.pdf",
-            "type": "PDF",
-            "description": "Clinical department listings, locations, and appointment guidelines.",
-            "status": "READY",
-            "metadata": {"pages": 14, "file_size_kb": 1240},
-        },
-        {
-            "id": "knw_doctor_schedules",
-            "name": "Doctor Specialties and Roster.pdf",
-            "type": "PDF",
-            "description": "Physician shifts, consultation timings, and qualifications.",
-            "status": "READY",
-            "metadata": {"pages": 8, "file_size_kb": 890},
-        },
-        {
-            "id": "knw_patient_faq",
-            "name": "General Patient & Booking FAQ.txt",
-            "type": "FAQ",
-            "description": "Frequently asked questions covering billing, parking, and insurance.",
-            "status": "READY",
-            "metadata": {"entries": 32},
-        },
-        {
-            "id": "knw_property_catalog",
-            "name": "Approved Property Inventory & FAQ Guide.pdf",
-            "type": "PDF",
-            "description": "Floor plans, approved project brochures, pricing slabs, amenities, and RERA approvals.",
-            "status": "READY",
-            "metadata": {"pages": 24, "file_size_kb": 3200},
-        },
-        {
-            "id": "knw_coaching_course_catalog",
-            "name": "Course Brochure, Batches & Fee Structure.pdf",
-            "type": "PDF",
-            "description": "Courses offered, batch timings and start dates, fees and instalments, faculty, demo class policy and admission FAQ.",
-            "status": "READY",
-            "metadata": {"pages": 12, "file_size_kb": 1450},
-        },
-    ]
-
-    for knw_data in initial_knowledge:
-        if not db.query(KnowledgeSource).filter(KnowledgeSource.id == knw_data["id"]).first():
-            db.add(KnowledgeSource(
-                id=knw_data["id"],
-                name=knw_data["name"],
-                type=knw_data["type"],
-                description=knw_data["description"],
-                status=knw_data["status"],
-                meta=knw_data.get("metadata", {})
-            ))
-
-    db.commit()
-
-
-def seed_real_estate_data(db: Session) -> None:
-    """Seed sample properties and leads for client tenants."""
-    clients = db.query(Client).all()
-    if not clients:
-        return
-
-    for client in clients:
-        sample_properties = [
-            {
-                "id": f"prop_re_{client.id[-6:]}_01",
-                "client_id": client.id,
-                "project_name": "Prestige Highline Residences",
-                "location": "Whitefield",
-                "price": 9500000,
-                "price_display": "₹95 Lakhs",
-                "bhk": 3,
-                "property_type": "Apartment",
-                "status": "AVAILABLE",
-                "amenities": ["Gym", "Covered Parking", "Clubhouse", "Children Play Area"],
-                "meta": {"rera": "PRM/KA/RERA/1251/446/PR/171015/000451", "possession": "Dec 2026"},
-            },
-            {
-                "id": f"prop_re_{client.id[-6:]}_02",
-                "client_id": client.id,
-                "project_name": "Prestige Palm Meadows Villa",
-                "location": "Whitefield",
-                "price": 24000000,
-                "price_display": "₹2.4 Cr",
-                "bhk": 4,
-                "property_type": "Villa",
-                "status": "AVAILABLE",
-                "amenities": ["Private Garden", "Clubhouse", "24/7 Security", "Swimming Pool"],
-                "meta": {"rera": "PRM/KA/RERA/1251/446/PR/180222/001899", "possession": "Ready to Move"},
-            },
-            {
-                "id": f"prop_re_{client.id[-6:]}_03",
-                "client_id": client.id,
-                "project_name": "Sobha Dream Acres",
-                "location": "Panathur",
-                "price": 7500000,
-                "price_display": "₹75 Lakhs",
-                "bhk": 2,
-                "property_type": "Apartment",
-                "status": "AVAILABLE",
-                "amenities": ["Swimming Pool", "Jogging Track", "Badminton Court"],
-                "meta": {"rera": "PRM/KA/RERA/1251/446/PR/190510/002560", "possession": "Ready to Move"},
-            },
-            {
-                "id": f"prop_re_{client.id[-6:]}_04",
-                "client_id": client.id,
-                "project_name": "Brigade Cornerstone Utopia",
-                "location": "Varthur",
-                "price": 11500000,
-                "price_display": "₹1.15 Cr",
-                "bhk": 3,
-                "property_type": "Apartment",
-                "status": "AVAILABLE",
-                "amenities": ["Clubhouse", "Tennis Court", "Multiplex", "Supermarket"],
-                "meta": {"rera": "PRM/KA/RERA/1251/446/PR/200115/003180", "possession": "June 2026"},
-            },
-        ]
-
-        for p in sample_properties:
-            if not db.query(Property).filter(Property.id == p["id"]).first():
-                db.add(Property(**p))
-
-        sample_leads = [
-            {
-                "id": f"lead_re_{client.id[-6:]}_101",
-                "client_id": client.id,
-                "name": "Rahul Sharma",
-                "phone": "+919876543210",
-                "email": "rahul.sharma@example.com",
-                "lead_source": "MagicBricks",
-                "property_viewed": "Prestige Highline Residences",
-                "enquiry_location": "Whitefield",
-                "enquiry_budget": "₹90 Lakhs - ₹1.1 Cr",
-                "enquiry_bhk": "3 BHK",
-                "lead_qualification_status": "PENDING",
-            },
-            {
-                "id": f"lead_re_{client.id[-6:]}_102",
-                "client_id": client.id,
-                "name": "Priya Patel",
-                "phone": "+919812345678",
-                "email": "priya.patel@example.com",
-                "lead_source": "Website Enquiry",
-                "property_viewed": "Sobha Dream Acres",
-                "enquiry_location": "Panathur",
-                "enquiry_budget": "₹70 - ₹80 Lakhs",
-                "enquiry_bhk": "2 BHK",
-                "lead_qualification_status": "PENDING",
-            },
-        ]
-
-        for l in sample_leads:
-            if not db.query(Lead).filter(Lead.id == l["id"]).first():
-                db.add(Lead(**l))
-
     db.commit()
 
 
@@ -449,6 +292,7 @@ _ADDED_COLUMNS = [
     ("agent_requests", "details", "TEXT"),
     ("agent_requests", "company_name", "VARCHAR(255)"),
     ("agent_requests", "business_type", "VARCHAR(32)"),
+    ("agent_requests", "trial_calls_used", "INTEGER NOT NULL DEFAULT 0"),
     ("knowledge_sources", "content", "TEXT"),
     ("number_pricing", "setup_fee_inr", "FLOAT NOT NULL DEFAULT 0"),
     ("knowledge_sources", "owner_agent_id", "VARCHAR(64) REFERENCES agents(id) ON DELETE CASCADE"),
@@ -525,8 +369,7 @@ def init_db() -> None:
         seed_catalogs(db)
         from app.services.call_scripts import seed_standard_scripts
         seed_standard_scripts(db)
-        seed_real_estate_data(db)
-        logger.info("Catalogs and real estate sample data seeded.")
+        logger.info("Catalogs seeded.")
     except Exception as e:
         logger.error(f"Error during db initialization: {e}")
         db.rollback()

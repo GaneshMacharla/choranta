@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     SARVAM_LLM_MODEL: str = "sarvam-105b-conversations"  # Sarvam's model for real-time voice agents
     SARVAM_REASONING_EFFORT: str = "none"                # "none" disables thinking for low latency
     SARVAM_MAX_TOKENS: int = 400
+    # Lower than the usual 0.7: in prompt tests Sarvam mixed up facts (one course's batch date given for another)
+    # and drifted from its rules more at 0.7. Steps that pass their own temperature keep it.
+    SARVAM_TEMPERATURE: float = 0.3
     SARVAM_TIMEOUT_S: float = 10.0
     SARVAM_FALLBACK_TO_GEMINI: bool = True               # use Gemini for a turn if Sarvam errors
     SARVAM_RATE_LIMIT_RETRIES: int = 1                   # retries after a 429/503 before falling back
@@ -99,7 +102,7 @@ class Settings(BaseSettings):
     # --------------------------------------------------------
     # Call cost estimates (set these to your plans' actual rates)
     # --------------------------------------------------------
-    TELEPHONY_RATE_PER_MINUTE_INR: float = 0.80     # Exotel outbound to mobile (third-party estimates ₹0.60–1.20)
+    TELEPHONY_RATE_PER_MINUTE_INR: float = 0.80     # carrier cost per minute; set to your Vobiz rate
     TELEPHONY_BILLING_PULSE_SECONDS: int = 60       # carrier bills per started pulse
     STT_USD_PER_MINUTE: float = 0.00118             # Cartesia ink-whisper batch: 1 credit / 2 s at Startup $39.2 per 1M credits
     TTS_USD_PER_MINUTE: float = 0.0353              # Cartesia Sonic: ~900 chars (credits) per audio minute at Startup $39.2 per 1M
@@ -129,11 +132,12 @@ class Settings(BaseSettings):
     # Not GST-registered yet: no GST is charged and payments get a plain receipt, not a tax invoice.
     # Once registered, set GST_REGISTERED=true and COMPANY_GSTIN in .env.
     GST_REGISTERED: bool = False
+    # Off for now: payments just add credits, with no invoice or receipt, and the invoice screens are hidden
+    INVOICES_ENABLED: bool = False
     # Monthly plans are retired: clients buy credits and pay per call (existing plans run out, then stop)
     PAYG_ONLY: bool = True
     # Live calls across all clients, as a manual ceiling. The Sarvam plan's limits (SARVAM_LLM_REQUESTS_PER_MIN and
-    # below) and the Vobiz account's lines also apply: the lowest wins. Never above the Exotel account's concurrent
-    # calls or Voicebot channels.
+    # below) and the Vobiz account's lines also apply: the lowest wins.
     MAX_CONCURRENT_CALLS_PLATFORM: int = 5
     # Lines campaigns and other outbound calls leave free, because a caller can't wait the way a campaign can
     INBOUND_RESERVED_LINES: int = 1
@@ -153,19 +157,17 @@ class Settings(BaseSettings):
     NUMBER_TEST_MAX_DURATION_S: int = 120     # number activation test calls are free, so keep them short
     NUMBER_TEST_MAX_ATTEMPTS: int = 3
     BILLING_SWEEP_S: int = 60                 # how often finished-but-unbilled calls are charged
-    # Exotel's per-call Price is checked against the telephony estimate; alert when Exotel costs this much more
-    CARRIER_COST_ALERT_PERCENT: float = 5.0
-    EXOTEL_PRICE_INCLUDES_GST: bool = False   # Exotel's Price excludes GST; GST is added while it can't be claimed
     PAYMENT_UPI_ID: str = ""
     PAYMENT_BANK_DETAILS: str = ""
     BILLING_ENFORCED: bool = True             # block new billable calls when the wallet balance is <= 0
+    AGENT_STATUS_ENFORCED: bool = True        # real calls reach only live (DEPLOYED) AI employees; test calls always work
     SUBSCRIPTION_GRACE_DAYS: int = 3          # calls keep working this long after a plan period ends unpaid
     MIN_WALLET_TOPUP_INR: float = 500.0       # smallest online wallet top-up (GST included when registered)
     NUMBER_GRACE_DAYS: int = 3                # unpaid number rent: the number is taken back after this
     NUMBER_RENT_REMINDER_DAYS: int = 4        # warn daily this many days before rent the wallet can't cover
     NUMBER_RENTAL_CHECK_S: int = 900          # how often number rent is renewed / released
     CAMPAIGN_TICK_S: int = 5                  # how often the campaign dispatcher checks for calls to place
-    CAMPAIGN_MAX_DIALS_PER_MIN: int = 60      # pacing across all campaigns (Exotel default: 60 calls/minute)
+    CAMPAIGN_MAX_DIALS_PER_MIN: int = 60      # pacing across all campaigns
 
     # Razorpay (online payments for plans and wallet top-ups)
     RAZORPAY_KEY_ID: str = ""
@@ -185,6 +187,9 @@ class Settings(BaseSettings):
     # Phone call behaviour (cost control)
     # --------------------------------------------------------
     VOICE_MAX_REPLY_CHARS: int = 130          # stop the agent's reply after the sentence that crosses this (~7 s of speech; people talk in short turns)
+    # Past that cap, read on this far for the reply's question and say only it (a telecaller ends on the question,
+    # e.g. "It's Rs 30,000, next batch 17 November. Are you working?"), skipping the extras in between
+    VOICE_QUESTION_SEARCH_CHARS: int = 250
     VOICE_PREFETCH_SENTENCES: int = 1         # sentences synthesized ahead of playback (unheard audio is still billed)
     VOICE_TTS_CACHE_MB: int = 64              # repeated sentences (greeting, farewell, common replies) replay from memory; 0 = off
     CALL_SILENCE_REPROMPT_S: float = 5.0      # caller silent this long -> "Are you still there?"
@@ -199,6 +204,16 @@ class Settings(BaseSettings):
     VOICE_INCOMPLETE_HOLD_MS: int = 900       # extra wait when the caller trailed off mid-thought ("my budget is..."); 0 = off
     VOICE_SLOW_REPLY_ACK_MS: int = 1800       # say a short "Okay." if the reply hasn't started by then; 0 = off
     VOICE_TOOL_FILLER: bool = True            # say "One moment, let me check." while a tool runs (unless the agent already did)
+
+    # Production robustness
+    VOICE_LLM_THREADS: int = 32               # threads for streaming LLM replies (one per call replying); own pool, so DB writes
+                                              # and tools can't starve replies
+    VOICE_TOOL_THREADS: int = 16              # threads for tool calls during phone calls
+    # Voices tried, in order, when the agent's own voice fails mid-call; the first one from a different provider
+    # with an API key is used, so a single vendor outage doesn't silence every call
+    VOICE_TTS_FALLBACK_PROVIDERS: str = "sarvam,cartesia"
+    SHUTDOWN_DRAIN_S: int = 600               # on shutdown (python -m app.serve), wait this long for live calls to finish;
+                                              # set the host's stop grace period (Docker/K8s) above this
 
     # Mock-only pricing estimates. These never contribute to production billing.
     MOCK_STT_PRICE_PER_MINUTE: float = 0.02
@@ -216,20 +231,9 @@ class Settings(BaseSettings):
     # --------------------------------------------------------
     # Telephony Integration (Phase 3C)
     # --------------------------------------------------------
-    EXOTEL_ACCOUNT_SID: Optional[str] = None
-    EXOTEL_API_KEY: Optional[str] = None
-    EXOTEL_API_TOKEN: Optional[str] = None
-    EXOTEL_SUBDOMAIN: str = "api.exotel.com"  # api.in.exotel.com for the Mumbai cluster
-    EXOTEL_WEBHOOK_SECRET: Optional[str] = None
     TELEPHONY_BASE_URL: Optional[str] = None
-    EXOTEL_FLOW_ID: Optional[str] = "1341429"
-    # ExoPhone shown as caller ID on outbound calls placed directly by an agent
-    EXOTEL_CALLER_ID: Optional[str] = None
     DEMO_LEADS_API_KEY: Optional[str] = None  # dev-only: client key the /demo/lead-form page sends leads with
-    EXOTEL_NUMBERS_MOCK: bool = False         # fake number search/purchase (no Exotel calls) for local testing
-    # Carrier for calls placed without one of the client's own numbers ("vobiz" or "exotel");
-    # calls from a phone number go through that number's own carrier
-    TELEPHONY_PROVIDER: str = "vobiz"
+    TELEPHONY_PROVIDER: str = "vobiz"         # Vobiz is the only carrier
     VOBIZ_AUTH_ID: Optional[str] = None
     VOBIZ_AUTH_TOKEN: Optional[str] = None
     VOBIZ_API_BASE: str = "https://api.vobiz.ai/api/v1"
@@ -273,6 +277,11 @@ class Settings(BaseSettings):
     WHATSAPP_MARKETING_COST_INR: float = 0.7846    # ...and per marketing one (Meta may re-categorise a template)
 
     # --------------------------------------------------------
+    # Off for now: clients needn't upload files before requesting their first AI employee (also hides that form step)
+    AGENT_REQUEST_REQUIRES_DOCUMENTS: bool = False
+    # Before an AI employee goes live, the team can let the client try it: free browser calls, each this short
+    CLIENT_TRIAL_CALLS: int = 1
+    CLIENT_TRIAL_MAX_DURATION_S: int = 180
     # Knowledge base storage (MongoDB Atlas): clients' documents, notes, FAQs and business details
     # --------------------------------------------------------
     MONGODB_URI: Optional[str] = None              # mongodb+srv://... from Atlas; "mongomock://" keeps it in memory (tests)

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import NotFoundException, ValidationException
 from app.core.security import generate_unique_id
 from app.models.agent_version import AgentVersion
+from app.models.phone_number import PhoneNumber
 from app.repositories.agent_repository import AgentRepository
 from app.repositories.agent_version_repository import AgentVersionRepository
 from app.repositories.client_repository import ClientRepository
@@ -144,6 +145,8 @@ class AgentVersionService:
             raise NotFoundException("AgentVersion", version_id)
 
         spec_data = old_version.configuration_json
+        if not isinstance(spec_data, dict) or "identity" not in spec_data:
+            raise ValidationException(f"Version {old_version.version_number} is in an old format and can't be restored.")
         # Convert canonical spec back into draft configuration structure
         draft_dict = {
             "identity": spec_data.get("identity", {}),
@@ -154,25 +157,52 @@ class AgentVersionService:
             "knowledge_sources": spec_data.get("knowledge", {}).get("sources", []),
             "tools": spec_data.get("tools", {}).get("enabled", []),
             "integrations": spec_data.get("integrations", {}).get("enabled", []),
+            "variables": spec_data.get("variables", {}),
             "voice": spec_data.get("voice", {}),
             "providers": spec_data.get("providers", {})
         }
 
-        self.config_repo.save_or_update(agent_id, draft_dict)
-
-        # Synchronize attached junctions
-        for kid in draft_dict["knowledge_sources"]:
-            self.knowledge_repo.attach_to_agent(agent_id, kid)
-        for tid in draft_dict["tools"]:
-            self.tool_repo.attach_to_agent(agent_id, tid)
-        for iid in draft_dict["integrations"]:
-            self.integration_repo.attach_to_agent(agent_id, iid)
+        # Saved like any draft edit, so knowledge and integrations added since this version come off again.
+        # Knowledge this agent can no longer use is left out rather than blocking the restore.
+        from app.services.agent_configuration_service import AgentConfigurationService
+        config_service = AgentConfigurationService(self.db)
+        draft = AgentConfigurationData.model_validate(draft_dict)
+        usable, _ = config_service.usable_knowledge(agent, draft.knowledge_sources)
+        config_service.update_configuration(agent_id, draft.model_copy(update={"knowledge_sources": usable}))
 
         return {
             "agent_id": agent_id,
             "restored_from_version": old_version.version_number,
             "message": f"Successfully loaded version {old_version.version_number} into current editable draft."
         }
+
+    def list_numbers(self, agent_id: str) -> List[Dict[str, Any]]:
+        """The phone numbers answered by this AI employee, each with the version it runs."""
+        if not self.agent_repo.get_by_id(agent_id):
+            raise NotFoundException("Agent", agent_id)
+        numbers = self.db.query(PhoneNumber).filter(PhoneNumber.agent_id == agent_id).order_by(PhoneNumber.phone_number).all()
+        version_numbers = {v.id: v.version_number for v in self.version_repo.list_by_agent(agent_id)}
+        return [
+            {
+                "id": n.id,
+                "phone_number": n.phone_number,
+                "status": n.status,
+                "agent_version_id": n.agent_version_id,
+                "version_number": version_numbers.get(n.agent_version_id),
+            }
+            for n in numbers
+        ]
+
+    def move_numbers(self, agent_id: str, version_id: str) -> List[Dict[str, Any]]:
+        """Puts all of this AI employee's phone numbers on one published version. Returns the numbers."""
+        version = self.version_repo.get_by_id(version_id)
+        if not version or version.agent_id != agent_id or version.status != "PUBLISHED":
+            raise NotFoundException("AgentVersion", version_id)
+        self.db.query(PhoneNumber).filter(PhoneNumber.agent_id == agent_id).update(
+            {"agent_version_id": version.id}, synchronize_session="fetch"
+        )
+        self.db.commit()
+        return self.list_numbers(agent_id)
 
     def compare_versions(self, agent_id: str, base_vnum: int, comp_vnum: int) -> VersionComparisonResponse:
         """Computes clean, human-readable differences between two versions."""

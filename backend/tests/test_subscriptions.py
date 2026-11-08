@@ -114,7 +114,7 @@ def test_check_call_allowed_rules(db: Session, telephony_setup, plan, company, m
 
     live = Call(id=generate_unique_id("call_"), client_id=cid, agent_id=telephony_setup["agent"].id,
                 agent_version_id=telephony_setup["version"].id, caller_number="+914045209348",
-                destination_number="+918008538015", direction="OUTBOUND", status="ACTIVE", provider="exotel",
+                destination_number="+918008538015", direction="OUTBOUND", status="ACTIVE", provider="vobiz",
                 provider_call_id=generate_unique_id("exo_"))
     db.add(live)
     db.commit()
@@ -139,9 +139,7 @@ def test_outbound_call_concurrency_returns_429(client: TestClient, auth_headers:
                                                plan, company, monkeypatch):
     monkeypatch.setattr(settings, "BILLING_ENFORCED", True, raising=False)
     monkeypatch.setattr(settings, "TELEPHONY_BASE_URL", "https://choranta.example.com", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", "04045209348", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_FLOW_ID", "1", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_ACCOUNT_SID", "acct", raising=False)
+    monkeypatch.setattr(settings, "VOBIZ_CALLER_ID", "04045209348", raising=False)
     _subscribe(db, telephony_setup["client"].id, plan)
     body = {"agent_id": telephony_setup["agent"].id, "agent_version_id": telephony_setup["version"].id,
             "destination_number": "09876543210"}

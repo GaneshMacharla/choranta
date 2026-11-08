@@ -186,8 +186,7 @@ export const PhoneCallTester: React.FC<PhoneCallTesterProps> = ({ agentId, agent
       {call && !isLive && call.cost && <CallCostCard cost={call.cost} />}
 
       <p className="text-[11px] leading-relaxed text-slate-500">
-        Exotel rings your phone from the configured ExoPhone; when you answer, the agent greets you. Exotel trial
-        accounts can only call numbers verified in the Exotel dashboard.
+        Vobiz rings your phone from the configured number; when you answer, the agent greets you.
       </p>
     </div>
   );

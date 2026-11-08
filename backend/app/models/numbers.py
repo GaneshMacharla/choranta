@@ -30,7 +30,7 @@ class ProviderNumber(Base):
     __table_args__ = (UniqueConstraint("provider", "e164", name="uq_provider_numbers_provider_e164"),)
 
     id = Column(String(64), primary_key=True, default=lambda: generate_unique_id("pnm"))
-    provider = Column(String(32), nullable=False, index=True)            # vobiz, exotel
+    provider = Column(String(32), nullable=False, index=True)            # vobiz
     provider_number_id = Column(String(128), nullable=True)
     e164 = Column(String(32), nullable=False, index=True)
     country = Column(String(8), nullable=True)

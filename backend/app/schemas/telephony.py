@@ -12,7 +12,7 @@ class PhoneNumberBase(BaseModel):
     client_id: str
     agent_id: Optional[str] = None
     agent_version_id: Optional[str] = None
-    provider: str = "exotel"
+    provider: str = "vobiz"
     provider_number_id: Optional[str] = None
     country_code: str = "US"
     status: str = "ACTIVE"
@@ -107,14 +107,13 @@ class CallDetailResponse(CallResponse):
 class InitiateOutboundCallRequest(BaseModel):
     """
     Call from a provisioned number (phone_number_id; uses its assigned agent) or directly as an
-    agent (agent_id + agent_version_id; caller ID is the client's own active number, or EXOTEL_CALLER_ID for test calls).
+    agent (agent_id + agent_version_id; caller ID is the client's own active number, or VOBIZ_CALLER_ID for test calls).
     """
     phone_number_id: Optional[str] = Field(None, description="ID of the provisioned PhoneNumber in Choranta Studio")
     agent_id: Optional[str] = Field(None, description="Agent to place the call as (when not using phone_number_id)")
     agent_version_id: Optional[str] = Field(None, description="Published AgentVersion to run (with agent_id)")
-    caller_id: Optional[str] = Field(None, description="Which of the client's numbers to call from (test calls: defaults to EXOTEL_CALLER_ID)")
+    caller_id: Optional[str] = Field(None, description="Which of the client's numbers to call from (test calls: defaults to VOBIZ_CALLER_ID)")
     destination_number: str = Field(..., description="The customer phone number to call (e.g. 09876543210 or +919876543210)")
-    flow_id: Optional[str] = Field(None, description="Optional Exotel Flow ID. Defaults to configured EXOTEL_FLOW_ID.")
     custom_field: Optional[str] = Field(None, description="Optional tracking metadata string")
     is_test: bool = Field(False, description="Test call from the AI Employee's Tests step: never billed or blocked by the wallet")
     variables: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Custom lead/campaign variables (e.g. user_name, property_viewed, enquiry_budget) to ground the agent")

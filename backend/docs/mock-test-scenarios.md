@@ -2,7 +2,7 @@
 
 Choranta test scenarios run only when the server is configured with `RUNTIME_MODE=mock`.
 They execute the existing `AgentRuntime` and persist the resulting runtime session, events,
-assertions, usage, and status. They never call Cartesia, Gemini, Exotel, or external tools.
+assertions, usage, and status. They never call Cartesia, Gemini, Vobiz, or external tools.
 
 ## Workflow
 

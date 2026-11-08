@@ -7,7 +7,7 @@ export const SecurityIntegrationsSection: React.FC<{ onOpenDemo: () => void }> =
     { name: 'Google Calendar', desc: '2-way live slot booking', icon: '📅' },
     { name: 'HubSpot CRM', desc: 'Lead logging & call recording sync', icon: '🟠' },
     { name: 'Zoho CRM', desc: 'Native pipeline & contact updates', icon: '🔴' },
-    { name: 'Exotel & Twilio', desc: 'Indian carrier DIDs & SIP trunking', icon: '📞' },
+    { name: 'Vobiz', desc: 'Indian carrier DIDs & SIP trunking', icon: '📞' },
     { name: 'Custom Webhooks', desc: 'POST payload to any backend or Zapier', icon: '⚡' },
   ];
 

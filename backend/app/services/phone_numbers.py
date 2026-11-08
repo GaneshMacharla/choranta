@@ -6,7 +6,7 @@ Vobiz account (services/number_service.py), assigns it to the client (services/n
 the one-time setup fee and the first month's rent from the client's wallet. The number starts READY_TO_TEST: once an AI employee is assigned,
 a test call to the client's phone that connects (or the client skipping the test) makes it ACTIVE. A background cycle renews the rent from the wallet each
 month; if the balance can't cover it the number is PAST_DUE, and after NUMBER_GRACE_DAYS it goes back to Choranta's
-pool (flagged for staff to resell or release; numbers bought on Exotel before Vobiz are released there).
+pool (flagged for staff to resell or release).
 Numbers registered without a rental (before numbers were sold) are free.
 """
 import logging
@@ -25,7 +25,7 @@ from app.models.agent_version import AgentVersion
 from app.models.billing import WalletTransaction
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import NumberPricing, NumberRental
-from app.services import exotel_numbers, notifications, number_assignments, number_service, verifications
+from app.services import notifications, number_assignments, number_service, verifications
 from app.services.billing import _money, get_wallet
 from app.services.subscriptions import add_month, utcnow
 
@@ -181,8 +181,8 @@ def buy_number(db: Session, client_id: str, phone_number: str, number_type: str,
 
 def release(db: Session, rental: NumberRental, now: Optional[datetime] = None, reason: str = "LAPSED") -> bool:
     """
-    Ends the client's rental. A Vobiz number returns to Choranta's pool (flagged for staff); a legacy Exotel number
-    is released on Exotel. False if that couldn't be done right now (retried next cycle).
+    Ends the client's rental. The number returns to Choranta's pool (flagged for staff). False if that couldn't be
+    done right now (retried next cycle).
     """
     from app.models.numbers import NumberAssignment
     pn = db.get(PhoneNumber, rental.phone_number_id)
@@ -200,12 +200,6 @@ def release(db: Session, rental: NumberRental, now: Optional[datetime] = None, r
         db.commit()
         logger.info(f"Rental of {display_number(pn) if pn else rental.phone_number_id} for {rental.client_id} ended ({reason})")
         return True
-    try:
-        if pn:
-            exotel_numbers.release(pn.provider_number_id)
-    except exotel_numbers.ExotelNumberError as exc:
-        logger.error(f"Releasing {pn.phone_number if pn else rental.phone_number_id} failed: {exc}")
-        return False
     rental.status = "RELEASED"
     rental.released_at = now or utcnow()
     if pn:

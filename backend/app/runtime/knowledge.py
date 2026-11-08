@@ -79,7 +79,12 @@ def _sources(db: Session, agent_id: str, spec: Any) -> List[Any]:
             named = knowledge_store.entries_by_ids(ids - {s.id for s in sql} - {e.id for e in ticked})
         except Exception:
             logger.exception("Knowledge base unavailable for agent %s", agent_id)
-    return sql + sorted(ticked + named, key=lambda e: e.created_at)
+    sources = sql + sorted(ticked + named, key=lambda e: e.created_at)
+    # Versions published before this rule may still name another client's knowledge: never read it on a call
+    from app.models.agent import Agent
+    from app.repositories.knowledge_repository import belongs_to_agent
+    agent = db.get(Agent, agent_id) if agent_id else None
+    return [s for s in sources if agent is None or belongs_to_agent(s, agent)]
 
 
 def _chunks(title: str, content: str) -> List[Tuple[str, str]]:

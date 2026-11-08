@@ -10,32 +10,11 @@ from app.models.billing import WalletTransaction
 from app.models.client import Client
 from app.models.phone_number import PhoneNumber
 from app.models.subscription import NumberRental
-from app.services import billing, exotel_numbers, phone_numbers
+from app.services import billing, phone_numbers
 from app.services.subscriptions import utcnow
 from test_billing import company  # noqa: F401
 from test_phase3c_telephony import telephony_setup  # noqa: F401
 from test_portal import _client_headers
-
-
-@pytest.fixture
-def exotel(monkeypatch):
-    """Records Exotel purchases and releases instead of calling Exotel."""
-    calls = {"purchased": [], "released": [], "fail_purchase": False, "fail_release": False}
-
-    def purchase(number, friendly_name):
-        if calls["fail_purchase"]:
-            raise exotel_numbers.ExotelNumberError("Number no longer available")
-        calls["purchased"].append(number)
-        return {"sid": f"sid_{number.lstrip('+')}", "phone_number": number}
-
-    def release(sid):
-        if calls["fail_release"]:
-            raise exotel_numbers.ExotelNumberError("Exotel down")
-        calls["released"].append(sid)
-
-    monkeypatch.setattr(exotel_numbers, "purchase", purchase)
-    monkeypatch.setattr(exotel_numbers, "release", release)
-    return calls
 
 
 @pytest.fixture(autouse=True)
@@ -137,25 +116,6 @@ def test_rental_cycle_renews_lapses_and_returns_to_pool(db: Session, telephony_s
     assert rental.status == "RELEASED" and len(_rent_debits(db, cid)) == debits
 
 
-def test_legacy_exotel_number_is_released_on_exotel(db: Session, telephony_setup, exotel, company):
-    from app.models.subscription import NumberRental as Rental
-    cid = telephony_setup["client"].id
-    pn = PhoneNumber(id=generate_unique_id("phn_"), client_id=cid, phone_number="+914071239999", provider="exotel",
-                     provider_number_id="sid_legacy", country_code="IN", status="ACTIVE")
-    db.add(pn)
-    db.flush()
-    rental = Rental(phone_number_id=pn.id, client_id=cid, number_type="Landline", monthly_rent_inr=499, status="PAST_DUE",
-                    current_period_start=utcnow() - timedelta(days=40), current_period_end=utcnow() - timedelta(days=10))
-    db.add(rental)
-    db.commit()
-    exotel["fail_release"] = True
-    phone_numbers.run_rental_cycle(db)
-    assert rental.status == "PAST_DUE"  # Exotel failed: kept, retried next cycle
-    exotel["fail_release"] = False
-    phone_numbers.run_rental_cycle(db)
-    assert rental.status == "RELEASED" and exotel["released"] == ["sid_legacy"]
-
-
 def test_free_numbers_are_never_charged(db: Session, telephony_setup, company):
     cid = telephony_setup["client"].id
     _fund(db, cid, 1180)
@@ -173,7 +133,7 @@ def test_inbound_call_to_overdue_number_is_rejected(client: TestClient, db: Sess
     rental.status = "PAST_DUE"
     rental.current_period_end = utcnow() - timedelta(days=settings.NUMBER_GRACE_DAYS + 1)
     db.commit()
-    resp = client.get("/api/telephony/exotel/inbound",
+    resp = client.get("/api/telephony/vobiz/answer",
                       params={"CallSid": "CA_RENT_1", "CallFrom": "09876543210", "CallTo": pn.phone_number})
     assert resp.json()["url"] == ""
 

@@ -6,7 +6,7 @@ const inr = (value: number, digits = 2) =>
   `₹${value.toLocaleString('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 
 const ROWS: Array<{ key: keyof NonNullable<CallCost['breakdown']>; label: string }> = [
-  { key: 'telephony', label: 'Telephony (Exotel)' },
+  { key: 'telephony', label: 'Telephony (Vobiz)' },
   { key: 'text_to_speech', label: 'Agent voice (TTS)' },
   { key: 'speech_to_text', label: 'Speech-to-text' },
   { key: 'llm', label: 'AI model (LLM)' },
@@ -86,7 +86,7 @@ export const CallCostCard: React.FC<{ cost: CallCost }> = ({ cost }) => {
 
           {cost.rates && (
             <p className="text-[10px] leading-relaxed text-slate-500">
-              Estimated from backend rates (Exotel ₹{cost.rates.telephony_per_minute_inr}/min billed per{' '}
+              Estimated from backend rates (Vobiz ₹{cost.rates.telephony_per_minute_inr}/min billed per{' '}
               {cost.rates.billing_pulse_seconds}s, TTS ${cost.rates.tts_usd_per_minute}/min). The client is charged cost + profit % in credits (₹1 = 1 credit); profit % is set in Settings.
             </p>
           )}

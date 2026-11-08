@@ -64,7 +64,7 @@ def test_completed_call_includes_cost(client: TestClient, auth_headers: dict, te
         direction="OUTBOUND",
         status="COMPLETED",
         duration_seconds=90,
-        provider="exotel",
+        provider="vobiz",
         provider_call_id=generate_unique_id("exo_"),
     )
     db.add(call)

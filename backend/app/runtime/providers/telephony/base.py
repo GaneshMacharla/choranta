@@ -1,7 +1,28 @@
+import re
 from abc import abstractmethod
 from typing import Any, Dict, Optional, Tuple
 from pydantic import BaseModel, Field
 from app.runtime.providers.base import BaseProvider
+
+
+def normalize_e164(number: str, default_country_code: str = "91") -> str:
+    """Normalizes a phone number to E.164. Carriers often send national formats ('09876543210' or '9876543210')."""
+    raw = (number or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("+"):
+        return "+" + re.sub(r"\D", "", raw)
+
+    digits = re.sub(r"\D", "", raw)
+    if digits.startswith("00"):
+        return "+" + digits[2:]
+    if digits.startswith("0") and len(digits) == 11:
+        return f"+{default_country_code}{digits[1:]}"
+    if len(digits) == 10:
+        return f"+{default_country_code}{digits}"
+    if digits.startswith(default_country_code) and len(digits) == 10 + len(default_country_code):
+        return "+" + digits
+    return "+" + digits if digits else ""
 
 
 class InboundCallPayload(BaseModel):
@@ -9,7 +30,7 @@ class InboundCallPayload(BaseModel):
     caller_number: str
     destination_number: str
     direction: str = "INBOUND"
-    provider: str = "exotel"
+    provider: str = "vobiz"
     raw_params: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -19,7 +40,7 @@ class CarrierLimitError(RuntimeError):
 
 class TelephonyProvider(BaseProvider):
     """
-    Abstract interface for Telephony providers (e.g. Exotel).
+    Abstract interface for Telephony providers (e.g. Vobiz).
     Encapsulates webhook authentication, call-connect response generation,
     the media-stream WebSocket wire protocol, and bidirectional audio translation
     (PSTN 8kHz audio ↔ internal canonical 16kHz PCM16).
@@ -95,6 +116,6 @@ class TelephonyProvider(BaseProvider):
         raise NotImplementedError("Outbound calling not implemented for this provider.")
 
     def outbound_call_id(self, result: Dict[str, Any]) -> Optional[str]:
-        """The carrier's id for a call placed with initiate_outbound_call (Exotel's Call.Sid by default)."""
+        """The carrier's id for a call placed with initiate_outbound_call (the mock carrier's Call.Sid by default)."""
         return (result.get("Call") or {}).get("Sid")
 

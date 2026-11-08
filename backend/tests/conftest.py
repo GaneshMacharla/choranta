@@ -34,8 +34,16 @@ for _override in ("STT_PROVIDER_OVERRIDE", "TTS_PROVIDER_OVERRIDE", "LLM_PROVIDE
     object.__setattr__(settings, _override, "")  # each test agent uses its own providers
 # Billing tests enable wallet enforcement explicitly; other tests place calls freely
 object.__setattr__(settings, "BILLING_ENFORCED", False)
-# Existing suites dial through the (mock) Exotel carrier; Vobiz tests switch this themselves
-object.__setattr__(settings, "TELEPHONY_PROVIDER", "exotel")
+# Existing suites cover invoices; test_invoices_off.py covers running without them
+object.__setattr__(settings, "INVOICES_ENABLED", True)
+# Most suites place calls with agents that never went live; test_agent_creation_flow.py covers the rule
+object.__setattr__(settings, "AGENT_STATUS_ENFORCED", False)
+# Suites dial through the mock Vobiz carrier, with no dial pacing; capacity tests set the limits they check
+object.__setattr__(settings, "TELEPHONY_PROVIDER", "vobiz")
+object.__setattr__(settings, "VOBIZ_AUTH_ID", "MA_TEST")
+object.__setattr__(settings, "VOBIZ_AUTH_TOKEN", "test_token")
+object.__setattr__(settings, "VOBIZ_CPS", 0)
+object.__setattr__(settings, "VOBIZ_MAX_CONCURRENT_CALLS", 1000)
 # Existing suites set the limits they test; test_call_capacity.py covers the Sarvam limits and the inbound reserve
 for _limit in ("SARVAM_LLM_REQUESTS_PER_MIN", "SARVAM_STT_WS_LIMIT", "SARVAM_TTS_WS_LIMIT", "INBOUND_RESERVED_LINES",
                "SARVAM_WS_OPEN_SPACING_MS"):

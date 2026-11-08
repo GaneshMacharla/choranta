@@ -90,6 +90,19 @@ class AgentSpecValidator:
                         field="knowledge.sources",
                         message=f"Referenced knowledge source ID '{knw_id}' does not exist in catalog."
                     ))
+            # An AI employee only uses its own client's knowledge
+            from app.models.agent import Agent
+            from app.repositories.knowledge_repository import KnowledgeRepository, belongs_to_agent
+            agent = db.get(Agent, spec.agent.id)
+            if agent:
+                repo = KnowledgeRepository(db)
+                for knw_id in spec.knowledge.sources:
+                    source = repo.get_by_id(knw_id)
+                    if source and not belongs_to_agent(source, agent):
+                        errors.append(ValidationErrorItem(
+                            field="knowledge.sources",
+                            message=f"Knowledge source '{knw_id}' belongs to another client."
+                        ))
 
         # 9. Check Tool References
         if spec.tools.enabled:

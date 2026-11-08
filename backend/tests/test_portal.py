@@ -22,7 +22,7 @@ def _call(db: Session, client_id: str, setup, status="COMPLETED") -> Call:
     call = Call(
         id=generate_unique_id("call_"), client_id=client_id, agent_id=setup["agent"].id,
         agent_version_id=setup["version"].id, caller_number="+914045209348", destination_number="+918008538015",
-        direction="OUTBOUND", status=status, duration_seconds=90, provider="exotel",
+        direction="OUTBOUND", status=status, duration_seconds=90, provider="vobiz",
         provider_call_id=generate_unique_id("exo_"),
     )
     db.add(call)

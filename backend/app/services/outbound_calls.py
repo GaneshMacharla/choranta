@@ -22,7 +22,7 @@ from app.runtime.events.types import RuntimeEventType
 from app.runtime.providers.registry import default_registry
 from app.runtime.providers.telephony.base import CarrierLimitError
 from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
-from app.runtime.readiness.checker import RuntimeReadinessChecker
+from app.runtime.readiness.checker import RuntimeReadinessChecker, live_block_reason
 from app.services import call_capacity, carrier_subaccounts, phone_numbers
 from app.services.billing import (
     PLATFORM_BUSY_REASON, agent_max_call_seconds, call_budget, check_call_allowed, outbound_headroom,
@@ -59,9 +59,9 @@ def _check_ready(db: Session, agent_id: str, agent_version_id: str) -> None:
     _ready_versions[key] = time.monotonic()
 
 
-def with_webhook_token(url: str, provider: str = "exotel", **params: str) -> str:
-    """`url` with the carrier's shared webhook secret (and any `params`) added as query parameters."""
-    secret = getattr(settings, "VOBIZ_WEBHOOK_SECRET" if provider == "vobiz" else "EXOTEL_WEBHOOK_SECRET", None)
+def with_webhook_token(url: str, **params: str) -> str:
+    """`url` with the Vobiz shared webhook secret (and any `params`) added as query parameters."""
+    secret = settings.VOBIZ_WEBHOOK_SECRET
     query = {**({"token": secret} if secret else {}), **params}
     return f"{url}?{urlencode(query)}" if query else url
 
@@ -75,7 +75,6 @@ def place_outbound_call(
     agent_version_id: Optional[str] = None,
     caller_id: Optional[str] = None,
     is_test: bool = False,
-    flow_id: Optional[str] = None,
     custom_field: Optional[str] = None,
     variables: Optional[Dict[str, Any]] = None,
     extra_metadata: Optional[Dict[str, Any]] = None,
@@ -89,6 +88,9 @@ def place_outbound_call(
     Campaign dials pass `caller_record` (an already-validated number with id / phone_number / provider)
     and `client_id` to skip lookups, since every database round trip delays the call.
     """
+    from app.runtime import draining
+    if draining.is_draining():
+        raise OutboundCallError("DRAINING", "The server is restarting; try the call again in a minute.", 503)
     phone_record: Optional[PhoneNumber] = None
     if phone_number_id:
         phone_repo = PhoneNumberRepository(db)
@@ -103,16 +105,15 @@ def place_outbound_call(
             raise OutboundCallError("CALLER_UNAVAILABLE", f"Phone number '{phone_record.phone_number}' can't place calls right now.")
         agent_id, agent_version_id = phone_record.agent_id, phone_record.agent_version_id
         caller_number = phone_record.phone_number
-        provider_name = phone_record.provider or "exotel"
+        provider_name = phone_record.provider or "vobiz"
     elif agent_id and agent_version_id:
         provider_name = settings.TELEPHONY_PROVIDER
         if is_test:
             # Test calls from the Tests step may use Choranta's own number
-            caller_setting = "VOBIZ_CALLER_ID" if provider_name == "vobiz" else "EXOTEL_CALLER_ID"
-            caller_number = caller_id or getattr(settings, caller_setting, None)
+            caller_number = caller_id or getattr(settings, "VOBIZ_CALLER_ID", None)
             if not caller_number:
                 raise OutboundCallError(
-                    "CONFIG", f"No caller ID: set {caller_setting} in backend/.env to your {provider_name} number, or pass caller_id."
+                    "CONFIG", "No caller ID: set VOBIZ_CALLER_ID in backend/.env to your Vobiz number, or pass caller_id."
                 )
         elif caller_record is not None:
             phone_record = caller_record
@@ -133,7 +134,14 @@ def place_outbound_call(
             provider_name = own_number.provider or provider_name
     else:
         raise OutboundCallError("CONFIG", "Provide phone_number_id, or agent_id and agent_version_id.")
+    if provider_name != "vobiz":
+        raise OutboundCallError("CONFIG", f"Calls can't be placed on this number: its carrier ({provider_name}) is no longer supported.")
 
+    # Checked on every dial (not cached with readiness below), so pausing an AI employee takes effect at once
+    if not is_test:
+        not_live = live_block_reason(db.get(Agent, agent_id))
+        if not_live:
+            raise OutboundCallError("NOT_READY", not_live)
     _check_ready(db, agent_id, agent_version_id)
     if not client_id:
         client_id = db.get(Agent, agent_id).client_id
@@ -155,17 +163,8 @@ def place_outbound_call(
             "CONFIG", "TELEPHONY_BASE_URL must be a public https:// address the carrier can reach (e.g. your ngrok URL)."
         )
 
-    if provider_name == "vobiz":
-        if not (settings.VOBIZ_AUTH_ID and settings.VOBIZ_AUTH_TOKEN):
-            raise OutboundCallError("CONFIG", "VOBIZ_AUTH_ID and VOBIZ_AUTH_TOKEN must be configured.")
-        flow_url = status_callback_url = ""  # need the call's id: built once it's saved below
-    else:
-        flow_id = flow_id or getattr(settings, "EXOTEL_FLOW_ID", None)
-        account_sid = getattr(settings, "EXOTEL_ACCOUNT_SID", None)
-        if not flow_id or not account_sid:
-            raise OutboundCallError("CONFIG", "EXOTEL_FLOW_ID and EXOTEL_ACCOUNT_SID must be configured.")
-        flow_url = f"http://my.exotel.com/{account_sid}/exoml/start_voice/{flow_id}"
-        status_callback_url = with_webhook_token(f"{base_url}/api/telephony/exotel/status")
+    if not (settings.VOBIZ_AUTH_ID and settings.VOBIZ_AUTH_TOKEN):
+        raise OutboundCallError("CONFIG", "VOBIZ_AUTH_ID and VOBIZ_AUTH_TOKEN must be configured.")
 
     metadata = {
         "custom_field": custom_field,
@@ -200,23 +199,20 @@ def place_outbound_call(
         metadata_=metadata,
     ))
 
-    if provider_name == "vobiz":
-        # Vobiz answers with its own call id, so its webhooks carry ours to find this Call
-        flow_url = with_webhook_token(f"{base_url}/api/telephony/vobiz/answer", "vobiz", call_id=saved_call.id)
-        status_callback_url = with_webhook_token(f"{base_url}/api/telephony/vobiz/hangup", "vobiz", call_id=saved_call.id)
+    # Vobiz answers with its own call id, so its webhooks carry ours to find this Call
+    flow_url = with_webhook_token(f"{base_url}/api/telephony/vobiz/answer", call_id=saved_call.id)
+    status_callback_url = with_webhook_token(f"{base_url}/api/telephony/vobiz/hangup", call_id=saved_call.id)
 
     telephony_provider = default_registry.get_telephony(provider_name)
-    line_limits: Dict[str, int] = {}
-    if provider_name == "vobiz":
-        # A number in a client's Vobiz sub-account has to call with that sub-account's credentials
-        sub_creds = carrier_subaccounts.caller_credentials(db, caller_number) if carrier_subaccounts.enabled() else None
-        if sub_creds:
-            telephony_provider = VobizTelephonyProvider(auth_id=sub_creds[0], auth_token=sub_creds[1])
-        carrier_subaccounts.wait_for_dial_slot()
-        line_limits = {
-            "max_duration_s": int(max_duration_s) + settings.VOBIZ_TIME_LIMIT_MARGIN_S,
-            "ring_timeout_s": settings.VOBIZ_RING_TIMEOUT_S,
-        }
+    # A number in a client's Vobiz sub-account has to call with that sub-account's credentials
+    sub_creds = carrier_subaccounts.caller_credentials(db, caller_number) if carrier_subaccounts.enabled() else None
+    if sub_creds:
+        telephony_provider = VobizTelephonyProvider(auth_id=sub_creds[0], auth_token=sub_creds[1])
+    carrier_subaccounts.wait_for_dial_slot()
+    line_limits: Dict[str, int] = {
+        "max_duration_s": int(max_duration_s) + settings.VOBIZ_TIME_LIMIT_MARGIN_S,
+        "ring_timeout_s": settings.VOBIZ_RING_TIMEOUT_S,
+    }
     try:
         call_result = telephony_provider.initiate_outbound_call(
             customer_number=destination_number,

@@ -138,11 +138,11 @@ def _dial(db: Session, callback: MissedCallCallback, now: datetime, dial: Callab
             custom_field=f"callback:{callback.id}",
             variables={},
             extra_metadata={"missed_call_callback_id": callback.id},
-            caller_record=SimpleNamespace(id=number.id, phone_number=number.phone_number, provider=number.provider or "exotel"),
+            caller_record=SimpleNamespace(id=number.id, phone_number=number.phone_number, provider=number.provider or "vobiz"),
             client_id=callback.client_id,
         )
     except OutboundCallError as e:
-        if e.code == "CONCURRENCY":  # lines filled up again: wait for the next pass, without using an attempt
+        if e.code in ("CONCURRENCY", "DRAINING"):  # lines full or server restarting: next pass, no attempt used
             callback.status = "QUEUED"
             db.commit()
             return "stop"

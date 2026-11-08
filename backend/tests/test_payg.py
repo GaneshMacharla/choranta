@@ -23,7 +23,7 @@ def payg(monkeypatch):
     monkeypatch.setattr(settings, "BILLING_ENFORCED", True, raising=False)
 
 
-def _live_calls(db: Session, setup, count: int, provider: str = "exotel") -> None:
+def _live_calls(db: Session, setup, count: int, provider: str = "browser") -> None:
     for _ in range(count):
         db.add(Call(id=generate_unique_id("call_"), client_id=setup["client"].id, agent_id=setup["agent"].id,
                     agent_version_id=setup["version"].id, caller_number="+914045209348",
@@ -103,7 +103,7 @@ def test_vobiz_account_lines_are_shared_by_all_clients(db: Session, telephony_se
     monkeypatch.setattr(settings, "VOBIZ_MAX_CONCURRENT_CALLS", 3)
     cid = telephony_setup["client"].id
     billing.record_payment(db, cid, 10000, None, None)
-    _live_calls(db, telephony_setup, 4)  # Exotel calls don't use Vobiz lines
+    _live_calls(db, telephony_setup, 4)  # browser test calls don't use Vobiz lines
     _live_calls(db, telephony_setup, 2, provider="vobiz")
     assert billing.platform_headroom(db) == 1
 

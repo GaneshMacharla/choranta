@@ -26,6 +26,7 @@ import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { LoadingState } from '../../components/common/LoadingState';
 import { ErrorState } from '../../components/common/ErrorState';
+import { BrowserCallTester } from '../../components/testing/BrowserCallTester';
 import { fmtDate } from '../../components/billing/PlanUsageBar';
 import { AgentRequest, portalAgentRequestsService as api, RequestOption } from '../../services/agentRequests';
 import { portalKnowledge } from '../../services/knowledge';
@@ -48,7 +49,9 @@ const BUSINESS_ICONS: Record<string, React.ReactNode> = {
 
 // ------------------------------------------------------------------ request progress
 
-const PROGRESS = ['Received', 'Being set up', 'Ready'];
+const PROGRESS = ['Received', 'Being set up', 'Try it', 'Ready'];
+
+const trialLeft = (r: AgentRequest) => r.status === 'CLIENT_TRIAL' && r.trial_calls_used < r.trial_calls_allowed;
 
 const RequestProgress: React.FC<{ request: AgentRequest }> = ({ request: r }) => {
   if (r.status === 'REJECTED' || r.status === 'CANCELLED') {
@@ -58,7 +61,7 @@ const RequestProgress: React.FC<{ request: AgentRequest }> = ({ request: r }) =>
       </p>
     );
   }
-  const reached = r.status === 'COMPLETED' ? 2 : r.status === 'IN_PROGRESS' ? 1 : 0;
+  const reached = r.status === 'COMPLETED' ? 3 : r.status === 'CLIENT_TRIAL' ? 2 : r.status === 'IN_PROGRESS' ? 1 : 0;
   return (
     <div className="space-y-2">
       <ol className="flex flex-wrap items-center gap-2">
@@ -69,7 +72,7 @@ const RequestProgress: React.FC<{ request: AgentRequest }> = ({ request: r }) =>
                 i <= reached ? 'bg-[#00df8f] text-[#04110c]' : 'border border-[#1e4e5e] text-slate-500'
               }`}
             >
-              {i < reached || reached === 2 ? <Check className="h-3 w-3" /> : i + 1}
+              {i < reached || reached === PROGRESS.length - 1 ? <Check className="h-3 w-3" /> : i + 1}
             </span>
             <span className={`text-xs ${i <= reached ? 'text-slate-200' : 'text-slate-500'}`}>{label}</span>
             {i < PROGRESS.length - 1 && <span className={`h-px w-6 ${i < reached ? 'bg-[#00df8f]' : 'bg-[#1e4e5e]'}`} />}
@@ -77,8 +80,12 @@ const RequestProgress: React.FC<{ request: AgentRequest }> = ({ request: r }) =>
         ))}
       </ol>
       <p className="text-xs text-slate-400">
-        {r.status === 'PENDING' && "We've got your request. Our team will start setting it up soon."}
+        {r.status === 'PENDING' && "We've got your request. Our team will contact you soon."}
         {r.status === 'IN_PROGRESS' && 'Our team is setting it up now.'}
+        {r.status === 'CLIENT_TRIAL' &&
+          (trialLeft(r)
+            ? `${r.name} is ready for you to try. Talk to it below.`
+            : `Thanks for trying ${r.name}. Our team will contact you soon.`)}
         {r.status === 'COMPLETED' && (
           <>
             {r.name} is ready! Next, connect it to a phone number under{' '}
@@ -169,7 +176,7 @@ export const PortalEmployeesPage: React.FC = () => {
     setError(null);
     try {
       const created = await api.create({ company_name: company, business_type: businessType, name: trimmed, languages });
-      setNotice(`Done! We've received your request for ${created.name}. You can follow its progress below.`);
+      setNotice(`Done! We've received your request for ${created.name}. Our team will contact you soon. You can follow its progress below.`);
       setCreating(false);
       setName('');
       setLanguages([]);
@@ -347,8 +354,10 @@ export const PortalEmployeesPage: React.FC = () => {
                 </span>
                 <p className="text-xs text-slate-500">
                   Your brochure, price or fee list, services, timings, FAQs: anything your AI employee should know. PDF, Word, Excel,
-                  text or images. Our team builds your AI employee from these. You can add more later under{' '}
-                  <Link to="/portal/knowledge" className="text-[#00df8f] hover:underline">Knowledge</Link>.
+                  text or images. Our team builds your AI employee from these.
+                  {/* Knowledge base hidden from clients for now:
+                  {' '}You can add more later under{' '}
+                  <Link to="/portal/knowledge" className="text-[#00df8f] hover:underline">Knowledge</Link>. */}
                 </p>
                 <label
                   className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-5 text-sm transition-colors ${
@@ -383,7 +392,7 @@ export const PortalEmployeesPage: React.FC = () => {
 
             <div className="rounded-lg border border-[#143c49] p-3 text-xs text-slate-400">
               <span className="font-medium text-slate-300">What happens next: </span>
-              our team sets up its voice and what it says and does. You'll see it marked <span className="text-slate-200">Ready</span> here
+              our team will contact you soon, then set up its voice and what it says and does. You'll see it marked <span className="text-slate-200">Ready</span> here
               and get a notification. Then connect it to a phone number and it starts taking calls.
             </div>
 
@@ -448,6 +457,20 @@ export const PortalEmployeesPage: React.FC = () => {
                     </button>
                   )}
                 </div>
+                {trialLeft(r) && (
+                  <div className="rounded-lg border border-[#143c49] bg-[#06141a]">
+                    <BrowserCallTester
+                      ready
+                      clientMode
+                      clientIntro={`You have ${r.trial_calls_allowed - r.trial_calls_used === 1 ? 'one free call' : `${r.trial_calls_allowed - r.trial_calls_used} free calls`} of up to ${r.trial_max_minutes} minutes. Allow your microphone when asked; headphones work best.`}
+                      onStart={(offer) => api.startTrialCall(r.id, offer)}
+                      onHangUp={(callId) => api.hangUpTrialCall(r.id, callId)}
+                      onEnded={() => {
+                        load().catch(() => {});
+                      }}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

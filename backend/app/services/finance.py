@@ -2,7 +2,8 @@
 Finance analytics for staff: money collected, revenue earned, what it cost Choranta, and the profit, for a
 period, over time and per client. Read-only; everything comes from records billing already keeps.
 
-- Money in: invoices issued (credit recharges and plan payments), with the GST collected on them
+- Money in: invoices issued (credit recharges and plan payments), with the GST collected on them, plus
+  recharges made while invoices are switched off
 - Revenue: credits taken from wallets (calls, number rent and setup fees, WhatsApp messages) plus plan
   payments (their credits are used without a wallet debit)
 - Cost: each billable call's real cost (same estimate billing charges from) and the carrier's rent for numbers
@@ -13,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.billing import ClientWallet, Invoice, WalletTransaction
 from app.models.call import Call
 from app.models.client import Client
@@ -103,6 +105,20 @@ def finance_summary(db: Session, start: datetime, end: datetime, client_id: Opti
             t.money_in += inv.total_inr
             if inv.description:  # a plan payment: no wallet credit, the plan's credits are spent without debits
                 t.revenue["plans"] += inv.taxable_inr
+
+    # Recharges made while invoices are off have no invoice: the wallet credit is the amount excluding GST
+    gst_rate = settings.EFFECTIVE_GST_RATE_PERCENT / 100.0
+    recharges = db.query(WalletTransaction).filter(
+        WalletTransaction.type == "CREDIT", WalletTransaction.invoice_id.is_(None),
+        WalletTransaction.created_at >= start, WalletTransaction.created_at < end)
+    if client_id:
+        recharges = recharges.filter(WalletTransaction.client_id == client_id)
+    for txn in recharges.all():
+        tax = txn.amount_inr * gst_rate
+        taxable += txn.amount_inr
+        gst += tax
+        for t in (total, per_client[txn.client_id], per_bucket[bucket(_naive(txn.created_at))]):
+            t.money_in += txn.amount_inr + tax
 
     # Revenue: credits taken from wallets
     debits = db.query(WalletTransaction).filter(

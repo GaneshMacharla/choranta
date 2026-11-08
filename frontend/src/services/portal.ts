@@ -27,6 +27,8 @@ export interface Wallet {
   live_calls: number;
   /** False until the company is GST-registered: no GST is charged and payments get a receipt */
   gst_registered: boolean;
+  /** False while Choranta isn't issuing invoices or receipts: those screens are hidden */
+  invoices_enabled: boolean;
   subscription: Subscription | null;
   transactions: WalletTransaction[];
 }
@@ -291,7 +293,7 @@ export const portalService = {
     request<PortalNumber>(`/portal/numbers/${id}`, { method: 'PATCH', body: JSON.stringify({ agent_id }) }),
   releaseNumber: (id: string, now = false) => request<PortalNumber>(`/portal/numbers/${id}${now ? '?now=true' : ''}`, { method: 'DELETE' }),
   keepNumber: (id: string) => request<PortalNumber>(`/portal/numbers/${id}/keep`, { method: 'POST' }),
-  agents: () => request<Array<{ id: string; name: string; role: string; published: boolean }>>('/portal/agents'),
+  agents: () => request<Array<{ id: string; name: string; role: string; published: boolean; live: boolean }>>('/portal/agents'),
   createOrder: (body: { purpose: 'SUBSCRIPTION' | 'WALLET_TOPUP'; plan_id?: string; amount_inr?: number }) =>
     request<PaymentOrder>('/portal/payments/orders', { method: 'POST', body: JSON.stringify(body) }),
   simulatePayment: (orderId: string) =>

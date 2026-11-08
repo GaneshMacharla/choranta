@@ -47,7 +47,7 @@ class Dialer:
             raise self.error
         call = Call(id=generate_unique_id("call"), client_id=client_id, agent_id=agent_id, agent_version_id=agent_version_id,
                     caller_number=caller_id, destination_number=destination_number, direction="OUTBOUND",
-                    status="INITIATED", provider="exotel", provider_call_id=generate_unique_id("exo"),
+                    status="INITIATED", provider="vobiz", provider_call_id=generate_unique_id("exo"),
                     metadata_=extra_metadata or {})
         db.add(call)
         db.commit()
@@ -96,7 +96,7 @@ def _other_client(db: Session, setup) -> dict:
     db.add(version)
     db.flush()
     number = PhoneNumber(id=generate_unique_id("phn_"), client_id=other.id, agent_id=agent.id, agent_version_id=version.id,
-                         phone_number="+15550002222", provider="exotel", provider_number_id="EXO_OTHER", status="ACTIVE")
+                         phone_number="+15550002222", provider="vobiz", provider_number_id="EXO_OTHER", status="ACTIVE")
     db.add(number)
     db.commit()
     return {"client": other, "agent": agent, "version": version, "phone_number": number}

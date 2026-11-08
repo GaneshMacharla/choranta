@@ -16,38 +16,8 @@ export interface PricingSettings {
   preview: PricingPreview;
 }
 
-export interface CarrierCheckCall {
-  call_id: string;
-  ended_at: string | null;
-  direction: string;
-  is_test: boolean;
-  duration_seconds: number;
-  estimated_inr: number;
-  exotel_price_inr: number;
-  actual_inr: number;
-  gap_inr: number;
-}
-
-/** Choranta's phone-line estimate vs what Exotel actually charged */
-export interface CarrierCheck {
-  days: number;
-  calls_priced: number;
-  estimated_total_inr: number;
-  actual_total_inr: number;
-  gap_percent: number | null;
-  alert_percent: number;
-  rate_too_low: boolean;
-  current_rate_per_minute_inr: number;
-  /** The per-minute rate that would have matched Exotel exactly */
-  matching_rate_per_minute_inr: number | null;
-  /** True when 18% GST is added to Exotel's price (not GST-registered yet) */
-  gst_added: boolean;
-  calls: CarrierCheckCall[];
-}
-
 export const pricingService = {
   get: () => request<PricingSettings>('/pricing'),
-  carrierCheck: (days = 30) => request<CarrierCheck>(`/pricing/carrier-check?days=${days}`),
   update: (profit_percent: number) =>
     request<PricingSettings>('/pricing', {
       method: 'PUT',

@@ -105,7 +105,8 @@ def attach_knowledge_to_agent(
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     # An AI employee only uses its own client's knowledge
-    if getattr(source, "client_id", None) and source.client_id != agent.client_id:
+    from app.repositories.knowledge_repository import belongs_to_agent
+    if not belongs_to_agent(source, agent):
         raise HTTPException(status_code=400, detail="That knowledge belongs to another client.")
     if getattr(source, "type", None) == knowledge_store.DOCUMENT:
         raise HTTPException(status_code=400, detail="Client documents are for the team to read, not for AI employees. "

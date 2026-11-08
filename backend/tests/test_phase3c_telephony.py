@@ -19,9 +19,9 @@ from app.models.phone_number import PhoneNumber
 from app.models.call import Call
 from app.models.user import User
 from app.models.runtime_session import RuntimeSession
-from app.runtime.providers.telephony.exotel import ExotelTelephonyProvider, normalize_exotel_number
+from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
 from app.runtime.providers.telephony.mock import MockTelephonyProvider
-from app.runtime.providers.telephony.base import InboundCallPayload
+from app.runtime.providers.telephony.base import InboundCallPayload, normalize_e164
 from app.runtime.telephony.session import TelephonyMediaSession, active_telephony_calls
 from app.schemas.agent_spec import (
     CanonicalAgentSpec,
@@ -61,8 +61,8 @@ def _build_test_agent_spec(agent_id: str = "ag_test", name: str = "Telephony Rec
 # ===========================================================================
 
 def test_telephony_audio_transcoding_inbound():
-    """Verifies that inbound Exotel 8kHz 16-bit PCM is resampled to 16kHz 16-bit PCM."""
-    provider = ExotelTelephonyProvider(account_sid="mock_sid", webhook_secret="mock_secret")
+    """Verifies that inbound Vobiz 8kHz 16-bit PCM is resampled to 16kHz 16-bit PCM."""
+    provider = VobizTelephonyProvider(auth_id="mock_sid", webhook_secret="mock_secret")
     slin_input = b"\x00\x00" * 80  # 10ms at 8kHz (80 samples)
 
     pcm16_output = provider.normalize_audio_inbound(slin_input)
@@ -71,8 +71,8 @@ def test_telephony_audio_transcoding_inbound():
 
 
 def test_telephony_audio_transcoding_outbound():
-    """Verifies that outbound 16kHz 16-bit PCM is resampled to Exotel 8kHz 16-bit PCM."""
-    provider = ExotelTelephonyProvider(account_sid="mock_sid", webhook_secret="mock_secret")
+    """Verifies that outbound 16kHz 16-bit PCM is resampled to Vobiz 8kHz 16-bit PCM."""
+    provider = VobizTelephonyProvider(auth_id="mock_sid", webhook_secret="mock_secret")
     pcm16_input = b"\x00\x00" * 160  # 10ms at 16kHz (160 samples)
 
     slin_output = provider.normalize_audio_outbound(pcm16_input)
@@ -81,7 +81,7 @@ def test_telephony_audio_transcoding_outbound():
 
 def test_telephony_audio_roundtrip_fidelity():
     """Verifies that transcoding roundtrip maintains valid structure and sample length."""
-    provider = ExotelTelephonyProvider(account_sid="mock_sid", webhook_secret="mock_secret")
+    provider = VobizTelephonyProvider(auth_id="mock_sid", webhook_secret="mock_secret")
     pcm_original = b"\x10\x20" * 800  # 800 samples = 1600 bytes
     slin = provider.normalize_audio_outbound(pcm_original)
     assert len(slin) == 800
@@ -90,69 +90,15 @@ def test_telephony_audio_roundtrip_fidelity():
 
 
 # ===========================================================================
-# 2. EXOTEL WEBHOOK VALIDATION & RESPONSE GENERATION TESTS
+# 2. NUMBER NORMALIZATION & MOCK PROVIDER
 # ===========================================================================
 
-def test_exotel_webhook_token_validation():
-    """Verifies shared-secret token validation for Exotel webhooks."""
-    provider = ExotelTelephonyProvider(account_sid="mock_sid", webhook_secret="s3cret_token")
-    url = "https://choranta.example.com/api/telephony/exotel/inbound"
-
-    assert provider.validate_webhook(url, {}, "s3cret_token") is True
-    assert provider.validate_webhook(url, {}, "wrong_token") is False
-    assert provider.validate_webhook(url, {}, "") is False
-
-
-def test_exotel_inbound_parsing_normalizes_numbers():
-    """Verifies Exotel national-format numbers are normalized to E.164."""
-    provider = ExotelTelephonyProvider(account_sid="mock_sid", webhook_secret="mock_secret")
-    parsed = provider.parse_inbound_call_webhook({
-        "CallSid": "exo_sid_123",
-        "CallFrom": "09876543210",
-        "CallTo": "08047112233",
-    })
-    assert parsed.provider_call_id == "exo_sid_123"
-    assert parsed.caller_number == "+919876543210"
-    assert parsed.destination_number == "+918047112233"
-    assert parsed.provider == "exotel"
-
-    assert normalize_exotel_number("+91 98765 43210") == "+919876543210"
-    assert normalize_exotel_number("919876543210") == "+919876543210"
-    assert normalize_exotel_number("9876543210") == "+919876543210"
-
-
-def test_exotel_connect_response():
-    """Verifies the Voicebot dynamic-URL response carries the media stream URL."""
-    provider = ExotelTelephonyProvider(account_sid="mock_sid", webhook_secret="mock_secret")
-    resp = json.loads(provider.generate_connect_response("wss://api.choranta.com/ws/telephony/exotel/media", "exo_sid"))
-    assert resp == {"url": "wss://api.choranta.com/ws/telephony/exotel/media"}
-
-
-def test_exotel_reject_response():
-    """Verifies the reject response carries no stream URL."""
-    provider = ExotelTelephonyProvider(account_sid="mock_sid", webhook_secret="mock_secret")
-    resp = json.loads(provider.generate_reject_response("Unassigned number"))
-    assert resp["url"] == ""
-    assert resp["error"] == "Unassigned number"
-
-
-def test_exotel_stream_protocol_messages():
-    """Verifies Exotel AgentStream start parsing and outbound media/clear frames."""
-    provider = ExotelTelephonyProvider(account_sid="mock_sid", webhook_secret="mock_secret")
-    stream_sid, call_sid = provider.parse_stream_start({
-        "event": "start",
-        "stream_sid": "stream_abc",
-        "start": {"stream_sid": "stream_abc", "call_sid": "exo_sid_1", "media_format": {"encoding": "base64", "sample_rate": "8000"}},
-    })
-    assert (stream_sid, call_sid) == ("stream_abc", "exo_sid_1")
-
-    media = json.loads(provider.build_media_message("stream_abc", b"\x01\x02"))
-    assert media["event"] == "media"
-    assert media["stream_sid"] == "stream_abc"
-    assert base64.b64decode(media["media"]["payload"]) == b"\x01\x02"
-
-    clear = json.loads(provider.build_clear_message("stream_abc"))
-    assert clear == {"event": "clear", "stream_sid": "stream_abc"}
+def test_numbers_are_normalized_to_e164():
+    """Verifies national-format numbers are normalized to E.164."""
+    assert normalize_e164("+91 98765 43210") == "+919876543210"
+    assert normalize_e164("919876543210") == "+919876543210"
+    assert normalize_e164("9876543210") == "+919876543210"
+    assert normalize_e164("09876543210") == "+919876543210"
 
 
 def test_mock_telephony_provider():
@@ -207,7 +153,7 @@ def telephony_setup(db: Session):
         agent_id=agent.id,
         agent_version_id=version.id,
         phone_number="+15550001111",
-        provider="exotel",
+        provider="vobiz",
         provider_number_id="EXO_MOCK_123",
         status="ACTIVE",
     )
@@ -228,7 +174,7 @@ def test_inbound_webhook_routes_to_pinned_version(client: TestClient, telephony_
     pn = telephony_setup["phone_number"]
 
     resp = client.get(
-        "/api/telephony/exotel/inbound",
+        "/api/telephony/vobiz/answer",
         params={
             "CallFrom": "+15558889999",
             "CallTo": pn.phone_number,
@@ -238,7 +184,7 @@ def test_inbound_webhook_routes_to_pinned_version(client: TestClient, telephony_
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/json")
-    assert "ws/telephony/exotel/media" in resp.json()["url"]
+    assert "ws/telephony/vobiz/media" in resp.json()["url"]
 
     # Verify a Call record was persisted with status RINGING
     call_rec = db.query(Call).filter(Call.provider_call_id == "CA_TEST_CALL_001").first()
@@ -253,7 +199,7 @@ def test_inbound_webhook_routes_to_pinned_version(client: TestClient, telephony_
 def test_inbound_webhook_rejects_unassigned_number(client: TestClient, db: Session):
     """Verifies that an unknown destination number returns an empty stream URL and does not fail."""
     resp = client.post(
-        "/api/telephony/exotel/inbound",
+        "/api/telephony/vobiz/answer",
         data={
             "CallFrom": "+15558889999",
             "CallTo": "+19999999999",  # Not in DB
@@ -273,8 +219,8 @@ def test_inbound_webhook_idempotency(client: TestClient, telephony_setup, db: Se
     pn = telephony_setup["phone_number"]
 
     params = {"CallFrom": "+15558889999", "CallTo": pn.phone_number, "CallSid": "CA_IDEMPOTENT_003"}
-    resp1 = client.get("/api/telephony/exotel/inbound", params=params)
-    resp2 = client.get("/api/telephony/exotel/inbound", params=params)
+    resp1 = client.get("/api/telephony/vobiz/answer", params=params)
+    resp2 = client.get("/api/telephony/vobiz/answer", params=params)
 
     assert resp1.status_code == 200
     assert resp2.status_code == 200
@@ -283,21 +229,21 @@ def test_inbound_webhook_idempotency(client: TestClient, telephony_setup, db: Se
 
 
 def test_inbound_status_callback_updates_call(client: TestClient, telephony_setup, db: Session):
-    """Verifies that Exotel status callback updates duration and marks call COMPLETED."""
+    """Verifies that Vobiz hangup callback updates duration and marks call COMPLETED."""
     pn = telephony_setup["phone_number"]
 
     client.get(
-        "/api/telephony/exotel/inbound",
+        "/api/telephony/vobiz/answer",
         params={"CallFrom": "+15558889999", "CallTo": pn.phone_number, "CallSid": "CA_STATUS_TEST_004"},
     )
 
     status_resp = client.post(
-        "/api/telephony/exotel/status",
+        "/api/telephony/vobiz/hangup",
         data={
-            "CallSid": "CA_STATUS_TEST_004",
-            "Status": "completed",
-            "ConversationDuration": "42",
-            "RecordingUrl": "https://recordings.exotel.com/mock_recording.mp3",
+            "CallUUID": "CA_STATUS_TEST_004",
+            "CallStatus": "completed",
+            "Duration": "42",
+            "RecordUrl": "https://recordings.vobiz.example/mock_recording.mp3",
         },
     )
 
@@ -306,7 +252,7 @@ def test_inbound_status_callback_updates_call(client: TestClient, telephony_setu
     assert call_rec is not None
     assert call_rec.status == "COMPLETED"
     assert call_rec.duration_seconds == 42
-    assert call_rec.recording_url == "https://recordings.exotel.com/mock_recording.mp3"
+    assert call_rec.recording_url == "https://recordings.vobiz.example/mock_recording.mp3"
 
 
 # ===========================================================================
@@ -348,7 +294,7 @@ def test_calls_history_listing_and_detail(client: TestClient, auth_headers: dict
         direction="INBOUND",
         status="COMPLETED",
         duration_seconds=35,
-        provider="exotel",
+        provider="vobiz",
         provider_call_id="CA_HIST_001",
         transcript_summary="Hello! How can I help you today?",
     )
@@ -395,15 +341,13 @@ def test_outbound_call_endpoint_initiation(client: TestClient, telephony_setup, 
 
 @pytest.fixture
 def outbound_settings(monkeypatch):
-    """Exotel outbound configuration independent of the developer's .env."""
+    """Outbound configuration independent of the developer's .env."""
     monkeypatch.setattr(settings, "TELEPHONY_BASE_URL", "https://choranta.example.com", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", "08047112233", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_FLOW_ID", "123456", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_ACCOUNT_SID", "choranta_test", raising=False)
+    monkeypatch.setattr(settings, "VOBIZ_CALLER_ID", "08047112233", raising=False)
 
 
 def test_outbound_call_directly_as_agent(client: TestClient, telephony_setup, auth_headers, db: Session, outbound_settings):
-    """A live call placed as an agent shows the client's own number; test calls use EXOTEL_CALLER_ID."""
+    """A live call placed as an agent shows the client's own number; test calls use VOBIZ_CALLER_ID."""
     body = {
         "agent_id": telephony_setup["agent"].id,
         "agent_version_id": telephony_setup["version"].id,
@@ -421,12 +365,12 @@ def test_outbound_call_directly_as_agent(client: TestClient, telephony_setup, au
     assert data["caller_number"] == "08047112233"
     assert data["agent_version_id"] == telephony_setup["version"].id
 
-    # Customer answers: Voicebot webhook routes by CallSid even though no PhoneNumber exists
+    # Customer answers: the answer webhook routes by call id even though no PhoneNumber exists
     answered = client.get(
-        "/api/telephony/exotel/inbound",
+        "/api/telephony/vobiz/answer",
         params={"CallSid": data["provider_call_id"], "CallFrom": "09876543210", "CallTo": "08047112233"},
     )
-    assert "ws/telephony/exotel/media" in answered.json()["url"]
+    assert "ws/telephony/vobiz/media" in answered.json()["url"]
     call = db.query(Call).filter(Call.id == data["id"]).first()
     db.refresh(call)
     assert call.status == "ANSWERED"
@@ -441,10 +385,10 @@ def test_outbound_call_validates_setup(client: TestClient, telephony_setup, auth
         "destination_number": "09876543210",
     }
 
-    monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", None, raising=False)
+    monkeypatch.setattr(settings, "VOBIZ_CALLER_ID", None, raising=False)
     resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json={**body, "is_test": True})
     assert resp.status_code == 400
-    assert "EXOTEL_CALLER_ID" in resp.json()["detail"]
+    assert "VOBIZ_CALLER_ID" in resp.json()["detail"]
 
     # Live calls need the client's own active number
     telephony_setup["phone_number"].status = "INACTIVE"
@@ -455,7 +399,7 @@ def test_outbound_call_validates_setup(client: TestClient, telephony_setup, auth
     telephony_setup["phone_number"].status = "ACTIVE"
     db.commit()
 
-    monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", "08047112233", raising=False)
+    monkeypatch.setattr(settings, "VOBIZ_CALLER_ID", "08047112233", raising=False)
     monkeypatch.setattr(settings, "TELEPHONY_BASE_URL", "http://127.0.0.1:8000", raising=False)
     resp = client.post("/api/telephony/calls/outbound", headers=auth_headers, json=body)
     assert resp.status_code == 400
@@ -465,8 +409,20 @@ def test_outbound_call_validates_setup(client: TestClient, telephony_setup, auth
     assert resp.status_code == 400
 
 
+def test_number_on_an_unsupported_carrier_cant_place_calls(client: TestClient, telephony_setup, auth_headers, db: Session, outbound_settings):
+    """A leftover number from a carrier Choranta no longer uses fails with a clear error, not a crash."""
+    pn = telephony_setup["phone_number"]
+    pn.provider = "old_carrier"
+    db.commit()
+    resp = client.post("/api/telephony/calls/outbound", headers=auth_headers,
+                       json={"phone_number_id": pn.id, "destination_number": "+919876543210"})
+    assert resp.status_code == 400
+    assert "no longer supported" in resp.json()["detail"]
+    assert db.query(Call).filter(Call.destination_number == "+919876543210").count() == 0
+
+
 def test_outbound_call_answered_starts_agent_session(client: TestClient, telephony_setup, auth_headers, db: Session, outbound_settings):
-    """When the customer answers, Exotel's Voicebot webhook must start a runtime session for the outbound call."""
+    """When the customer answers, the answer webhook must start a runtime session for the outbound call."""
     pn = telephony_setup["phone_number"]
     placed = client.post(
         "/api/telephony/calls/outbound",
@@ -475,14 +431,14 @@ def test_outbound_call_answered_starts_agent_session(client: TestClient, telepho
     ).json()
     assert placed["runtime_session_id"] is None
 
-    # Exotel reports the customer as CallFrom and the ExoPhone as CallTo; routing must
-    # still find the outbound call by its CallSid.
+    # The carrier reports the customer as the caller and our number as the destination; routing must
+    # still find the outbound call by its id.
     resp = client.get(
-        "/api/telephony/exotel/inbound",
+        "/api/telephony/vobiz/answer",
         params={"CallSid": placed["provider_call_id"], "CallFrom": "09876543210", "CallTo": "08000000000"},
     )
     assert resp.status_code == 200
-    assert "ws/telephony/exotel/media" in resp.json()["url"]
+    assert "ws/telephony/vobiz/media" in resp.json()["url"]
 
     calls = db.query(Call).filter(Call.provider_call_id == placed["provider_call_id"]).all()
     assert len(calls) == 1
@@ -503,7 +459,7 @@ async def test_telephony_media_session_lifecycle(db: Session, telephony_setup):
     """
     Tests TelephonyMediaSession logic:
     - initialization marks Call ACTIVE
-    - assistant barge-in sends Exotel clear frame
+    - assistant barge-in sends a clear frame
     - close marks Call COMPLETED
     """
     mock_ws = AsyncMock()
@@ -519,7 +475,7 @@ async def test_telephony_media_session_lifecycle(db: Session, telephony_setup):
         destination_number=telephony_setup["phone_number"].phone_number,
         direction="INBOUND",
         status="RINGING",
-        provider="exotel",
+        provider="vobiz",
         provider_call_id="CA_SESSION_TEST_101",
     )
     db.add(call_rec)
@@ -559,30 +515,7 @@ async def test_telephony_media_session_lifecycle(db: Session, telephony_setup):
 
 
 # ===========================================================================
-# 6. OPT-IN REAL TELEPHONY SMOKE TEST (SAFELY SKIPPED BY DEFAULT)
-# ===========================================================================
-
-@pytest.mark.skipif(
-    not getattr(settings, "RUN_REAL_TELEPHONY_TESTS", False)
-    or not getattr(settings, "EXOTEL_ACCOUNT_SID", None)
-    or not getattr(settings, "EXOTEL_API_KEY", None)
-    or not getattr(settings, "EXOTEL_API_TOKEN", None),
-    reason="Real Telephony tests disabled or Exotel credentials missing (RUN_REAL_TELEPHONY_TESTS!=true)",
-)
-def test_real_exotel_account_readiness_smoke():
-    """
-    Opt-in smoke test verifying credentials against the live Exotel API.
-    Only executed when RUN_REAL_TELEPHONY_TESTS=true and credentials exist in environment.
-    """
-    import httpx
-
-    url = f"https://{settings.EXOTEL_SUBDOMAIN}/v1/Accounts/{settings.EXOTEL_ACCOUNT_SID}/Calls.json"
-    resp = httpx.get(url, params={"PageSize": 1}, auth=(settings.EXOTEL_API_KEY, settings.EXOTEL_API_TOKEN), timeout=15)
-    assert resp.status_code == 200
-
-
-# ===========================================================================
-# MEDIA STREAM AUTHENTICATION (Exotel may drop the ?token= query parameter)
+# MEDIA STREAM AUTHENTICATION (a stream without the ?token= query parameter)
 # ===========================================================================
 
 def _make_call(db: Session, telephony_setup, status: str, with_session: bool) -> Call:
@@ -609,7 +542,7 @@ def _make_call(db: Session, telephony_setup, status: str, with_session: bool) ->
         destination_number="+914045209348",
         direction="OUTBOUND",
         status=status,
-        provider="exotel",
+        provider="vobiz",
         provider_call_id=generate_unique_id("exo_"),
         runtime_session_id=session_id,
     )
@@ -631,7 +564,7 @@ def test_media_stream_without_token_accepted_for_routed_call(client: TestClient,
     call = _make_call(db, telephony_setup, status="ANSWERED", with_session=True)
     with patch.object(TelephonyMediaSession, "initialize", new=AsyncMock()) as init, \
          patch.object(TelephonyMediaSession, "close", new=AsyncMock()):
-        with client.websocket_connect("/ws/telephony/exotel/media") as ws:
+        with client.websocket_connect("/ws/telephony/vobiz/media") as ws:
             ws.send_text(json.dumps({"event": "connected"}))
             ws.send_text(_start_frame(call))
             ws.send_text(json.dumps({"event": "stop"}))
@@ -642,7 +575,7 @@ def test_media_stream_without_token_rejected_for_unrouted_call(client: TestClien
     """A tokenless stream for a call that never went through the webhook is refused."""
     call = _make_call(db, telephony_setup, status="INITIATED", with_session=False)
     with patch.object(TelephonyMediaSession, "initialize", new=AsyncMock()) as init:
-        with client.websocket_connect("/ws/telephony/exotel/media") as ws:
+        with client.websocket_connect("/ws/telephony/vobiz/media") as ws:
             ws.send_text(_start_frame(call))
             with pytest.raises(WebSocketDisconnect):
                 ws.receive_text()
@@ -651,11 +584,11 @@ def test_media_stream_without_token_rejected_for_unrouted_call(client: TestClien
 
 def test_media_stream_with_wrong_token_rejected(client: TestClient, telephony_setup, db: Session, monkeypatch):
     """An explicit but wrong token is still rejected outright."""
-    monkeypatch.setattr(settings, "EXOTEL_WEBHOOK_SECRET", "right_secret", raising=False)
+    monkeypatch.setattr(settings, "VOBIZ_WEBHOOK_SECRET", "right_secret", raising=False)
     from app.runtime.providers.registry import default_registry
-    provider = default_registry.get_telephony("exotel")
+    provider = default_registry.get_telephony("vobiz")
     monkeypatch.setattr(provider, "validate_webhook", lambda url, params, sig: sig == "right_secret")
-    with client.websocket_connect("/ws/telephony/exotel/media?token=wrong") as ws:
+    with client.websocket_connect("/ws/telephony/vobiz/media?token=wrong") as ws:
         with pytest.raises(WebSocketDisconnect):
             ws.receive_text()
 
@@ -665,11 +598,11 @@ async def test_media_session_turns_only_on_real_speech(db: Session, telephony_se
     """Silence/line noise must not trigger turns; one spoken sentence triggers exactly one turn."""
     import math
     import struct
-    from app.runtime.providers.telephony.exotel import ExotelTelephonyProvider
+    from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
 
     def frame_8k(amplitude: int) -> str:
         samples = struct.pack("<160h", *(int(amplitude * math.sin(2 * math.pi * 220 * i / 8000)) for i in range(160)))
-        return base64.b64encode(samples).decode("ascii")  # 20 ms of Exotel 8 kHz PCM16
+        return base64.b64encode(samples).decode("ascii")  # 20 ms of 8 kHz PCM16
 
     call_rec = Call(
         id=generate_unique_id("call_"),
@@ -680,7 +613,7 @@ async def test_media_session_turns_only_on_real_speech(db: Session, telephony_se
         destination_number=telephony_setup["phone_number"].phone_number,
         direction="INBOUND",
         status="ACTIVE",
-        provider="exotel",
+        provider="vobiz",
         provider_call_id=generate_unique_id("exo_"),
     )
     db.add(call_rec)
@@ -691,7 +624,7 @@ async def test_media_session_turns_only_on_real_speech(db: Session, telephony_se
         call_record=call_rec,
         stream_sid="stream_vad",
         db=db,
-        telephony_provider=ExotelTelephonyProvider(webhook_secret="x"),
+        telephony_provider=VobizTelephonyProvider(webhook_secret="x"),
     )
     turns = []
 

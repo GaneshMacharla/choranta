@@ -435,6 +435,10 @@ def launch(db: Session, campaign: Campaign, user_id: Optional[str], consent: boo
     if campaign.kind == "BULK" and not _recipient_count(db, campaign.id):
         raise CampaignError("Add recipients before launching.")
     validate_config(db, campaign)
+    from app.runtime.readiness.checker import live_block_reason
+    not_live = live_block_reason(db.get(Agent, campaign.agent_id))
+    if not_live:
+        raise CampaignError(not_live)
     _require_campaign_details(db, campaign)
     now = utcnow()
     campaign.consent_ack_by = user_id
@@ -741,7 +745,7 @@ def _usable_caller(db: Session, number_id: str) -> Optional[SimpleNamespace]:
     number = db.get(PhoneNumber, number_id)
     usable = None
     if number and number.status == "ACTIVE" and not phone_numbers.blocked_reason(db, number):
-        usable = SimpleNamespace(id=number.id, phone_number=number.phone_number, provider=number.provider or "exotel")
+        usable = SimpleNamespace(id=number.id, phone_number=number.phone_number, provider=number.provider or "vobiz")
     _caller_cache[number_id] = (time.monotonic(), usable)
     return usable
 
@@ -839,8 +843,8 @@ def dial_claimed(db: Session, campaign: Campaign, recipient: CampaignRecipient, 
             client_id=campaign.client_id,
         )
     except OutboundCallError as e:
-        if e.code == "CONCURRENCY":
-            # The client's lines are busy (e.g. inbound calls): try again on the next tick
+        if e.code in ("CONCURRENCY", "DRAINING"):
+            # The client's lines are busy (e.g. inbound calls), or the server is restarting: try again later
             _release(db, recipient, previous_status)
             return "stop"
         if e.code in PAUSING_ERRORS:

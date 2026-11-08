@@ -65,6 +65,12 @@ cp .env.example .env
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
+In production run `python -m app.serve` instead (HOST / PORT from the environment). On SIGTERM it stops
+placing new calls, reports 503 on `/health`, and waits for live calls to finish (up to `SHUTDOWN_DRAIN_S`)
+before exiting, so deploys don't hang up on callers. Set the host's stop grace period above `SHUTDOWN_DRAIN_S`
+(e.g. Docker `stop_grace_period`, Kubernetes `terminationGracePeriodSeconds`). Run a single worker: call limits
+are tracked in memory.
+
 * API Docs available at: `http://127.0.0.1:8000/docs`
 * Health Check: `http://127.0.0.1:8000/health`
 

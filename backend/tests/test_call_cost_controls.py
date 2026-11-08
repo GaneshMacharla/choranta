@@ -49,6 +49,40 @@ async def test_long_reply_is_capped(db: Session, telephony_setup, fakes, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_capped_reply_still_ends_on_its_question(db: Session, telephony_setup, fakes, monkeypatch):
+    """Like a telecaller: past the cap the extras are skipped, but the question after them is still asked."""
+    monkeypatch.setattr(settings, "VOICE_MAX_REPLY_CHARS", 40, raising=False)
+    s = _session(db, telephony_setup)
+    fakes["llm"].replies = ["We have a lovely flat in Whitefield today. It has two bedrooms. It also has a pool. "
+                            "Would you like to visit this Saturday?"]
+    fakes["stt"].transcripts[640] = "Tell me everything"
+    try:
+        await s.execute_turn(b"\x00\x00" * 320)
+        await _until(lambda: s._turn_task is not None and s._turn_task.done(), timeout=10)
+        heard = "We have a lovely flat in Whitefield today. Would you like to visit this Saturday?"
+        assert " ".join(fakes["tts"].spoken) == heard
+        assert _assistant_messages(s)[-1] == heard  # the skipped extras aren't remembered as said
+    finally:
+        await _shutdown(s)
+
+
+@pytest.mark.asyncio
+async def test_capped_question_is_not_searched_for_forever(db: Session, telephony_setup, fakes, monkeypatch):
+    monkeypatch.setattr(settings, "VOICE_MAX_REPLY_CHARS", 40, raising=False)
+    monkeypatch.setattr(settings, "VOICE_QUESTION_SEARCH_CHARS", 30, raising=False)
+    s = _session(db, telephony_setup)
+    fakes["llm"].replies = ["We have a lovely flat in Whitefield today. It has two bedrooms and a balcony. "
+                            "It also has a pool and a gym. Would you like to visit?"]
+    fakes["stt"].transcripts[640] = "Tell me everything"
+    try:
+        await s.execute_turn(b"\x00\x00" * 320)
+        await _until(lambda: s._turn_task is not None and s._turn_task.done(), timeout=10)
+        assert fakes["tts"].spoken == ["We have a lovely flat in Whitefield today."]
+    finally:
+        await _shutdown(s)
+
+
+@pytest.mark.asyncio
 async def test_interrupted_reply_does_not_synthesize_unheard_sentences(db: Session, telephony_setup, fakes, monkeypatch):
     monkeypatch.setattr(session_module, "PLAYBACK_LEAD_MS", 50)
     fakes["tts"].ms_per_char = 30

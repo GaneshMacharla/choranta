@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AlertTriangle, FileText, Inbox, Loader2, Pause, Play, RefreshCw, Wand2, XCircle } from 'lucide-react';
+import { AlertTriangle, FileText, Inbox, Loader2, Pause, Play, RefreshCw, Send, Wand2, XCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
@@ -51,12 +51,41 @@ export const AgentRequestsPage: React.FC = () => {
   }, [load]);
 
   const build = async (r: AgentRequest) => {
+    // Already being built: carry on in its workspace rather than creating a second one
+    if (r.agent_id && r.agent_name) {
+      if (r.status === 'CLIENT_TRIAL') {
+        // Back to setup: the client stops seeing the trial while the team makes changes
+        setBusy(r.id);
+        try {
+          await api.start(r.id);
+        } catch (e: any) {
+          setError(e.message);
+          setBusy(null);
+          return;
+        }
+      }
+      navigate(`/agents/${r.agent_id}`);
+      return;
+    }
     setBusy(r.id);
     try {
       if (r.status === 'PENDING') await api.start(r.id);
       navigate(`/agents/new?request=${r.id}`);
     } catch (e: any) {
       setError(e.message);
+      setBusy(null);
+    }
+  };
+
+  const sendForTrial = async (r: AgentRequest) => {
+    setBusy(r.id);
+    setError(null);
+    try {
+      await api.sendForTrial(r.id);
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
       setBusy(null);
     }
   };
@@ -135,7 +164,8 @@ export const AgentRequestsPage: React.FC = () => {
             </thead>
             <tbody>
               {rows.map((r) => {
-                const open = r.status === 'PENDING' || r.status === 'IN_PROGRESS';
+                const open = r.status === 'PENDING' || r.status === 'IN_PROGRESS' || r.status === 'CLIENT_TRIAL';
+                const trialUsed = r.status === 'CLIENT_TRIAL' && r.trial_calls_used >= r.trial_calls_allowed;
                 return (
                   <tr key={r.id} className="border-t border-[#102d38] align-top">
                     <td className="px-4 py-3">
@@ -185,6 +215,11 @@ export const AgentRequestsPage: React.FC = () => {
                     <td className="px-4 py-3 text-xs text-slate-400">{new Date(r.created_at).toLocaleString('en-IN')}</td>
                     <td className="px-4 py-3">
                       <Badge variant={REQUEST_STATUS_VARIANT[r.status]} size="sm">{REQUEST_STATUS_LABELS[r.status]}</Badge>
+                      {r.status === 'CLIENT_TRIAL' && (
+                        <div className={`mt-1 text-[11px] ${trialUsed ? 'text-[#00df8f]' : 'text-slate-400'}`}>
+                          {trialUsed ? 'Client has tried it' : 'Waiting for client to try'}
+                        </div>
+                      )}
                       {r.agent_id && (
                         <Link to={`/agents/${r.agent_id}`} className="mt-1 block text-[11px] text-[#00df8f] hover:underline">
                           {r.agent_name}
@@ -198,8 +233,14 @@ export const AgentRequestsPage: React.FC = () => {
                         </Button>
                       {open && isAdmin && (
                         <>
+                          {r.agent_id && (r.status === 'IN_PROGRESS' || trialUsed) && (
+                            <Button size="sm" variant="secondary" isLoading={busy === r.id} leftIcon={<Send className="h-3.5 w-3.5" />}
+                              title="Let the client try it once from their portal" onClick={() => sendForTrial(r)}>
+                              {r.status === 'CLIENT_TRIAL' ? 'Send again' : 'Send to client'}
+                            </Button>
+                          )}
                           <Button size="sm" variant="primary" isLoading={busy === r.id} leftIcon={<Wand2 className="h-3.5 w-3.5" />} onClick={() => build(r)}>
-                            {r.status === 'IN_PROGRESS' ? 'Continue' : 'Build agent'}
+                            {r.status === 'CLIENT_TRIAL' ? 'Continue' : r.agent_id && r.agent_name ? 'Open employee' : r.status === 'IN_PROGRESS' ? 'Continue' : 'Build agent'}
                           </Button>
                           <Button size="sm" variant="ghost" leftIcon={<XCircle className="h-3.5 w-3.5" />} onClick={() => setRejecting(r)}>
                             Decline

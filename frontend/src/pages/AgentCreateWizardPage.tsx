@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, BookOpen, Check, LayoutTemplate, Phone, PhoneIncoming, PhoneOutgoing, PenLine, Volume2 } from 'lucide-react';
 import { agentsService } from '../services/agents';
@@ -122,6 +122,10 @@ export const AgentCreateWizardPage: React.FC = () => {
   const [voiceTouched, setVoiceTouched] = useState(false);
   const [isVoicePickerOpen, setIsVoicePickerOpen] = useState(false);
   const [knowledgeIds, setKnowledgeIds] = useState<string[]>([]);
+  const [documentCount, setDocumentCount] = useState(0);
+  const [knowledgeError, setKnowledgeError] = useState(false);
+  // The employee already created by an attempt that failed part-way: trying again carries on with it
+  const createdRef = useRef<{ id: string; clientId: string } | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -136,6 +140,11 @@ export const AgentCreateWizardPage: React.FC = () => {
     agentRequestsService
       .get(requestId)
       .then((r) => {
+        // Already being built: carry on in its workspace rather than creating a second one
+        if (r.agent_id && r.agent_name) {
+          navigate(`/agents/${r.agent_id}`, { replace: true });
+          return;
+        }
         setFromRequest(r);
         setClientId(r.client_id);
         setName(r.name);
@@ -150,26 +159,44 @@ export const AgentCreateWizardPage: React.FC = () => {
         }
       })
       .catch((err) => setError(`Could not load the request: ${err?.message || 'unknown error'}`));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestId]);
 
-  // The client's knowledge base (all ticked) and the names its employees already use
+  // The client's knowledge (all ticked) and the names its employees already use. Uploaded documents are for the team
+  // to read, so they can't be ticked. Nothing from the previously selected client carries over.
   useEffect(() => {
+    setKnowledge([]);
+    setKnowledgeIds([]);
+    setDocumentCount(0);
+    setKnowledgeError(false);
     if (!clientId) {
-      setKnowledge([]);
       setClientAgentNames([]);
       return;
     }
+    let stale = false;
     catalogsService
       .listClientKnowledge(clientId)
       .then((list) => {
-        setKnowledge(list);
-        setKnowledgeIds(list.map((k) => k.id));
+        if (stale) return;
+        const usable = list.filter((k) => k.type !== 'DOCUMENT');
+        setKnowledge(usable);
+        setKnowledgeIds(usable.map((k) => k.id));
+        setDocumentCount(list.length - usable.length);
       })
-      .catch(() => setKnowledge([]));
+      .catch(() => {
+        if (!stale) setKnowledgeError(true);
+      });
     agentsService
       .list({ client_id: clientId })
-      .then((res) => setClientAgentNames(res.items.map((a) => a.name)))
-      .catch(() => setClientAgentNames([]));
+      .then((res) => {
+        if (!stale) setClientAgentNames(res.items.map((a) => a.name));
+      })
+      .catch(() => {
+        if (!stale) setClientAgentNames([]);
+      });
+    return () => {
+      stale = true;
+    };
   }, [clientId]);
 
   const client = clients.find((c) => c.id === clientId);
@@ -216,6 +243,7 @@ export const AgentCreateWizardPage: React.FC = () => {
 
   const finish = (config: AgentConfigurationData): AgentConfigurationData => ({
     ...config,
+    business_context: { ...config.business_context, call_direction: direction },
     languages: { ...config.languages, primary: primaryLanguage, supported: languages },
     voice: voice
       ? { ...config.voice, provider: voice.provider, voice_id: voice.id, language: primaryLanguage }
@@ -230,26 +258,32 @@ export const AgentCreateWizardPage: React.FC = () => {
     setError(null);
     setIsCreating(true);
     try {
-      const created = await agentsService.create({
-        client_id: clientId,
+      const details = {
         name: name.trim(),
         role: (template?.role || role).trim(),
         description: template?.description || `${role} for ${client.name}.`,
-      });
+      };
+      let agentId: string;
+      if (createdRef.current?.clientId === clientId) {
+        agentId = createdRef.current.id;
+        await agentsService.update(agentId, details);
+      } else {
+        agentId = (await agentsService.create({ client_id: clientId, ...details })).id;
+        createdRef.current = { id: agentId, clientId };
+      }
       let config: AgentConfigurationData;
       if (template) {
         config = configFromTemplate(template, name.trim(), client.name);
       } else {
-        const base = (await configurationService.getConfiguration(created.id)).configuration;
+        const base = (await configurationService.getConfiguration(agentId)).configuration;
         config = blankSetup(base, name.trim(), role, client.name, direction);
       }
       config = finish(config);
-      await configurationService.updateConfiguration(created.id, config);
-      for (const id of knowledgeIds) await catalogsService.attachKnowledge(created.id, id);
-      for (const id of config.tools || []) await catalogsService.attachTool(created.id, id).catch(() => {});
-      if (fromRequest) await agentRequestsService.complete(fromRequest.id, created.id);
-      // Starts as an unpublished draft: an admin reviews it and presses Publish
-      navigate(`/agents/${created.id}`);
+      // Saving the configuration also attaches its knowledge and tools
+      await configurationService.updateConfiguration(agentId, config);
+      // Starts as an unpublished draft: an admin publishes it, then the client hears it's ready when it goes live
+      if (fromRequest) await agentRequestsService.link(fromRequest.id, agentId);
+      navigate(`/agents/${agentId}`);
     } catch (err: any) {
       setError(err?.message || 'Could not create the employee.');
       setIsCreating(false);
@@ -397,7 +431,20 @@ export const AgentCreateWizardPage: React.FC = () => {
         }
         subtitle={client ? `${client.name}'s knowledge base` : 'Choose a client first'}
       >
-        {knowledge.length === 0 ? (
+        {documentCount > 0 && (
+          <p className="mb-3 text-xs text-slate-400">
+            {documentCount} uploaded document{documentCount === 1 ? '' : 's'} on{' '}
+            <Link to={`/clients/${clientId}`} className="text-[#00df8f] hover:underline">
+              the client's page
+            </Link>{' '}
+            for your team to read. The employee can't read documents, so write what it needs to know into its knowledge.
+          </p>
+        )}
+        {knowledgeError ? (
+          <p className="text-xs text-rose-300">
+            Couldn't load this client's knowledge. You can create the employee and add knowledge in its workspace.
+          </p>
+        ) : knowledge.length === 0 ? (
           <p className="text-xs text-slate-500">
             {clientId ? (
               <>

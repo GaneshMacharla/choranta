@@ -21,7 +21,7 @@ import { runtimeService } from '../../services/runtime';
 import { request } from '../../services/api';
 import { StandardCallScript, callScriptsService } from '../../services/callScripts';
 import { useAuth } from '../../context/AuthContext';
-import { Agent, AgentConfigurationData, AgentVersion, Client } from '../../types';
+import { Agent, AgentConfigurationData, AgentVersion, CallDirection, Client } from '../../types';
 
 const FIELD =
   'block w-full rounded-md border border-[#153945] bg-[#06141a] p-2.5 text-xs text-slate-100 placeholder-slate-500 focus:border-[#00df8f] focus:outline-none';
@@ -48,6 +48,9 @@ interface AgentBuildViewProps {
   onChangeVoice: () => void;
   /** Moves the employee to DEPLOYED (through the allowed status steps) */
   onGoLive: () => Promise<void>;
+  /** Phone numbers of this employee still on an older version than the latest */
+  numbersBehind: number;
+  onReviewNumbers: () => void;
 }
 
 /**
@@ -57,7 +60,7 @@ interface AgentBuildViewProps {
  */
 export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
   view, agent, config, updateDraft, isDirty, versions, onPublish, isPublishing, canPublish, onToggleKnowledge, onKnowledgeDeleted,
-  onAgentKnowledgeChange, voiceLabel, onChangeVoice, onGoLive,
+  onAgentKnowledgeChange, voiceLabel, onChangeVoice, onGoLive, numbersBehind, onReviewNumbers,
 }) => {
   const [client, setClient] = useState<Client | null>(null);
   const [sessions, setSessions] = useState<number | null>(null);
@@ -114,6 +117,7 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
     { label: 'Knowledge attached', ok: config.knowledge_sources.length > 0, blocking: false },
     { label: 'Tested at least once', ok: (sessions ?? 0) > 0, blocking: false },
     { label: 'Client timezone set (not UTC)', ok: !!client && client.timezone !== 'UTC', blocking: false },
+    { label: 'Phone numbers on the latest version', ok: numbersBehind === 0, blocking: false },
   ];
   const ready = checks.every((c) => c.ok || !c.blocking);
   const isLive = agent.status === 'DEPLOYED';
@@ -155,7 +159,7 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
         </div>
 
         <div className="lg:sticky lg:top-4 lg:self-start">
-          <Card title="Go live" subtitle={isLive ? 'This employee is live.' : 'Check these, then put it to work on calls.'}>
+          <Card title="Go live" subtitle={isLive ? 'This employee is live.' : 'Real calls only reach it once it is live. Test calls work any time.'}>
             <ul className="space-y-1.5 text-xs">
               {checks.map((c) => (
                 <li key={c.label} className="flex items-center gap-2">
@@ -167,6 +171,11 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
               ))}
             </ul>
             {goLiveError && <p className="mt-3 text-xs text-rose-300">{goLiveError}</p>}
+            {numbersBehind > 0 && canPublish && (
+              <Button className="mt-3 w-full" variant="secondary" size="sm" onClick={onReviewNumbers}>
+                Review {numbersBehind} phone number{numbersBehind === 1 ? '' : 's'}
+              </Button>
+            )}
             {!isLive && (
               <Button className="mt-4 w-full" variant="primary" disabled={!ready} isLoading={goingLive} onClick={goLive}>
                 <Rocket className="mr-1.5 h-4 w-4" /> Go live
@@ -210,6 +219,18 @@ export const AgentBuildView: React.FC<AgentBuildViewProps> = ({
             <textarea rows={2} className={FIELD} value={config.conversation.tone} placeholder="e.g. Warm, patient and to the point"
               onChange={(e) => setConversation({ tone: e.target.value })} />
           </label>
+          <Select label="Calls it handles" value={config.business_context.call_direction || 'inbound'}
+            options={[
+              { value: 'inbound', label: 'Inbound: customers call the business' },
+              { value: 'outbound', label: 'Outbound: it calls leads or customers' },
+              { value: 'both', label: 'Both' },
+            ]}
+            onChange={(e) =>
+              updateDraft((prev) => ({
+                ...prev,
+                business_context: { ...prev.business_context, call_direction: e.target.value as CallDirection },
+              }))
+            } />
         </div>
       </Card>
 

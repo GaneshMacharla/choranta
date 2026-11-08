@@ -124,7 +124,7 @@ def create_order(
 
 
 def fulfil_order(db: Session, order: PaymentOrder, razorpay_payment_id: str) -> PaymentOrder:
-    """Applies a paid order (plan period or wallet credit) and issues its invoice. Safe to call twice."""
+    """Applies a paid order (plan period or wallet credit) and issues its invoice, if invoices are on. Safe to call twice."""
     order = db.query(PaymentOrder).filter(PaymentOrder.id == order.id).with_for_update().first()
     if order.status == "PAID":
         return order

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle, Mic, MicOff, PhoneCall, PhoneOff, Volume2, Wrench } from 'lucide-react';
 import { Button } from '../common/Button';
-import { telephonyService, CallDetail } from '../../services/telephony';
+import { telephonyService, CallDetail, BrowserCallAnswer } from '../../services/telephony';
 import { CallRecordingPlayer } from '../telephony/CallRecordingPlayer';
 
 type CallState = 'idle' | 'connecting' | 'live' | 'ended';
@@ -24,11 +24,18 @@ const END_REASONS: Record<string, string> = {
 };
 
 interface BrowserCallTesterProps {
-  agentId: string;
-  agentVersionId: string;
+  agentId?: string;
+  agentVersionId?: string;
   ready: boolean;
   userName?: string;
   companyName?: string;
+  /** Starts the call some other way (e.g. a client's trial); defaults to the staff browser-call API */
+  onStart?: (offer: { sdp: string; type: string }) => Promise<BrowserCallAnswer>;
+  onHangUp?: (callId: string) => Promise<unknown>;
+  /** For clients: a single call, without staff details (reply times, tools, call log, recording) */
+  clientMode?: boolean;
+  clientIntro?: string;
+  onEnded?: () => void;
 }
 
 /**
@@ -41,6 +48,11 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
   ready,
   userName,
   companyName,
+  onStart,
+  onHangUp,
+  clientMode = false,
+  clientIntro,
+  onEnded,
 }) => {
   const [state, setState] = useState<CallState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +74,12 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
   const lineIdRef = useRef(0);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
+  // Latest hang-up handler, also for the unmount cleanup
+  const hangUpRef = useRef<(callId: string) => Promise<unknown>>(onHangUp ?? telephonyService.hangUpBrowserCall);
+  hangUpRef.current = onHangUp ?? telephonyService.hangUpBrowserCall;
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
+
   const addLine = (line: Omit<TranscriptLine, 'id'>) =>
     setLines((prev) => [...prev, { ...line, id: ++lineIdRef.current }]);
 
@@ -78,7 +96,7 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
   // Leaving the page ends the call
   useEffect(
     () => () => {
-      if (pcRef.current && callIdRef.current) telephonyService.hangUpBrowserCall(callIdRef.current).catch(() => {});
+      if (pcRef.current && callIdRef.current) hangUpRef.current(callIdRef.current).catch(() => {});
       teardown();
     },
     []
@@ -99,10 +117,9 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
     setEndReason(reason);
     setState('ended');
     const id = callIdRef.current;
-    if (id) {
-      // Give the server a moment to save the recording and close the call record
-      setTimeout(() => telephonyService.getCall(id).then(setSummary).catch(() => {}), 1500);
-    }
+    // Give the server a moment to save the recording and close the call record
+    if (id && !clientMode) setTimeout(() => telephonyService.getCall(id).then(setSummary).catch(() => {}), 1500);
+    if (onEndedRef.current) setTimeout(() => onEndedRef.current?.(), 1500);
   };
 
   const handleMessage = (raw: string) => {
@@ -191,14 +208,16 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
         setTimeout(resolve, 2000);
       });
 
-      const answer = await telephonyService.startBrowserCall({
-        agent_id: agentId,
-        agent_version_id: agentVersionId,
-        sdp: pc.localDescription!.sdp,
-        type: pc.localDescription!.type,
-        user_name: userName?.trim() || undefined,
-        company_name: companyName?.trim() || undefined,
-      });
+      const offer = { sdp: pc.localDescription!.sdp, type: pc.localDescription!.type };
+      const answer = onStart
+        ? await onStart(offer)
+        : await telephonyService.startBrowserCall({
+            agent_id: agentId ?? '',
+            agent_version_id: agentVersionId ?? '',
+            ...offer,
+            user_name: userName?.trim() || undefined,
+            company_name: companyName?.trim() || undefined,
+          });
       callIdRef.current = answer.call_id;
       setCallId(answer.call_id);
       await pc.setRemoteDescription({ sdp: answer.sdp, type: answer.type });
@@ -215,7 +234,7 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
 
   const endCall = () => {
     const id = callIdRef.current;
-    if (id) telephonyService.hangUpBrowserCall(id).catch(() => {});
+    if (id) hangUpRef.current(id).catch(() => {});
     finish('caller_hangup');
   };
 
@@ -247,7 +266,7 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
             </div>
             <p className="flex items-center gap-2 text-sm font-semibold text-emerald-300">
               <Volume2 className="h-4 w-4" />
-              {toolName ? (
+              {toolName && !clientMode ? (
                 <span className="flex items-center gap-1.5 text-purple-300">
                   <Wrench className="h-3.5 w-3.5" /> Using {toolName}...
                 </span>
@@ -259,7 +278,7 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
             </p>
             <p className="font-mono text-xs text-slate-500">
               {clock}
-              {avgLatency !== null && ` · avg reply ${avgLatency} ms`}
+              {avgLatency !== null && !clientMode && ` · avg reply ${avgLatency} ms`}
               {muted && ' · muted'}
             </p>
           </>
@@ -272,6 +291,11 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
             <CheckCircle className="h-4 w-4 text-slate-400" /> Call ended
             {endReason && <span className="text-slate-500">· {END_REASONS[endReason] || endReason}</span>}
           </p>
+        ) : clientMode ? (
+          <>
+            <p className="text-lg text-slate-200">Talk to your AI employee from your browser</p>
+            {clientIntro && <p className="max-w-md text-xs text-slate-400">{clientIntro}</p>}
+          </>
         ) : (
           <>
             <p className="text-lg text-slate-200">Talk to the AI employee from your browser</p>
@@ -304,13 +328,13 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
                 <PhoneOff className="mr-2 h-4 w-4" /> End Call
               </Button>
             </>
-          ) : (
+          ) : clientMode && state === 'ended' ? null : (
             <Button
               type="button"
               variant="primary"
               className="min-w-[180px] rounded-full bg-emerald-600 font-semibold text-white shadow-md hover:bg-emerald-500"
               onClick={startCall}
-              disabled={!ready || !agentId || !agentVersionId}
+              disabled={!ready || (!onStart && (!agentId || !agentVersionId))}
             >
               <PhoneCall className="mr-2 h-4 w-4" /> {state === 'ended' ? 'Call again' : 'Start Call'}
             </Button>
@@ -318,7 +342,7 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
         </div>
       </div>
 
-      {!ready && state === 'idle' && (
+      {!ready && state === 'idle' && !clientMode && (
         <p className="text-center text-xs text-amber-400/90">Select an agent and a ready published version in Setup first.</p>
       )}
 
@@ -350,7 +374,7 @@ export const BrowserCallTester: React.FC<BrowserCallTesterProps> = ({
         </div>
       )}
 
-      {state === 'ended' && callId && (
+      {state === 'ended' && callId && !clientMode && (
         <div className="space-y-3 rounded-lg border border-[#1b1f2d] bg-[#080b10] p-4">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
             <span>

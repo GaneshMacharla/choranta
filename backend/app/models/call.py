@@ -15,8 +15,8 @@ class Call(Base):
     phone_number_id = Column(String(64), ForeignKey("phone_numbers.id", ondelete="SET NULL"), nullable=True, index=True)
     runtime_session_id = Column(String(64), ForeignKey("runtime_sessions.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    provider = Column(String(32), nullable=False, default="exotel")  # exotel
-    provider_call_id = Column(String(128), nullable=False, unique=True, index=True)  # CallSid from exotel
+    provider = Column(String(32), nullable=False, default="vobiz")
+    provider_call_id = Column(String(128), nullable=False, unique=True, index=True)  # the carrier's call id
     direction = Column(String(16), nullable=False, default="INBOUND", index=True)  # INBOUND, OUTBOUND
     caller_number = Column(String(32), nullable=False, index=True)  # Caller E.164
     destination_number = Column(String(32), nullable=False, index=True)  # Choranta E.164

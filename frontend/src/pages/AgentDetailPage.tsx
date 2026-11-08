@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { SystemPromptPanel } from '../components/agents/SystemPromptPanel';
 import { useAuth } from '../context/AuthContext';
-import { agentsService } from '../services/agents';
+import { AgentNumber, agentsService } from '../services/agents';
 import { configurationService } from '../services/configuration';
 import { catalogsService } from '../services/catalogs';
 import {
@@ -189,6 +189,12 @@ export const AgentDetailPage: React.FC = () => {
   const [isValidating, setIsValidating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
 
+  // Phone numbers on this employee. Publishing doesn't move them: the admin is asked
+  const [agentNumbers, setAgentNumbers] = useState<AgentNumber[]>([]);
+  const [isMoveNumbersOpen, setIsMoveNumbersOpen] = useState(false);
+  const [isMovingNumbers, setIsMovingNumbers] = useState(false);
+  const [moveNumbersError, setMoveNumbersError] = useState<string | null>(null);
+
   // Validation Modal
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
@@ -261,6 +267,7 @@ export const AgentDetailPage: React.FC = () => {
 
       setAgent(agentData);
       setVersions(versionsData);
+      agentsService.getNumbers(id).then(setAgentNumbers).catch(() => setAgentNumbers([]));
       setConfig(normalizeConfig(configData.configuration));
       setToolsList(toolsData);
       setVoicesList(voicesData);
@@ -370,11 +377,39 @@ export const AgentDetailPage: React.FC = () => {
       const newVersion = await configurationService.createVersion(id);
       setVersions(await agentsService.getVersions(id));
       setActionSuccess(`Version ${newVersion.version_number} published. Tests now use it.`);
+      const numbers = await agentsService.getNumbers(id).catch(() => [] as AgentNumber[]);
+      setAgentNumbers(numbers);
+      if (numbers.some((n) => n.agent_version_id !== newVersion.id)) {
+        setMoveNumbersError(null);
+        setIsMoveNumbersOpen(true);
+      }
       setTimeout(() => setActionSuccess(null), 4000);
     } catch (err: any) {
       alert(`Publish failed: ${err.message || 'Validation error prevented publishing.'}`);
     } finally {
       setIsPublishing(false);
+    }
+  };
+
+  const latestVersion = versions.reduce<AgentVersion | null>(
+    (best, v) => (!best || v.version_number > best.version_number ? v : best),
+    null
+  );
+  const numbersBehind = agentNumbers.filter((n) => latestVersion && n.agent_version_id !== latestVersion.id);
+
+  const handleMoveNumbers = async () => {
+    if (!id || !latestVersion) return;
+    setIsMovingNumbers(true);
+    setMoveNumbersError(null);
+    try {
+      setAgentNumbers(await agentsService.moveNumbers(id, latestVersion.id));
+      setIsMoveNumbersOpen(false);
+      setActionSuccess(`Phone numbers now run version ${latestVersion.version_number}.`);
+      setTimeout(() => setActionSuccess(null), 4000);
+    } catch (err: any) {
+      setMoveNumbersError(err.message || 'Could not move the phone numbers.');
+    } finally {
+      setIsMovingNumbers(false);
     }
   };
 
@@ -683,6 +718,11 @@ export const AgentDetailPage: React.FC = () => {
           }
           onChangeVoice={() => setIsVoicePickerOpen(true)}
           onGoLive={handleGoLive}
+          numbersBehind={numbersBehind.length}
+          onReviewNumbers={() => {
+            setMoveNumbersError(null);
+            setIsMoveNumbersOpen(true);
+          }}
         />
       )}
 
@@ -1056,6 +1096,31 @@ export const AgentDetailPage: React.FC = () => {
       {/* ========================================================= */}
       {/* MODAL 1: VALIDATION RESULTS */}
       {/* ========================================================= */}
+      <Modal
+        isOpen={isMoveNumbersOpen}
+        onClose={() => setIsMoveNumbersOpen(false)}
+        title={`Move phone numbers to version ${latestVersion?.version_number ?? ''}?`}
+        description="These numbers keep running the version shown until you move them. Moving changes what live callers hear straight away."
+      >
+        <div className="space-y-4 text-xs">
+          <ul className="space-y-1.5">
+            {numbersBehind.map((n) => (
+              <li key={n.id} className="flex items-center justify-between rounded border border-[#102d38] px-3 py-2">
+                <span className="font-mono text-slate-200">{n.phone_number}</span>
+                <span className="text-slate-400">{n.version_number ? `on v${n.version_number}` : 'no version'}</span>
+              </li>
+            ))}
+          </ul>
+          {moveNumbersError && <p className="text-rose-300">{moveNumbersError}</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setIsMoveNumbersOpen(false)}>Keep them as they are</Button>
+            <Button variant="primary" isLoading={isMovingNumbers} onClick={handleMoveNumbers}>
+              Move to v{latestVersion?.version_number}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       <Modal
         isOpen={isValidationModalOpen}
         onClose={() => setIsValidationModalOpen(false)}

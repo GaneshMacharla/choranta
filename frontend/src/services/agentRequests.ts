@@ -1,7 +1,9 @@
 import { request } from './api';
 import { fetchAuthedBlob } from './portal';
+import type { BrowserCallAnswer } from './telephony';
 
-export type AgentRequestStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'REJECTED' | 'CANCELLED';
+/** CLIENT_TRIAL: the team sent it to the client to try once; the team still makes it live */
+export type AgentRequestStatus = 'PENDING' | 'IN_PROGRESS' | 'CLIENT_TRIAL' | 'COMPLETED' | 'REJECTED' | 'CANCELLED';
 
 export interface AgentRequest {
   id: string;
@@ -23,6 +25,10 @@ export interface AgentRequest {
   agent_id: string | null;
   agent_name: string | null;
   admin_note: string | null;
+  /** Trial calls the client has used since it was last sent to them */
+  trial_calls_used: number;
+  trial_calls_allowed: number;
+  trial_max_minutes: number;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -43,6 +49,7 @@ export interface SarvamVoice {
 export const REQUEST_STATUS_LABELS: Record<AgentRequestStatus, string> = {
   PENDING: 'Requested',
   IN_PROGRESS: 'Being set up',
+  CLIENT_TRIAL: 'Client trying it',
   COMPLETED: 'Ready',
   REJECTED: 'Declined',
   CANCELLED: 'Cancelled',
@@ -51,6 +58,7 @@ export const REQUEST_STATUS_LABELS: Record<AgentRequestStatus, string> = {
 export const REQUEST_STATUS_VARIANT: Record<AgentRequestStatus, 'yellow' | 'blue' | 'green' | 'red' | 'gray'> = {
   PENDING: 'yellow',
   IN_PROGRESS: 'blue',
+  CLIENT_TRIAL: 'blue',
   COMPLETED: 'green',
   REJECTED: 'red',
   CANCELLED: 'gray',
@@ -68,6 +76,11 @@ export const portalAgentRequestsService = {
   create: (body: { company_name: string; business_type: string; name: string; languages: string[] }) =>
     request<AgentRequest>('/portal/agent-requests', { method: 'POST', body: JSON.stringify(body) }),
   cancel: (id: string) => request<AgentRequest>(`/portal/agent-requests/${id}`, { method: 'DELETE' }),
+  /** The client's free trial call with the AI employee the team sent them (WebRTC offer in, answer out) */
+  startTrialCall: (id: string, offer: { sdp: string; type: string }) =>
+    request<BrowserCallAnswer>(`/portal/agent-requests/${id}/trial-call`, { method: 'POST', body: JSON.stringify(offer) }),
+  hangUpTrialCall: (id: string, callId: string) =>
+    request<{ status: string }>(`/portal/agent-requests/${id}/trial-call/${callId}/hangup`, { method: 'POST' }),
   me: () =>
     request<{ client_id: string; client_name: string; client_code: string | null; business_type: string | null; has_ai_employee: boolean }>('/portal/me'),
   updateCompanyName: (client_name: string) =>
@@ -84,6 +97,11 @@ export const agentRequestsService = {
   pendingCount: () => request<{ pending: number }>('/agent-requests/count'),
   preview: (voiceId: string) => fetchAuthedBlob(`/agent-requests/voices/${encodeURIComponent(voiceId)}/preview`),
   start: (id: string) => request<AgentRequest>(`/agent-requests/${id}/start`, { method: 'POST' }),
+  /** Records the employee being built; the client is told when it goes live */
+  link: (id: string, agent_id: string) =>
+    request<AgentRequest>(`/agent-requests/${id}/link`, { method: 'POST', body: JSON.stringify({ agent_id }) }),
+  /** Lets the client try it once from the portal (sending again gives them a fresh call) */
+  sendForTrial: (id: string) => request<AgentRequest>(`/agent-requests/${id}/send-for-trial`, { method: 'POST' }),
   complete: (id: string, agent_id: string) =>
     request<AgentRequest>(`/agent-requests/${id}/complete`, { method: 'POST', body: JSON.stringify({ agent_id }) }),
   reject: (id: string, note: string) =>

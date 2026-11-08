@@ -209,7 +209,7 @@ export const CallsPage: React.FC = () => {
           <EmptyState
             icon={<PhoneIncoming className="h-6 w-6 text-slate-400" />}
             title="No Calls Found"
-            description="Inbound PSTN calls arriving on provisioned Exotel phone numbers will appear here in real-time."
+            description="Inbound PSTN calls arriving on provisioned Vobiz phone numbers will appear here in real-time."
           />
         ) : (
           <div className="w-full overflow-x-auto">
@@ -354,7 +354,7 @@ export const CallsPage: React.FC = () => {
               <div className="p-3 bg-[#052b20]/25 border border-[#0a4d39]/50 rounded space-y-2">
                 <span className="text-xs font-semibold text-[#00df8f] flex items-center gap-1.5">
                   <Volume2 className="h-4 w-4" />
-                  Exotel PSTN Recording
+                  Call Recording
                 </span>
                 <audio controls src={callDetail.recording_url} className="w-full h-8" />
               </div>

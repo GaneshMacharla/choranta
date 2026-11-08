@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin, require_client_user, require_operator
+from app.db.mongo import KnowledgeStoreUnavailable
 from app.models.client import Client
 from app.models.user import User
 from app.services import agent_requests as svc
@@ -64,12 +65,17 @@ def portal_request_options(account: ClientAccount = Depends(require_client_user)
     """Choices for the "Create an AI employee" form, and the client's current details to pre-fill it."""
     _, client_id = account
     client = db.get(Client, client_id)
+    try:
+        needs_documents = svc.needs_documents(db, client_id)
+    except KnowledgeStoreUnavailable:
+        # The page still has to load without the knowledge store; sending the form re-checks and explains
+        needs_documents = False
     return {
         "business_types": [{"id": k, "label": v} for k, v in svc.BUSINESS_TYPES.items()],
         "languages": [{"id": k, "label": v} for k, v in svc.LANGUAGES.items()],
         "company_name": client.name if client else "",
         "business_type": client.business_type if client else "OTHER",
-        "needs_documents": svc.needs_documents(db, client_id),
+        "needs_documents": needs_documents,
     }
 
 
@@ -122,6 +128,18 @@ def admin_get_request(request_id: str, db: Session = Depends(get_db), user: User
 @admin_router.post("/{request_id}/start")
 def admin_start_request(request_id: str, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     return svc.request_out(db, svc.start_request(db, svc.get_request(db, request_id), user.id))
+
+
+@admin_router.post("/{request_id}/send-for-trial")
+def admin_send_for_trial(request_id: str, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Lets the client try the AI employee once from the portal; going live stays with the team."""
+    return svc.request_out(db, svc.send_for_trial(db, svc.get_request(db, request_id), user.id))
+
+
+@admin_router.post("/{request_id}/link")
+def admin_link_request(request_id: str, req: CompleteRequest, db: Session = Depends(get_db),
+                       user: User = Depends(require_admin)):
+    return svc.request_out(db, svc.link_request(db, svc.get_request(db, request_id), req.agent_id, user.id))
 
 
 @admin_router.post("/{request_id}/complete")

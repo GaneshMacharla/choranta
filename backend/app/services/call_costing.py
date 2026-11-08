@@ -12,7 +12,7 @@ def estimate_call_cost(duration_seconds: Optional[float], usage: Optional[Dict[s
     """
     Estimated cost of one phone call in INR, from the rates in settings.
 
-    - Telephony: carrier per-minute rate, billed in pulses (Exotel bills per started minute by default)
+    - Telephony: carrier per-minute rate, billed in pulses (TELEPHONY_BILLING_PULSE_SECONDS)
     - Speech-to-text: caller audio sent for transcription
     - Text-to-speech: agent audio synthesized
     - LLM: input/output tokens

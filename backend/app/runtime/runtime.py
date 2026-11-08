@@ -361,8 +361,22 @@ class AgentRuntime:
             )
 
             tool_rounds = 0
+            end_refused = False
             max_tool_rounds = resolve_call_limits(spec).max_tool_rounds
             while llm_result.tool_calls and tool_rounds < max_tool_rounds:
+                if call_rules.wants_to_end(llm_result.tool_calls) and call_rules.refuse_early_end(
+                        context.conversation, end_refused, llm_result.text):
+                    # Hanging up on a caller who hasn't finished: say what happens next instead (see call_rules)
+                    end_refused = True
+                    call_rules.refuse_end_call(context.conversation, llm_result.text, llm_result.tool_calls)
+                    self.emitter.emit(RuntimeEventType.TOOL_CALL_COMPLETED, **ids,
+                                      payload={"tool_name": call_rules.END_CALL_TOOL_NAME, "success": False,
+                                               "error": "refused: caller hadn't finished"})
+                    if streamed_parts and not streamed_parts[-1].endswith((" ", "\n")):
+                        streamed_parts.append(" ")
+                        yield {"type": "delta", "text": " "}
+                    llm_result = yield from run_llm(available_tools_list)
+                    continue
                 if call_rules.wants_to_end(llm_result.tool_calls):
                     # The AI employee is hanging up: say its goodbye and end, no further turns
                     call_ended = True
@@ -522,8 +536,23 @@ class AgentRuntime:
 
             # Handle tool calling loop
             tool_rounds = 0
+            end_refused = False
             max_tool_rounds = resolve_call_limits(spec).max_tool_rounds
             while llm_result.tool_calls and tool_rounds < max_tool_rounds:
+                if call_rules.wants_to_end(llm_result.tool_calls) and call_rules.refuse_early_end(
+                        context.conversation, end_refused, llm_result.text):
+                    # Hanging up on a caller who hasn't finished: say what happens next instead (see call_rules)
+                    end_refused = True
+                    call_rules.refuse_end_call(context.conversation, llm_result.text, llm_result.tool_calls)
+                    llm_result = llm_p.generate(
+                        system_instruction=context.instruction_for_turn(),
+                        messages=context.conversation.to_llm_messages(),
+                        available_tools=available_tools_list
+                    )
+                    context.usage_tracker.record_llm(
+                        llm_result.usage.get("input_tokens", 0), llm_result.usage.get("output_tokens", 0)
+                    )
+                    continue
                 if call_rules.wants_to_end(llm_result.tool_calls):
                     # The AI employee is hanging up: its goodbye is the last reply
                     call_ended = True

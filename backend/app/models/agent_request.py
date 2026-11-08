@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from app.db.session import Base
 from app.core.security import generate_unique_id
 
@@ -12,7 +12,8 @@ class AgentRequest(Base):
     """
     A paying client's request for a new AI employee: they pick the name and a Sarvam voice, and a
     Choranta admin builds the agent. PENDING -> IN_PROGRESS -> COMPLETED (linked agent), or REJECTED /
-    CANCELLED (by the client while still pending).
+    CANCELLED (by the client while still pending). Before going live the admin may send it to the client to
+    try (CLIENT_TRIAL: a short free browser call); the admin still decides when it goes live.
     """
     __tablename__ = "agent_requests"
 
@@ -27,6 +28,7 @@ class AgentRequest(Base):
     status = Column(String(16), nullable=False, default="PENDING", index=True)
     agent_id = Column(String(64), nullable=True)
     admin_note = Column(Text, nullable=True)
+    trial_calls_used = Column(Integer, nullable=False, default=0)  # client's trial calls since it was last sent to them
     requested_by = Column(String(64), nullable=True)
     handled_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=_now, nullable=False, index=True)

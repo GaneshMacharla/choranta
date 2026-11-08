@@ -15,7 +15,6 @@ from app.runtime.providers.gemini.llm import GeminiLLMProvider
 from app.runtime.providers.sarvam.llm import SarvamLLMProvider
 from app.runtime.providers.sarvam.stt import SarvamSTTProvider
 from app.runtime.providers.sarvam.tts import SarvamTTSProvider
-from app.runtime.providers.telephony.exotel import ExotelTelephonyProvider
 from app.runtime.providers.telephony.vobiz import VobizTelephonyProvider
 from app.runtime.providers.messaging import MessagingProvider, MetaWhatsAppProvider, MockMessagingProvider
 
@@ -23,7 +22,7 @@ from app.runtime.providers.messaging import MessagingProvider, MetaWhatsAppProvi
 class ProviderRegistry:
     """
     Registry resolving STT, LLM, TTS, and Telephony providers by name.
-    Supports development/test mock mode as well as real Cartesia, Gemini, Exotel and Vobiz integrations.
+    Supports development/test mock mode as well as real Cartesia, Gemini and Vobiz integrations.
     """
 
     def __init__(self, mode: Optional[str] = None):
@@ -63,7 +62,6 @@ class ProviderRegistry:
             self.register_llm("sarvam", SarvamLLMProvider())
             self.register_stt("sarvam", SarvamSTTProvider())
             self.register_tts("sarvam", SarvamTTSProvider())
-            self.register_telephony("exotel", ExotelTelephonyProvider())
             self.register_telephony("vobiz", VobizTelephonyProvider())
             self.register_messaging("whatsapp", MetaWhatsAppProvider())
         else:
@@ -74,7 +72,6 @@ class ProviderRegistry:
             self.register_stt("sarvam", MockSTTProvider("sarvam"))
             self.register_tts("sarvam", MockTTSProvider("sarvam"))
             self.register_tts("cartesia", MockTTSProvider("cartesia"))
-            self.register_telephony("exotel", MockTelephonyProvider("exotel"))
             self.register_telephony("vobiz", MockTelephonyProvider("vobiz"))
             self.register_messaging("whatsapp", MockMessagingProvider("whatsapp"))
 
@@ -87,7 +84,6 @@ class ProviderRegistry:
         self.register_llm("sarvam", SarvamLLMProvider())
         self.register_stt("sarvam", SarvamSTTProvider())
         self.register_tts("sarvam", SarvamTTSProvider())
-        self.register_telephony("exotel", ExotelTelephonyProvider())
         self.register_telephony("vobiz", VobizTelephonyProvider())
         self.register_messaging("whatsapp", MetaWhatsAppProvider())
 
@@ -100,7 +96,6 @@ class ProviderRegistry:
         self.register_stt("sarvam", MockSTTProvider("sarvam"))
         self.register_tts("sarvam", MockTTSProvider("sarvam"))
         self.register_tts("cartesia", MockTTSProvider("cartesia"))
-        self.register_telephony("exotel", MockTelephonyProvider("exotel"))
         self.register_telephony("vobiz", MockTelephonyProvider("vobiz"))
         self.register_messaging("whatsapp", MockMessagingProvider("whatsapp"))
 

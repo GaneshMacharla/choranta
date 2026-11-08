@@ -32,7 +32,7 @@ def _completed_call(db: Session, setup, duration=120, is_test=False) -> Call:
         id=generate_unique_id("call_"), client_id=setup["client"].id, agent_id=setup["agent"].id,
         agent_version_id=setup["version"].id, runtime_session_id=session.id, caller_number="+914045209348",
         destination_number="+918008538015", direction="OUTBOUND", status="COMPLETED", duration_seconds=duration,
-        provider="exotel", provider_call_id=generate_unique_id("exo_"), metadata_={"is_test": is_test},
+        provider="vobiz", provider_call_id=generate_unique_id("exo_"), metadata_={"is_test": is_test},
     )
     db.add(call)
     db.commit()
@@ -82,9 +82,7 @@ def test_call_is_charged_once_and_test_calls_are_free(db: Session, telephony_set
 def test_calls_blocked_when_wallet_empty(client: TestClient, auth_headers: dict, telephony_setup, db: Session, monkeypatch):
     monkeypatch.setattr(settings, "BILLING_ENFORCED", True, raising=False)
     monkeypatch.setattr(settings, "TELEPHONY_BASE_URL", "https://choranta.example.com", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_CALLER_ID", "04045209348", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_FLOW_ID", "1", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_ACCOUNT_SID", "acct", raising=False)
+    monkeypatch.setattr(settings, "VOBIZ_CALLER_ID", "04045209348", raising=False)
     body = {"agent_id": telephony_setup["agent"].id, "agent_version_id": telephony_setup["version"].id,
             "destination_number": "09876543210"}
 
@@ -94,7 +92,7 @@ def test_calls_blocked_when_wallet_empty(client: TestClient, auth_headers: dict,
     assert client.post("/api/telephony/calls/outbound", headers=auth_headers, json={**body, "is_test": True}).status_code == 201
 
     # Inbound calls on an empty wallet get the reject response
-    resp = client.get("/api/telephony/exotel/inbound", params={
+    resp = client.get("/api/telephony/vobiz/answer", params={
         "CallSid": "CA_BLOCKED_1", "CallFrom": "09876543210", "CallTo": telephony_setup["phone_number"].phone_number})
     assert resp.json()["url"] == ""
 

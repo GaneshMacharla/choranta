@@ -169,7 +169,7 @@ def _register(router: APIRouter, scope_dep: Callable[..., Scope]) -> None:
             "timezone": timezone_name,
             "agents": agents,
             "numbers": numbers,
-            "connections": [{"id": "exotel", "name": "Exotel"}],
+            "connections": [{"id": "vobiz", "name": "Vobiz"}],
             "concurrency_cap": svc.concurrency_cap(db, client_id),
             "max_recipients": svc.MAX_RECIPIENTS,
         }

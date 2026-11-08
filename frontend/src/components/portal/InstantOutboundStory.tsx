@@ -1,20 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Bot, Check, CheckCheck, ChevronLeft, ChevronRight, Flame, Globe, KeyRound, MessageCircle, Pause, PhoneCall, Play, User } from 'lucide-react';
+import React from 'react';
+import { Bot, Check, CheckCheck, Flame, Globe, KeyRound, MessageCircle, PhoneCall, User } from 'lucide-react';
+import { StoryPlayer, StoryScene } from './StoryPlayer';
 
 /*
  * Instant outbound told as a 30-second story for clients who aren't technical: one enquiry, from the form on
- * their website to the AI employee's call and the result in their portal. Plays by itself; viewers can pause
- * or step through it.
+ * their website to the AI employee's call and the result in their portal.
  */
-
-const SCENE_MS = 4500;
-
-interface Scene {
-  clock: string;
-  title: string;
-  text: string;
-  Visual: React.FC;
-}
 
 const Browser: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="w-64 overflow-hidden rounded-lg border border-[#1d4b5a] bg-[#06141a] shadow-lg">
@@ -129,7 +120,7 @@ const ResultScene: React.FC = () => (
   </div>
 );
 
-const SCENES: Scene[] = [
+const SCENES: StoryScene[] = [
   {
     clock: '0:00',
     title: 'Someone fills the form on your website',
@@ -156,98 +147,11 @@ const SCENES: Scene[] = [
   },
 ];
 
-const prefersReducedMotion = () =>
-  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-
-export const InstantOutboundStory: React.FC = () => {
-  const [scene, setScene] = useState(0);
-  const [playing, setPlaying] = useState(() => !prefersReducedMotion());
-  // Time left on a paused scene, so playing again carries on where it stopped (the progress bar freezes with it)
-  const left = useRef({ scene: 0, ms: SCENE_MS });
-
-  useEffect(() => {
-    if (!playing) return;
-    const ms = left.current.scene === scene ? left.current.ms : SCENE_MS;
-    const started = Date.now();
-    const timer = setTimeout(() => setScene((s) => (s + 1) % SCENES.length), ms);
-    return () => {
-      clearTimeout(timer);
-      left.current = { scene, ms: Math.max(0, ms - (Date.now() - started)) };
-    };
-  }, [scene, playing]);
-
-  const go = (next: number) => setScene((next + SCENES.length) % SCENES.length);
-  const { Visual, title, text, clock } = SCENES[scene];
-
-  return (
-    <section
-      className="overflow-hidden rounded-xl border border-[#143c49] bg-gradient-to-br from-[#091b22] via-[#071820] to-[#05231b]"
-      aria-roledescription="carousel"
-      aria-label="How instant outbound works"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#102d38] px-5 py-3">
-        <div>
-          <h2 className="text-sm font-semibold text-slate-100">How Instant Outbound works</h2>
-          <p className="text-xs text-slate-400">From a form on your website to a phone call, in 30 seconds.</p>
-        </div>
-        <div className="flex items-center gap-2 rounded-full border border-[#1d4b5a] bg-[#040d12] px-3 py-1 font-mono text-sm text-[#00df8f]">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-[#00df8f]" /> {clock}
-        </div>
-      </div>
-
-      <div className="grid items-center gap-6 px-5 py-6 md:grid-cols-[1fr_1.1fr]">
-        <div className="space-y-3" aria-live="polite">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-[#00df8f]">
-            Step {scene + 1} of {SCENES.length}
-          </div>
-          <h3 className="text-lg font-bold text-slate-100">{title}</h3>
-          <p className="text-sm leading-relaxed text-slate-300">{text}</p>
-        </div>
-        {/* Keyed by scene so its animations start again each time it appears */}
-        <div key={scene} className="story-scene flex min-h-[270px] items-center justify-center">
-          <Visual />
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between gap-3 border-t border-[#102d38] px-5 py-3">
-        <div className="flex flex-1 gap-1.5">
-          {SCENES.map((s, i) => (
-            <button
-              key={s.title}
-              type="button"
-              aria-label={`Step ${i + 1}: ${s.title}`}
-              aria-current={i === scene}
-              onClick={() => go(i)}
-              className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#143c49]"
-            >
-              <span
-                key={`${scene}-${i}`}
-                className={`block h-full rounded-full bg-[#00df8f] ${i < scene ? 'w-full' : i === scene ? 'story-progress' : 'w-0'}`}
-                style={i === scene ? { animationDuration: `${SCENE_MS}ms`, animationPlayState: playing ? 'running' : 'paused' } : undefined}
-              />
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1 text-slate-400">
-          <button type="button" aria-label="Previous step" onClick={() => go(scene - 1)} className="rounded p-1 hover:bg-[#0f2c38] hover:text-slate-100">
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            aria-label={playing ? 'Pause' : 'Play'}
-            onClick={() => setPlaying((p) => !p)}
-            className="rounded p-1 hover:bg-[#0f2c38] hover:text-slate-100"
-          >
-            {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-          </button>
-          <button type="button" aria-label="Next step" onClick={() => go(scene + 1)} className="rounded p-1 hover:bg-[#0f2c38] hover:text-slate-100">
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-      <p className="border-t border-[#102d38] px-5 py-2 text-[11px] text-slate-500">
-        Calls happen during the calling hours you choose. An enquiry at night is called as soon as your hours start.
-      </p>
-    </section>
-  );
-};
+export const InstantOutboundStory: React.FC = () => (
+  <StoryPlayer
+    title="How Instant Outbound works"
+    subtitle="From a form on your website to a phone call, in 30 seconds."
+    footnote="Calls happen during the calling hours you choose. An enquiry at night is called as soon as your hours start."
+    scenes={SCENES}
+  />
+);

@@ -99,7 +99,7 @@ def _answer_url() -> str:
     if not base:
         raise NotConfigured("TELEPHONY_BASE_URL isn't set, so Vobiz has no address to send inbound calls to.")
     from app.services.outbound_calls import with_webhook_token  # outbound_calls imports this module
-    return with_webhook_token(f"{base}/api/telephony/vobiz/answer", "vobiz")
+    return with_webhook_token(f"{base}/api/telephony/vobiz/answer")
 
 
 def _close(provider: NumberProvider) -> None:

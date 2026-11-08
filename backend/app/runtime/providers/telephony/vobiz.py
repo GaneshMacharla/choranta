@@ -6,14 +6,13 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 from app.core.config import settings
-from app.runtime.providers.telephony.base import CarrierLimitError, TelephonyProvider, InboundCallPayload
-from app.runtime.providers.telephony.exotel import normalize_exotel_number
+from app.runtime.providers.telephony.base import CarrierLimitError, TelephonyProvider, InboundCallPayload, normalize_e164
 
 logger = logging.getLogger("choranta.runtime.telephony.vobiz")
 
 VOBIZ_SAMPLE_RATE = 8000
 CANONICAL_SAMPLE_RATE = 16000
-# Linear 16-bit PCM both ways, at the phone line's 8kHz (the same audio the Exotel stream carries)
+# Linear 16-bit PCM both ways, at the phone line's 8kHz
 VOBIZ_CONTENT_TYPE = "audio/x-l16"
 
 # Vobiz hangup causes -> the call statuses apply_call_status understands
@@ -107,8 +106,8 @@ class VobizTelephonyProvider(TelephonyProvider):
         """Parses Vobiz Answer URL parameters (CallUUID, From, To)."""
         return InboundCallPayload(
             provider_call_id=params.get("CallUUID") or "",
-            caller_number=normalize_exotel_number(params.get("From") or ""),
-            destination_number=normalize_exotel_number(params.get("To") or ""),
+            caller_number=normalize_e164(params.get("From") or ""),
+            destination_number=normalize_e164(params.get("To") or ""),
             direction="INBOUND",
             provider="vobiz",
             raw_params=params
@@ -203,8 +202,8 @@ class VobizTelephonyProvider(TelephonyProvider):
             raise ValueError("Vobiz credentials (VOBIZ_AUTH_ID, VOBIZ_AUTH_TOKEN) are missing.")
 
         body = {
-            "from": normalize_exotel_number(caller_id),
-            "to": normalize_exotel_number(customer_number),
+            "from": normalize_e164(caller_id),
+            "to": normalize_e164(customer_number),
             "answer_url": flow_url,
             "answer_method": "POST",
         }

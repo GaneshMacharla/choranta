@@ -96,7 +96,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
   const [customName, setCustomName] = useState(false);
   const [agentId, setAgentId] = useState('');
   const [versionId, setVersionId] = useState('');
-  const [connection, setConnection] = useState('exotel');
+  const [connection, setConnection] = useState('vobiz');
   const [numberMode, setNumberMode] = useState<'number' | 'group'>('number');
   const [numberIds, setNumberIds] = useState<string[]>([]);
 
@@ -153,7 +153,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       setKind(c.kind);
       setName(c.name);
       setPurpose(c.purpose);
-      setConnection(c.provider || 'exotel');
+      setConnection(c.provider || 'vobiz');
       setWindows(c.windows.map((w) => ({ start: minutesToTime(w.start_min), end: minutesToTime(w.end_min) })));
       setDays(c.days);
       setAllDay(c.kind === 'TRIGGER' && c.days.length === 7 && c.windows.length === 1 && c.windows[0].start_min === 0 && c.windows[0].end_min >= 1439);
@@ -475,7 +475,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
             label="Connection"
             value={connection}
             onChange={(e) => setConnection(e.target.value)}
-            options={(options?.connections || [{ id: 'exotel', name: 'Exotel' }]).map((c) => ({ value: c.id, label: c.name }))}
+            options={(options?.connections || [{ id: 'vobiz', name: 'Vobiz' }]).map((c) => ({ value: c.id, label: c.name }))}
           />
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -935,7 +935,7 @@ export const CampaignWizardModal: React.FC<CampaignWizardModalProps> = ({
       ...campaignInputs
         .filter((input) => details[input.name]?.trim())
         .map((input) => [input.description, details[input.name].trim()] as [string, string]),
-      ['Calling from', `${numbers.join(', ')} (${connection === 'exotel' ? 'Exotel' : connection})`],
+      ['Calling from', `${numbers.join(', ')} (${connection === 'vobiz' ? 'Vobiz' : connection})`],
       isTrigger
         ? ['Recipients', 'Website form submissions (leads API), called within seconds']
         : ['Recipients', `${recipientCount.toLocaleString()} ${source === 'csv' ? `from ${csvFileName}` : 'leads'}`],

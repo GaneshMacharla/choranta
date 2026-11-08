@@ -41,7 +41,7 @@ def _completed_call(db: Session, telephony_setup, duration: float = 120) -> Call
         direction="OUTBOUND",
         status="COMPLETED",
         duration_seconds=duration,
-        provider="exotel",
+        provider="vobiz",
         provider_call_id=generate_unique_id("exo_"),
     )
     db.add(call)

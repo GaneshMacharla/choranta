@@ -420,14 +420,6 @@ def purchase(db: Session, e164: str, *, idempotency_key: str, actor: Actor, curr
 
 # ---------------------------------------------------------------- releasing
 
-def _provider_for(db: Session, pn: ProviderNumber):
-    if pn.provider == "exotel":
-        from contextlib import nullcontext
-        from app.runtime.providers.numbers.exotel import ExotelNumberProvider
-        return nullcontext(ExotelNumberProvider(pn.provider_number_id or ""))
-    return carrier(db)
-
-
 def release(db: Session, number_id: str, *, confirm_e164: str, idempotency_key: str, actor: Actor) -> NumberOperation:
     """Gives a number back to the carrier (a release fee may apply). It must not be assigned to a client."""
     pn = get_number(db, number_id)
@@ -445,7 +437,7 @@ def release(db: Session, number_id: str, *, confirm_e164: str, idempotency_key: 
         raise NumberServiceError(409, "already_released", f"{pn.e164} has already been released.")
     if active_assignment(db, pn.id):
         raise NumberServiceError(409, "assigned", f"{pn.e164} is assigned to a client. Unassign it first.")
-    if pn.is_mock != mock_mode() and pn.provider != "exotel":
+    if pn.is_mock != mock_mode():
         raise NumberServiceError(409, "wrong_mode", "This number belongs to the other mode (mock vs real); switch modes to release it.")
 
     if pn.subaccount_auth_id:
@@ -465,7 +457,7 @@ def release(db: Session, number_id: str, *, confirm_e164: str, idempotency_key: 
     pn.internal_status = "RELEASING"
     db.commit()
 
-    with _provider_for(db, pn) as provider:
+    with carrier(db) as provider:
         try:
             provider.release(pn.e164)
         except NumberNotFound:

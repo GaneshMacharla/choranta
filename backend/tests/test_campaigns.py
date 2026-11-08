@@ -38,7 +38,7 @@ class FakeDialer:
         call = Call(
             id=generate_unique_id("call"), client_id=self.setup["client"].id, agent_id=agent_id,
             agent_version_id=agent_version_id, caller_number=caller_id, destination_number=destination_number,
-            direction="OUTBOUND", status="INITIATED", provider="exotel", provider_call_id=generate_unique_id("exo"),
+            direction="OUTBOUND", status="INITIATED", provider="vobiz", provider_call_id=generate_unique_id("exo"),
             metadata_={"variables": variables, **extra_metadata},
         )
         db.add(call)

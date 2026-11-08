@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.exceptions import ChorantaException
 from app.db.init_db import init_db
+from app.db.mongo import KnowledgeStoreUnavailable
 from app.api.routes import (
     auth, clients, agents, dashboard,
     agent_configuration, catalogs, client_knowledge, runtime,
@@ -58,8 +59,11 @@ async def _campaign_loop() -> None:
     """Places outbound campaign calls inside their calling windows and records outcomes."""
     from app.db.session import SessionLocal
     from app.services.campaigns import run_campaign_job
+    from app.runtime import draining
     while True:
         try:
+            if draining.is_draining():
+                return  # shutting down: let live calls finish, place no new ones
             await asyncio.to_thread(run_campaign_job, SessionLocal)
         except asyncio.CancelledError:
             raise
@@ -163,6 +167,15 @@ async def choranta_exception_handler(request: Request, exc: ChorantaException):
     )
 
 
+# MongoDB being unreachable is an outage, not a bug: say so plainly (the message holds no server details)
+@app.exception_handler(KnowledgeStoreUnavailable)
+async def knowledge_store_unavailable_handler(request: Request, exc: KnowledgeStoreUnavailable):
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"error": str(exc), "details": None, "type": "KnowledgeStoreUnavailable"}
+    )
+
+
 # Global fallback exception handler (prevents stack trace leakage in production)
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -179,6 +192,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # Health check
 @app.get("/health", tags=["System"])
 def health_check():
+    from app.runtime import draining
+    if draining.is_draining():
+        # Shutting down after live calls end: tell load balancers to send new traffic elsewhere
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            content={"status": "draining", "live_calls": draining.live_calls()})
     return {
         "status": "healthy",
         "service": "choranta-backend",
@@ -228,5 +246,6 @@ app.include_router(telephony.router)
 app.include_router(telephony.ws_router)
 app.include_router(websocket_audio.router)
 app.include_router(webrtc_audio.router, prefix=settings.API_V1_PREFIX)
+app.include_router(webrtc_audio.portal_router, prefix=settings.API_V1_PREFIX)
 if settings.ENVIRONMENT != "production":
     app.include_router(demo_leads.router)  # dev-only demo website form at /demo/lead-form

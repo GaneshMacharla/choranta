@@ -7,7 +7,7 @@ Sarvam's translate API and cached; any failure keeps the original text so a call
 """
 import logging
 import re
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 import httpx
 
@@ -22,6 +22,32 @@ LANGUAGE_NAMES = {
 }
 
 _cache: Dict[Tuple[str, str], str] = {}
+
+
+_SCRIPTS = (
+    ("te", r"[ఀ-౿]"), ("hi", r"[ऀ-ॿ]"), ("ta", r"[஀-௿]"), ("kn", r"[ಀ-೿]"),
+    ("ml", r"[ഀ-ൿ]"), ("bn", r"[ঀ-৿]"), ("gu", r"[઀-૿]"), ("pa", r"[਀-੿]"),
+    ("od", r"[଀-୿]"),
+)
+# Everyday English words; romanised Telugu or Hindi ("naaku course kavali") has few of them
+_ENGLISH_WORDS = frozenset(
+    "i i'm im me my you your we our the a an is are was am be do does did can could will would should what when "
+    "which where who why how this that it to of in on at for with and or but not no yes ok okay please want need "
+    "know tell like have has get give about course courses fee fees batch batches class demo online weekend weekends "
+    "weekday time timings start starts next thanks thank interested register talk person real human bot job".split()
+)
+
+
+def detect_language(text: str) -> Optional[str]:
+    """The language of a caller's message: by script, or English when it's mostly everyday English words."""
+    text = text or ""
+    for code, pattern in _SCRIPTS:
+        if re.search(pattern, text):
+            return code
+    words = re.findall(r"[a-z']+", text.lower())
+    if len(words) >= 3 and sum(w in _ENGLISH_WORDS for w in words) / len(words) >= 0.35:
+        return "en"
+    return None
 
 
 def language_name(code: str) -> str:

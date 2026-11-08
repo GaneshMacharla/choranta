@@ -69,7 +69,7 @@ export const TelephonyPage: React.FC = () => {
 
 
   // Current webhook URL
-  const webhookUrl = `${window.location.origin}/api/telephony/exotel/inbound`;
+  const webhookUrl = `${window.location.origin}/api/telephony/vobiz/answer`;
 
   const fetchData = async () => {
     try {
@@ -131,7 +131,7 @@ export const TelephonyPage: React.FC = () => {
         phone_number: newPhoneNumber.trim(),
         client_id: selectedClientId,
         agent_id: selectedAgentId || undefined,
-        provider: 'exotel',
+        provider: 'vobiz',
       });
       setIsAddModalOpen(false);
       setNewPhoneNumber('');
@@ -206,7 +206,7 @@ export const TelephonyPage: React.FC = () => {
     try {
       let source: { phone_number_id: string } | { agent_id: string; agent_version_id: string };
       if (dialSourceNumberId.startsWith(AGENT_SOURCE_PREFIX)) {
-        // Call directly as an agent using its latest published version (caller ID: EXOTEL_CALLER_ID)
+        // Call directly as an agent using its latest published version (caller ID: VOBIZ_CALLER_ID)
         const agentId = dialSourceNumberId.slice(AGENT_SOURCE_PREFIX.length);
         const versions = await agentsService.getVersions(agentId);
         const published = versions
@@ -224,7 +224,7 @@ export const TelephonyPage: React.FC = () => {
         destination_number: dialDestinationNumber.trim(),
       });
       setDialSuccessMessage(
-        `Outbound call dispatched successfully (Call ID: ${res.id}, Status: ${res.status}). Exotel will dial ${dialDestinationNumber} shortly.`
+        `Outbound call dispatched successfully (Call ID: ${res.id}, Status: ${res.status}). Vobiz will dial ${dialDestinationNumber} shortly.`
       );
       fetchData();
     } catch (err: any) {
@@ -348,7 +348,7 @@ export const TelephonyPage: React.FC = () => {
             <Radio className="h-4 w-4 text-purple-400" />
           </div>
           <div className="text-lg font-bold text-slate-100 mt-2 capitalize flex items-center gap-2">
-            {overview?.provider ?? 'Exotel'}
+            {overview?.provider ?? 'Vobiz'}
             <Badge
               variant={overview?.provider_status === 'CONFIGURED' ? 'green' : 'yellow'}
               size="sm"
@@ -360,17 +360,17 @@ export const TelephonyPage: React.FC = () => {
         </Card>
       </div>
 
-      {/* Exotel Voicebot Configuration Callout */}
+      {/* Vobiz Answer URL Callout */}
       <Card className="p-5 bg-gradient-to-r from-[#052b20]/40 via-[#091b22] to-[#0a1e27] border-[#0a4d39]/60">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-[#00df8f]">
-                Exotel Voicebot Applet Configuration
+                Vobiz Answer URL
               </span>
             </div>
             <p className="text-xs text-slate-300">
-              In your Exotel App Bazaar flow, add a Voicebot applet and set its dynamic URL to this endpoint (append ?token=EXOTEL_WEBHOOK_SECRET):
+              In your Vobiz XML application, set the Answer URL to this endpoint (method POST, append ?token=VOBIZ_WEBHOOK_SECRET):
             </p>
             <div className="flex items-center gap-2 mt-2 font-mono text-xs bg-black/50 px-3 py-1.5 rounded border border-[#0a4d39]/60 text-[#00df8f] break-all select-all">
               <span>{webhookUrl}</span>
@@ -403,7 +403,7 @@ export const TelephonyPage: React.FC = () => {
           <EmptyState
             icon={<Phone className="h-6 w-6 text-slate-400" />}
             title="No Phone Numbers Provisioned"
-            description="Add an E.164 phone number from your Exotel account (ExoPhone) to assign it to an AI Employee."
+            description="Add an E.164 phone number from your Vobiz account to assign it to an AI Employee."
             action={
               <Button variant="primary" onClick={() => setIsAddModalOpen(true)}>
                 Provision Number
@@ -523,7 +523,7 @@ export const TelephonyPage: React.FC = () => {
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         title="Provision Inbound Phone Number"
-        description="Add an Exotel phone number to route calls directly into Choranta Voice Runtime."
+        description="Add a Vobiz phone number to route calls directly into Choranta Voice Runtime."
       >
         <form onSubmit={handleCreateNumber} className="space-y-4">
           {formError && (
@@ -626,7 +626,7 @@ export const TelephonyPage: React.FC = () => {
         isOpen={isDialModalOpen}
         onClose={() => setIsDialModalOpen(false)}
         title="Initiate Outbound Call"
-        description="Dispatch an outbound call from your AI voice employee to a customer via Exotel."
+        description="Dispatch an outbound call from your AI voice employee to a customer via Vobiz."
       >
         <form onSubmit={handleInitiateOutboundCall} className="space-y-4">
           {formError && (
@@ -646,10 +646,7 @@ export const TelephonyPage: React.FC = () => {
           <div className="p-3 rounded-lg bg-[#00df8f]/10 border border-[#00df8f]/20 text-xs text-slate-300 space-y-1">
             <p className="font-medium text-[#00df8f]">How Outbound Calling Works:</p>
             <p className="text-slate-400">
-              Exotel calls the recipient's phone number first. As soon as the customer answers, Exotel connects them directly to your AI voice agent for full interactive conversation.
-            </p>
-            <p className="text-amber-400/90 text-[11px] pt-1">
-              * Note: If using an Exotel Trial Account, calls can only be placed to verified numbers on your Exotel account.
+              Vobiz calls the recipient's phone number first. As soon as the customer answers, Vobiz connects them directly to your AI voice agent for full interactive conversation.
             </p>
           </div>
 
@@ -667,10 +664,10 @@ export const TelephonyPage: React.FC = () => {
                 })),
               ...agents.map((a) => ({
                 value: `${AGENT_SOURCE_PREFIX}${a.id}`,
-                label: `${a.name} — call as agent (default ExoPhone)`,
+                label: `${a.name} — call as agent (default number)`,
               })),
             ]}
-            helperText="A provisioned number uses its assigned agent. Calling as an agent uses its latest published version and the ExoPhone in EXOTEL_CALLER_ID."
+            helperText="A provisioned number uses its assigned agent. Calling as an agent uses its latest published version and the number in VOBIZ_CALLER_ID."
             required
           />
 

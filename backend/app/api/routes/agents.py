@@ -198,3 +198,32 @@ def restore_agent_version(
     """
     v_service = AgentVersionService(db)
     return v_service.restore_version_to_draft(agent_id, version_id)
+
+
+# ==========================================
+# PHONE NUMBERS ON THIS AGENT
+# ==========================================
+
+class MoveNumbersRequest(BaseModel):
+    version_id: str
+
+
+@router.get("/{agent_id}/numbers")
+def list_agent_numbers(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+) -> List[Dict[str, Any]]:
+    """Phone numbers answered by this AI Employee and the version each one runs."""
+    return AgentVersionService(db).list_numbers(agent_id)
+
+
+@router.post("/{agent_id}/numbers/move")
+def move_agent_numbers(
+    agent_id: str,
+    payload: MoveNumbersRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+) -> List[Dict[str, Any]]:
+    """Puts all of this AI Employee's phone numbers on one published version. Publishing alone never moves them."""
+    return AgentVersionService(db).move_numbers(agent_id, payload.version_id)

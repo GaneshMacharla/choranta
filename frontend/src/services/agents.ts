@@ -6,6 +6,14 @@ export interface AgentListResponse {
   total: number;
 }
 
+export interface AgentNumber {
+  id: string;
+  phone_number: string;
+  status: string;
+  agent_version_id: string | null;
+  version_number: number | null;
+}
+
 export const agentsService = {
   list: async (params?: { skip?: number; limit?: number; client_id?: string; status?: string; search?: string }): Promise<AgentListResponse> => {
     const query = new URLSearchParams();
@@ -39,6 +47,17 @@ export const agentsService = {
 
   getVersions: async (id: string): Promise<AgentVersion[]> => {
     return request<AgentVersion[]>(`/agents/${id}/versions`);
+  },
+
+  getNumbers: async (id: string): Promise<AgentNumber[]> => {
+    return request<AgentNumber[]>(`/agents/${id}/numbers`);
+  },
+
+  moveNumbers: async (id: string, versionId: string): Promise<AgentNumber[]> => {
+    return request<AgentNumber[]>(`/agents/${id}/numbers/move`, {
+      method: 'POST',
+      body: JSON.stringify({ version_id: versionId }),
+    });
   },
 
   delete: async (id: string): Promise<void> => {

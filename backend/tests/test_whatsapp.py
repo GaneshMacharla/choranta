@@ -57,7 +57,7 @@ def _call(db: Session, setup, interest="interested", **metadata) -> Call:
     call = Call(
         id=generate_unique_id("call_"), client_id=setup["client"].id, agent_id=setup["agent"].id,
         agent_version_id=setup["version"].id, caller_number="+914045209348", destination_number="+919876543210",
-        direction="OUTBOUND", status="COMPLETED", duration_seconds=60, provider="exotel",
+        direction="OUTBOUND", status="COMPLETED", duration_seconds=60, provider="vobiz",
         provider_call_id=generate_unique_id("exo_"),
         metadata_={"interest": interest, "outputs": {"target_exam": "NEET"},
                    "variables": {"user_name": "Priya Sharma"}, **metadata},

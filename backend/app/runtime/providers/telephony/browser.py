@@ -18,7 +18,7 @@ class BrowserTelephonyProvider(TelephonyProvider):
     so there are no webhooks or media-stream messages.
     """
 
-    # 100ms frames, the same pacing as Exotel
+    # 100ms frames, the same pacing as Vobiz
     outbound_frame_bytes = BROWSER_SAMPLE_RATE // 10 * 2
     carrier_sample_rate = BROWSER_SAMPLE_RATE
 

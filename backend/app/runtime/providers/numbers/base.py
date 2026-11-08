@@ -1,7 +1,7 @@
 """
 Phone number provisioning at a carrier: what Choranta can buy, what it owns, and how numbers are routed.
 
-Every carrier adapter (Vobiz, the mock, legacy Exotel) implements NumberProvider and raises only the errors
+Every carrier adapter (Vobiz, the mock) implements NumberProvider and raises only the errors
 below, so services/number_service.py handles every carrier the same way. Synchronous like the rest of the
 request path (SQLAlchemy sessions); FastAPI runs these endpoints in its worker threads.
 """

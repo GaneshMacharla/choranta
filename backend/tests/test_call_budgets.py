@@ -32,7 +32,7 @@ def budgets(monkeypatch):
 def _call(db: Session, setup, status: str = "ACTIVE", **metadata) -> Call:
     call = Call(id=generate_unique_id("call_"), client_id=setup["client"].id, agent_id=setup["agent"].id,
                 agent_version_id=setup["version"].id, caller_number="+914045209348",
-                destination_number="+918008538015", direction="OUTBOUND", status=status, provider="exotel",
+                destination_number="+918008538015", direction="OUTBOUND", status=status, provider="vobiz",
                 provider_call_id=generate_unique_id("exo_"), metadata_=metadata)
     db.add(call)
     db.commit()
@@ -135,15 +135,13 @@ def test_the_sweep_charges_calls_that_ended_without_being_billed(db: Session, te
 
 def test_a_failed_dial_releases_its_budget(db: Session, telephony_setup, budgets, monkeypatch):
     monkeypatch.setattr(settings, "TELEPHONY_BASE_URL", "https://choranta.example.com", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_FLOW_ID", "1", raising=False)
-    monkeypatch.setattr(settings, "EXOTEL_ACCOUNT_SID", "acct", raising=False)
     cid = telephony_setup["client"].id
     _fund(db, cid, 100.0)
 
     def carrier_down(self, **kwargs):
         raise RuntimeError("carrier down")
 
-    provider = default_registry.get_telephony("exotel")
+    provider = default_registry.get_telephony("vobiz")
     monkeypatch.setattr(type(provider), "initiate_outbound_call", carrier_down)
     with pytest.raises(OutboundCallError):
         place_outbound_call(db, destination_number="+918008538015", phone_number_id=telephony_setup["phone_number"].id)
